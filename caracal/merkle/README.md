@@ -108,6 +108,7 @@ Comprehensive unit tests are provided in `tests/unit/test_merkle_tree.py`:
 - Error handling
 
 Run tests with:
+
 ```bash
 pytest tests/unit/test_merkle_tree.py -v
 ```
@@ -135,8 +136,7 @@ Potential improvements for future versions:
 - Parallel tree construction for large batches
 - Proof compression for storage efficiency
 
-
-## Merkle Batcher and Signer (v0.3)
+## Merkle Batcher and Signer
 
 ### MerkleBatcher
 
@@ -167,12 +167,12 @@ await batcher.add_event(event_id=2, event_hash=hash2)
 - **Smaller batches** (more frequent signing):
   - Pros: Faster tamper detection, finer-grained audit trails
   - Cons: Higher storage costs, more signature operations
-  
 - **Larger batches** (less frequent signing):
   - Pros: Lower storage costs, better throughput
   - Cons: Slower tamper detection, coarser audit trails
 
 **Recommended configurations**:
+
 - High-compliance: 1000 events / 5 minutes
 - Standard: 10000 events / 1 hour
 - Low-volume: 50000 events / 24 hours
@@ -182,6 +182,7 @@ await batcher.add_event(event_id=2, event_hash=hash2)
 Pluggable signing backend for Merkle roots.
 
 **SoftwareSigner** (OSS default):
+
 ```python
 from caracal.merkle import SoftwareSigner
 

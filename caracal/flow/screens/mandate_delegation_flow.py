@@ -2,13 +2,14 @@
 Copyright (C) 2026 Garudex Labs.  All Rights Reserved.
 Caracal, a product of Garudex Labs
 
-Caracal Flow Mandate Delegation Screen.
+Caracal Flow Mandate Delegation Screen — Graph-Based Model.
 
 Mandate delegation management flows:
-- Show delegation chain with ASCII tree visualization
+- Show delegation graph with rich tree visualization
 - Delegate mandate with scope subset validation
-- View delegated mandates for principal
-- Revoke delegation with cascade option
+- Peer-to-peer delegation
+- View delegation edges for a principal
+- Revoke delegation edge with cascade option
 """
 
 from typing import Optional, List, Dict, Any
@@ -29,7 +30,7 @@ logger = get_logger(__name__)
 
 
 class MandateDelegationFlow:
-    """Mandate delegation management flow."""
+    """Mandate delegation management flow (graph-based)."""
     
     def __init__(self, console: Optional[Console] = None, state: Optional[FlowState] = None):
         self.console = console or Console()
@@ -44,12 +45,13 @@ class MandateDelegationFlow:
             action = show_menu(
                 title="Mandate Delegation",
                 items=[
-                    ("chain", "Show Delegation Chain", "Visualize mandate delegation hierarchy"),
-                    ("delegate", "Delegate Mandate", "Create a delegated mandate"),
-                    ("list", "View Delegated Mandates", "List mandates for a principal"),
-                    ("revoke", "Revoke Delegation", "Revoke a delegated mandate"),
+                    ("graph", "Show Delegation Graph", "Visualize mandate delegation topology"),
+                    ("delegate", "Delegate Mandate", "Create a delegation edge"),
+                    ("peer", "Peer Delegate", "Create peer-to-peer delegation"),
+                    ("list", "View Delegation Edges", "List edges for a principal"),
+                    ("revoke", "Revoke Delegation Edge", "Revoke a delegation edge"),
                 ],
-                subtitle="Manage mandate delegation",
+                subtitle="Manage mandate delegation graph",
             )
             
             if action is None:
@@ -57,12 +59,14 @@ class MandateDelegationFlow:
             
             self.console.clear()
             
-            if action == "chain":
-                self.show_delegation_chain()
+            if action == "graph":
+                self.show_delegation_graph()
             elif action == "delegate":
                 self.delegate_mandate()
+            elif action == "peer":
+                self.peer_delegate()
             elif action == "list":
-                self.view_delegated_mandates()
+                self.view_delegation_edges()
             elif action == "revoke":
                 self.revoke_delegation()
             
@@ -70,18 +74,18 @@ class MandateDelegationFlow:
             self.console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
             input()
     
-    def show_delegation_chain(self) -> None:
-        """Show delegation chain with ASCII tree visualization."""
+    def show_delegation_graph(self) -> None:
+        """Show delegation graph with tree visualization."""
         self.console.print(Panel(
-            f"[{Colors.NEUTRAL}]Visualize mandate delegation hierarchy[/]",
-            title=f"[bold {Colors.INFO}]Delegation Chain[/]",
+            f"[{Colors.NEUTRAL}]Visualize mandate delegation graph topology[/]",
+            title=f"[bold {Colors.INFO}]Delegation Graph[/]",
             border_style=Colors.PRIMARY,
         ))
         self.console.print()
         
         try:
             from caracal.db.connection import get_db_manager
-            from caracal.db.models import ExecutionMandate, Principal
+            from caracal.db.models import ExecutionMandate, DelegationEdgeModel, Principal
             
             db_manager = get_db_manager()
             
@@ -93,8 +97,8 @@ class MandateDelegationFlow:
                     self.console.print(f"  [{Colors.DIM}]No mandates exist.[/]")
                     return
                 
-                # Select a mandate to show its chain
-                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}... - Depth {m.delegation_depth}") for m in mandates]
+                # Select a mandate to show its graph
+                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}...") for m in mandates]
                 mandate_id_str = self.prompt.uuid("Mandate ID (Tab for suggestions)", items)
                 mandate_id = UUID(mandate_id_str)
                 
@@ -104,83 +108,83 @@ class MandateDelegationFlow:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Mandate not found.[/]")
                     return
                 
-                # Build delegation chain tree
-                tree = self._build_delegation_tree(mandate, db_session)
+                # Get all edges connected to this mandate
+                edges = db_session.query(DelegationEdgeModel).filter(
+                    (DelegationEdgeModel.source_mandate_id == mandate_id) |
+                    (DelegationEdgeModel.target_mandate_id == mandate_id),
+                    DelegationEdgeModel.revoked == False,
+                ).all()
+                
+                # Build graph visualization
+                tree = self._build_delegation_graph(mandate, edges, db_session)
                 
                 self.console.print()
                 self.console.print(tree)
                 self.console.print()
                 
-                # Show chain summary
-                chain_length = mandate.delegation_depth + 1
-                self.console.print(f"  [{Colors.INFO}]Chain Length: {chain_length}[/]")
-                self.console.print(f"  [{Colors.INFO}]Delegation Depth: {mandate.delegation_depth}[/]")
+                # Show graph summary
+                inbound = [e for e in edges if e.target_mandate_id == mandate_id]
+                outbound = [e for e in edges if e.source_mandate_id == mandate_id]
+                self.console.print(f"  [{Colors.INFO}]Inbound Edges: {len(inbound)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Outbound Edges: {len(outbound)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Total Connected Edges: {len(edges)}[/]")
             
             db_manager.close()
             
         except Exception as e:
-            logger.error(f"Error showing delegation chain: {e}")
+            logger.error(f"Error showing delegation graph: {e}")
             self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
     
-    def _build_delegation_tree(self, mandate: Any, db_session: Any) -> Tree:
-        """Build a tree visualization of the delegation chain."""
+    def _build_delegation_graph(self, mandate: Any, edges: list, db_session: Any) -> Tree:
+        """Build a tree visualization of the delegation graph."""
         from caracal.db.models import ExecutionMandate, Principal
         
-        # Find root mandate
-        current = mandate
-        chain = [current]
-        
-        while current.parent_mandate_id:
-            parent = db_session.query(ExecutionMandate).filter_by(mandate_id=current.parent_mandate_id).first()
-            if not parent:
-                break
-            chain.insert(0, parent)
-            current = parent
-        
-        # Build tree from root
-        root_mandate = chain[0]
-        root_principal = db_session.query(Principal).filter_by(principal_id=root_mandate.subject_id).first()
-        root_name = root_principal.name if root_principal else str(root_mandate.subject_id)[:8]
-        
-        status_icon = Icons.SUCCESS if not root_mandate.revoked else Icons.ERROR
-        status_color = Colors.SUCCESS if not root_mandate.revoked else Colors.ERROR
-        
-        tree = Tree(
-            f"[{status_color}]{status_icon}[/] {root_name} (Root)",
-            guide_style=Colors.DIM
-        )
-        
-        # Add children recursively
-        if len(chain) > 1:
-            self._add_children_to_tree(tree, chain[1:], db_session)
-        
-        return tree
-    
-    def _add_children_to_tree(self, parent_node: Tree, chain: List[Any], db_session: Any) -> None:
-        """Recursively add children to the tree."""
-        from caracal.db.models import Principal
-        
-        if not chain:
-            return
-        
-        mandate = chain[0]
         principal = db_session.query(Principal).filter_by(principal_id=mandate.subject_id).first()
-        name = principal.name if principal else str(mandate.subject_id)[:8]
+        root_name = principal.name if principal else str(mandate.subject_id)[:8]
         
         status_icon = Icons.SUCCESS if not mandate.revoked else Icons.ERROR
         status_color = Colors.SUCCESS if not mandate.revoked else Colors.ERROR
         
-        child_node = parent_node.add(
-            f"[{status_color}]{status_icon}[/] {name} (Depth {mandate.delegation_depth})"
+        tree = Tree(
+            f"[{status_color}]{status_icon}[/] {root_name} (mandate: {str(mandate.mandate_id)[:8]}...)",
+            guide_style=Colors.DIM
         )
         
-        if len(chain) > 1:
-            self._add_children_to_tree(child_node, chain[1:], db_session)
+        # Add inbound edges
+        inbound = [e for e in edges if e.target_mandate_id == mandate.mandate_id]
+        if inbound:
+            in_branch = tree.add(f"[{Colors.INFO}]⇐ Inbound ({len(inbound)})[/]")
+            for edge in inbound:
+                source = db_session.query(ExecutionMandate).filter_by(mandate_id=edge.source_mandate_id).first()
+                source_name = str(edge.source_mandate_id)[:8] if not source else str(source.subject_id)[:8]
+                tags = f" [{Colors.DIM}]tags={edge.context_tags}[/]" if edge.context_tags else ""
+                in_branch.add(
+                    f"[{Colors.NEUTRAL}]{edge.source_principal_type}[/] {source_name}... "
+                    f"[{Colors.DIM}]({edge.delegation_type}){tags}[/]"
+                )
+        
+        # Add outbound edges
+        outbound = [e for e in edges if e.source_mandate_id == mandate.mandate_id]
+        if outbound:
+            out_branch = tree.add(f"[{Colors.WARNING}]⇒ Outbound ({len(outbound)})[/]")
+            for edge in outbound:
+                target = db_session.query(ExecutionMandate).filter_by(mandate_id=edge.target_mandate_id).first()
+                target_name = str(edge.target_mandate_id)[:8] if not target else str(target.subject_id)[:8]
+                tags = f" [{Colors.DIM}]tags={edge.context_tags}[/]" if edge.context_tags else ""
+                out_branch.add(
+                    f"[{Colors.NEUTRAL}]{edge.target_principal_type}[/] {target_name}... "
+                    f"[{Colors.DIM}]({edge.delegation_type}){tags}[/]"
+                )
+        
+        if not inbound and not outbound:
+            tree.add(f"[{Colors.DIM}]No delegation edges[/]")
+        
+        return tree
     
     def delegate_mandate(self) -> None:
         """Delegate mandate with scope subset validation."""
         self.console.print(Panel(
-            f"[{Colors.NEUTRAL}]Create a delegated mandate from a parent mandate[/]",
+            f"[{Colors.NEUTRAL}]Create a delegation edge from a source mandate[/]",
             title=f"[bold {Colors.INFO}]Delegate Mandate[/]",
             border_style=Colors.PRIMARY,
         ))
@@ -194,48 +198,48 @@ class MandateDelegationFlow:
             db_manager = get_db_manager()
             
             with db_manager.session_scope() as db_session:
-                # Get valid parent mandates
+                # Get valid source mandates
                 mandates = db_session.query(ExecutionMandate).filter_by(revoked=False).all()
                 
                 if not mandates:
                     self.console.print(f"  [{Colors.DIM}]No valid mandates available for delegation.[/]")
                     return
                 
-                # Select parent mandate
-                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}... - Depth {m.delegation_depth}") for m in mandates]
-                parent_mandate_id_str = self.prompt.uuid("Parent Mandate ID (Tab for suggestions)", items)
-                parent_mandate_id = UUID(parent_mandate_id_str)
+                # Select source mandate
+                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}...") for m in mandates]
+                source_mandate_id_str = self.prompt.uuid("Source Mandate ID (Tab for suggestions)", items)
+                source_mandate_id = UUID(source_mandate_id_str)
                 
-                parent_mandate = db_session.query(ExecutionMandate).filter_by(mandate_id=parent_mandate_id).first()
+                source_mandate = db_session.query(ExecutionMandate).filter_by(mandate_id=source_mandate_id).first()
                 
-                if not parent_mandate:
-                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Parent mandate not found.[/]")
+                if not source_mandate:
+                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Source mandate not found.[/]")
                     return
                 
-                # Show parent mandate scope
+                # Show source mandate scope
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Parent Mandate Scope:[/]")
-                self.console.print(f"    Resources: {', '.join(parent_mandate.resource_scope[:3])}{'...' if len(parent_mandate.resource_scope) > 3 else ''}")
-                self.console.print(f"    Actions: {', '.join(parent_mandate.action_scope[:3])}{'...' if len(parent_mandate.action_scope) > 3 else ''}")
+                self.console.print(f"  [{Colors.INFO}]Source Mandate Scope:[/]")
+                self.console.print(f"    Resources: {', '.join(source_mandate.resource_scope[:3])}{'...' if len(source_mandate.resource_scope) > 3 else ''}")
+                self.console.print(f"    Actions: {', '.join(source_mandate.action_scope[:3])}{'...' if len(source_mandate.action_scope) > 3 else ''}")
                 self.console.print()
                 
-                # Select child principal
+                # Select target principal
                 principals = db_session.query(Principal).all()
                 principal_items = [(str(p.principal_id), p.name) for p in principals]
-                child_subject_id_str = self.prompt.uuid("Child Principal ID (Tab for suggestions)", principal_items)
+                child_subject_id_str = self.prompt.uuid("Target Principal ID (Tab for suggestions)", principal_items)
                 child_subject_id = UUID(child_subject_id_str)
                 
                 # Child resource scope (must be subset)
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Enter child resource scope (subset of parent):[/]")
-                self.console.print(f"  [{Colors.HINT}]Parent resources: {', '.join(parent_mandate.resource_scope)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Enter target resource scope (subset of source):[/]")
+                self.console.print(f"  [{Colors.HINT}]Source resources: {', '.join(source_mandate.resource_scope)}[/]")
                 child_resources = []
                 while True:
                     resource = self.prompt.text(f"Resource {len(child_resources) + 1}", required=False)
                     if not resource:
                         break
-                    if resource not in parent_mandate.resource_scope:
-                        self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Resource not in parent scope. Try again.[/]")
+                    if resource not in source_mandate.resource_scope:
+                        self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Resource not in source scope. Try again.[/]")
                         continue
                     child_resources.append(resource)
                 
@@ -245,15 +249,15 @@ class MandateDelegationFlow:
                 
                 # Child action scope (must be subset)
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Enter child action scope (subset of parent):[/]")
-                self.console.print(f"  [{Colors.HINT}]Parent actions: {', '.join(parent_mandate.action_scope)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Enter target action scope (subset of source):[/]")
+                self.console.print(f"  [{Colors.HINT}]Source actions: {', '.join(source_mandate.action_scope)}[/]")
                 child_actions = []
                 while True:
                     action = self.prompt.text(f"Action {len(child_actions) + 1}", required=False)
                     if not action:
                         break
-                    if action not in parent_mandate.action_scope:
-                        self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Action not in parent scope. Try again.[/]")
+                    if action not in source_mandate.action_scope:
+                        self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Action not in source scope. Try again.[/]")
                         continue
                     child_actions.append(action)
                 
@@ -261,14 +265,14 @@ class MandateDelegationFlow:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one action is required.[/]")
                     return
                 
-                # Validity period (must be within parent)
+                # Validity period (must be within source)
                 from datetime import datetime, timedelta
                 
-                parent_remaining = (parent_mandate.valid_until - datetime.utcnow()).total_seconds()
-                max_validity = int(parent_remaining) if parent_remaining > 0 else 0
+                source_remaining = (source_mandate.valid_until - datetime.utcnow()).total_seconds()
+                max_validity = int(source_remaining) if source_remaining > 0 else 0
                 
                 if max_validity <= 0:
-                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Parent mandate has expired.[/]")
+                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Source mandate has expired.[/]")
                     return
                 
                 validity_seconds = self.prompt.number(
@@ -278,37 +282,49 @@ class MandateDelegationFlow:
                     max_value=max_validity,
                 )
                 
+                # Context tags (optional)
+                self.console.print()
+                self.console.print(f"  [{Colors.INFO}]Context tags (optional, empty to skip):[/]")
+                context_tags = []
+                while True:
+                    tag = self.prompt.text(f"Tag {len(context_tags) + 1}", required=False)
+                    if not tag:
+                        break
+                    context_tags.append(tag)
+                
                 # Summary
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Delegation Summary:[/]")
-                self.console.print(f"    Parent Mandate: [{Colors.DIM}]{parent_mandate_id_str[:8]}...[/]")
-                self.console.print(f"    Child Principal: [{Colors.DIM}]{child_subject_id_str[:8]}...[/]")
+                self.console.print(f"    Source Mandate: [{Colors.DIM}]{source_mandate_id_str[:8]}...[/]")
+                self.console.print(f"    Target Principal: [{Colors.DIM}]{child_subject_id_str[:8]}...[/]")
                 self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(child_resources)} resources[/]")
                 self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(child_actions)} actions[/]")
                 self.console.print(f"    Validity: [{Colors.NEUTRAL}]{int(validity_seconds)}s[/]")
+                if context_tags:
+                    self.console.print(f"    Tags: [{Colors.NEUTRAL}]{', '.join(context_tags)}[/]")
                 self.console.print()
                 
-                if not self.prompt.confirm("Create delegated mandate?", default=True):
+                if not self.prompt.confirm("Create delegation edge?", default=True):
                     self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Cancelled[/]")
                     return
                 
                 # Create delegated mandate
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Creating delegated mandate...[/]")
+                self.console.print(f"  [{Colors.INFO}]Creating delegation edge...[/]")
                 
                 mandate_manager = MandateManager(db_session)
                 
                 delegated_mandate = mandate_manager.delegate_mandate(
-                    parent_mandate_id=parent_mandate_id,
+                    source_mandate_id=source_mandate_id,
                     child_subject_id=child_subject_id,
                     resource_scope=child_resources,
                     action_scope=child_actions,
                     validity_seconds=int(validity_seconds),
+                    context_tags=context_tags if context_tags else None,
                 )
                 
-                self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Delegated mandate created![/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Mandate ID: [{Colors.PRIMARY}]{delegated_mandate.mandate_id}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{delegated_mandate.delegation_depth}[/]")
+                self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Delegation edge created![/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Target Mandate ID: [{Colors.PRIMARY}]{delegated_mandate.mandate_id}[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
@@ -322,11 +338,11 @@ class MandateDelegationFlow:
             logger.error(f"Error delegating mandate: {e}")
             self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
     
-    def view_delegated_mandates(self) -> None:
-        """View delegated mandates for a principal."""
+    def peer_delegate(self) -> None:
+        """Create a peer-to-peer delegation between same-type principals."""
         self.console.print(Panel(
-            f"[{Colors.NEUTRAL}]View mandates delegated to a principal[/]",
-            title=f"[bold {Colors.INFO}]Delegated Mandates[/]",
+            f"[{Colors.NEUTRAL}]Create a peer-to-peer delegation edge[/]",
+            title=f"[bold {Colors.INFO}]Peer Delegation[/]",
             border_style=Colors.PRIMARY,
         ))
         self.console.print()
@@ -334,6 +350,78 @@ class MandateDelegationFlow:
         try:
             from caracal.db.connection import get_db_manager
             from caracal.db.models import ExecutionMandate, Principal
+            from caracal.core.mandate import MandateManager
+            
+            db_manager = get_db_manager()
+            
+            with db_manager.session_scope() as db_session:
+                mandates = db_session.query(ExecutionMandate).filter_by(revoked=False).all()
+                
+                if not mandates:
+                    self.console.print(f"  [{Colors.DIM}]No valid mandates available.[/]")
+                    return
+                
+                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}...") for m in mandates]
+                source_id_str = self.prompt.uuid("Source Mandate ID", items)
+                source_mandate_id = UUID(source_id_str)
+                
+                principals = db_session.query(Principal).all()
+                principal_items = [(str(p.principal_id), f"{p.name} ({p.principal_type})") for p in principals]
+                target_id_str = self.prompt.uuid("Peer Target Principal ID", principal_items)
+                target_subject_id = UUID(target_id_str)
+                
+                source_mandate = db_session.query(ExecutionMandate).filter_by(mandate_id=source_mandate_id).first()
+                if not source_mandate:
+                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Source mandate not found.[/]")
+                    return
+                
+                validity_seconds = self.prompt.number(
+                    "Validity period (seconds)",
+                    default=3600,
+                    min_value=60,
+                    max_value=86400,
+                )
+                
+                if not self.prompt.confirm("Create peer delegation?", default=True):
+                    return
+                
+                mandate_manager = MandateManager(db_session)
+                
+                delegated = mandate_manager.peer_delegate(
+                    source_mandate_id=source_mandate_id,
+                    target_subject_id=target_subject_id,
+                    resource_scope=source_mandate.resource_scope,
+                    action_scope=source_mandate.action_scope,
+                    validity_seconds=int(validity_seconds),
+                )
+                
+                self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Peer delegation created![/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Target Mandate ID: [{Colors.PRIMARY}]{delegated.mandate_id}[/]")
+                
+                if self.state:
+                    self.state.add_recent_action(RecentAction.create(
+                        "peer_delegate",
+                        f"Peer delegated to {target_id_str[:8]}...",
+                    ))
+            
+            db_manager.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating peer delegation: {e}")
+            self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
+    
+    def view_delegation_edges(self) -> None:
+        """View delegation edges for a principal."""
+        self.console.print(Panel(
+            f"[{Colors.NEUTRAL}]View delegation edges connected to a principal[/]",
+            title=f"[bold {Colors.INFO}]Delegation Edges[/]",
+            border_style=Colors.PRIMARY,
+        ))
+        self.console.print()
+        
+        try:
+            from caracal.db.connection import get_db_manager
+            from caracal.db.models import ExecutionMandate, DelegationEdgeModel, Principal
             
             db_manager = get_db_manager()
             
@@ -349,51 +437,70 @@ class MandateDelegationFlow:
                 principal_id_str = self.prompt.uuid("Principal ID (Tab for suggestions)", items)
                 principal_id = UUID(principal_id_str)
                 
-                # Get delegated mandates (where parent_mandate_id is not null)
-                mandates = db_session.query(ExecutionMandate).filter(
-                    ExecutionMandate.subject_id == principal_id,
-                    ExecutionMandate.parent_mandate_id.isnot(None)
+                # Get mandates for this principal
+                mandate_ids = [
+                    m.mandate_id for m in
+                    db_session.query(ExecutionMandate).filter(
+                        ExecutionMandate.subject_id == principal_id
+                    ).all()
+                ]
+                
+                if not mandate_ids:
+                    self.console.print(f"  [{Colors.DIM}]No mandates for this principal.[/]")
+                    return
+                
+                # Get all edges involving this principal's mandates
+                edges = db_session.query(DelegationEdgeModel).filter(
+                    (DelegationEdgeModel.source_mandate_id.in_(mandate_ids)) |
+                    (DelegationEdgeModel.target_mandate_id.in_(mandate_ids)),
+                    DelegationEdgeModel.revoked == False,
                 ).all()
                 
-                if not mandates:
-                    self.console.print(f"  [{Colors.DIM}]No delegated mandates for this principal.[/]")
+                if not edges:
+                    self.console.print(f"  [{Colors.DIM}]No delegation edges for this principal.[/]")
                     return
                 
                 self.console.print()
                 
                 table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
-                table.add_column("Mandate ID", style=Colors.DIM)
-                table.add_column("Parent ID", style=Colors.DIM)
-                table.add_column("Depth", style=Colors.NEUTRAL)
-                table.add_column("Valid Until", style=Colors.NEUTRAL)
+                table.add_column("Edge ID", style=Colors.DIM)
+                table.add_column("Direction", style=Colors.NEUTRAL)
+                table.add_column("Source Type", style=Colors.NEUTRAL)
+                table.add_column("Target Type", style=Colors.NEUTRAL)
+                table.add_column("Type", style=Colors.NEUTRAL)
+                table.add_column("Tags", style=Colors.DIM)
                 table.add_column("Status", style=Colors.NEUTRAL)
                 
-                for mandate in mandates:
-                    status_style = Colors.SUCCESS if not mandate.revoked else Colors.ERROR
-                    status_text = "Active" if not mandate.revoked else "Revoked"
+                for edge in edges:
+                    direction = "⇒ OUT" if edge.source_mandate_id in mandate_ids else "⇐ IN"
+                    status_style = Colors.SUCCESS if not edge.revoked else Colors.ERROR
+                    status_text = "Active" if not edge.revoked else "Revoked"
+                    tags = ", ".join(edge.context_tags) if edge.context_tags else ""
                     
                     table.add_row(
-                        str(mandate.mandate_id)[:8] + "...",
-                        str(mandate.parent_mandate_id)[:8] + "...",
-                        str(mandate.delegation_depth),
-                        str(mandate.valid_until),
+                        str(edge.edge_id)[:8] + "...",
+                        direction,
+                        edge.source_principal_type,
+                        edge.target_principal_type,
+                        edge.delegation_type,
+                        tags,
                         f"[{status_style}]{status_text}[/]",
                     )
                 
                 self.console.print(table)
                 self.console.print()
-                self.console.print(f"  [{Colors.DIM}]Total: {len(mandates)} delegated mandates[/]")
+                self.console.print(f"  [{Colors.DIM}]Total: {len(edges)} delegation edges[/]")
             
             db_manager.close()
             
         except Exception as e:
-            logger.error(f"Error viewing delegated mandates: {e}")
+            logger.error(f"Error viewing delegation edges: {e}")
             self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
     
     def revoke_delegation(self) -> None:
-        """Revoke delegation with cascade option."""
+        """Revoke delegation edge with cascade option."""
         self.console.print(Panel(
-            f"[{Colors.NEUTRAL}]Revoke a delegated mandate[/]",
+            f"[{Colors.NEUTRAL}]Revoke a delegation edge[/]",
             title=f"[bold {Colors.WARNING}]Revoke Delegation[/]",
             border_style=Colors.WARNING,
         ))
@@ -401,43 +508,45 @@ class MandateDelegationFlow:
         
         try:
             from caracal.db.connection import get_db_manager
-            from caracal.db.models import ExecutionMandate
+            from caracal.db.models import ExecutionMandate, DelegationEdgeModel
             from caracal.core.mandate import MandateManager
             
             db_manager = get_db_manager()
             
             with db_manager.session_scope() as db_session:
-                # Get active delegated mandates
-                mandates = db_session.query(ExecutionMandate).filter(
-                    ExecutionMandate.revoked == False,
-                    ExecutionMandate.parent_mandate_id.isnot(None)
+                # Get active delegation edges
+                edges = db_session.query(DelegationEdgeModel).filter(
+                    DelegationEdgeModel.revoked == False,
                 ).all()
                 
-                if not mandates:
-                    self.console.print(f"  [{Colors.DIM}]No active delegated mandates to revoke.[/]")
+                if not edges:
+                    self.console.print(f"  [{Colors.DIM}]No active delegation edges to revoke.[/]")
                     return
                 
-                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}... - Depth {m.delegation_depth}") for m in mandates]
-                mandate_id_str = self.prompt.uuid("Mandate ID (Tab for suggestions)", items)
-                mandate_id = UUID(mandate_id_str)
+                items = [
+                    (str(e.edge_id), f"{e.source_principal_type}→{e.target_principal_type} ({e.delegation_type})")
+                    for e in edges
+                ]
+                edge_id_str = self.prompt.uuid("Edge ID (Tab for suggestions)", items)
+                edge_id = UUID(edge_id_str)
                 
-                mandate = db_session.query(ExecutionMandate).filter_by(mandate_id=mandate_id).first()
+                edge = db_session.query(DelegationEdgeModel).filter_by(edge_id=edge_id).first()
                 
-                if not mandate:
-                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Mandate not found.[/]")
+                if not edge:
+                    self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Edge not found.[/]")
                     return
                 
-                # Check for child mandates
-                child_count = db_session.query(ExecutionMandate).filter_by(
-                    parent_mandate_id=mandate_id,
-                    revoked=False
+                # Check for downstream edges from target mandate
+                downstream_count = db_session.query(DelegationEdgeModel).filter(
+                    DelegationEdgeModel.source_mandate_id == edge.target_mandate_id,
+                    DelegationEdgeModel.revoked == False,
                 ).count()
                 
                 cascade = False
-                if child_count > 0:
+                if downstream_count > 0:
                     self.console.print()
-                    self.console.print(f"  [{Colors.WARNING}]This mandate has {child_count} active child mandate(s).[/]")
-                    cascade = self.prompt.confirm("Revoke all child mandates (cascade)?", default=True)
+                    self.console.print(f"  [{Colors.WARNING}]This edge's target has {downstream_count} downstream edge(s).[/]")
+                    cascade = self.prompt.confirm("Revoke downstream edges (cascade)?", default=True)
                 
                 # Revocation reason
                 reason = self.prompt.text("Revocation reason", default="Manual revocation via TUI")
@@ -446,35 +555,44 @@ class MandateDelegationFlow:
                 self.console.print()
                 self.console.print(f"  [{Colors.WARNING}]Warning: This action cannot be undone.[/]")
                 if cascade:
-                    self.console.print(f"  [{Colors.WARNING}]All child mandates will also be revoked.[/]")
+                    self.console.print(f"  [{Colors.WARNING}]All downstream edges will also be revoked.[/]")
                 self.console.print()
                 
-                if not self.prompt.confirm("Revoke this mandate?", default=False):
+                if not self.prompt.confirm("Revoke this delegation edge?", default=False):
                     self.console.print(f"  [{Colors.INFO}]Cancelled[/]")
                     return
                 
-                # Revoke mandate
+                # Revoke the edge
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Revoking mandate...[/]")
+                self.console.print(f"  [{Colors.INFO}]Revoking delegation edge...[/]")
                 
-                mandate_manager = MandateManager(db_session)
+                # Revoke the edge itself
+                edge.revoked = True
                 
-                # For now, use the subject as revoker (in real system, would use authenticated user)
-                mandate_manager.revoke_mandate(
-                    mandate_id=mandate_id,
-                    revoker_id=mandate.subject_id,
-                    reason=reason,
-                    cascade=cascade,
-                )
+                # If cascading, revoke the target mandate and downstream edges
+                if cascade:
+                    mandate_manager = MandateManager(db_session)
+                    target_mandate = db_session.query(ExecutionMandate).filter_by(
+                        mandate_id=edge.target_mandate_id
+                    ).first()
+                    if target_mandate:
+                        mandate_manager.revoke_mandate(
+                            mandate_id=target_mandate.mandate_id,
+                            revoker_id=target_mandate.issuer_id,
+                            reason=reason,
+                            cascade=True,
+                        )
                 
-                self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Mandate revoked![/]")
-                if cascade and child_count > 0:
-                    self.console.print(f"  [{Colors.INFO}]Revoked {child_count} child mandate(s).[/]")
+                db_session.commit()
+                
+                self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Delegation edge revoked![/]")
+                if cascade and downstream_count > 0:
+                    self.console.print(f"  [{Colors.INFO}]Revoked {downstream_count} downstream edge(s).[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
                         "revoke_delegation",
-                        f"Revoked mandate {mandate_id_str[:8]}...",
+                        f"Revoked edge {edge_id_str[:8]}...",
                     ))
             
             db_manager.close()

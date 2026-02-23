@@ -2,7 +2,7 @@
  * Copyright (C) 2026 Garudex Labs. All Rights Reserved.
  * Caracal, a product of Garudex Labs
  *
- * SDK Delegation Operations.
+ * SDK Delegation Operations — Graph-Based Model.
  */
 
 import { SDKRequest } from './adapters/base';
@@ -27,41 +27,71 @@ export class DelegationOperations {
     }
   }
 
+  /** Create a delegation edge from source mandate to target subject. */
   async create(options: {
-    parentMandateId: string;
+    sourceMandateId: string;
     childSubjectId: string;
     resourceScope: string[];
     actionScope: string[];
     validitySeconds: number;
+    contextTags?: string[];
     metadata?: Record<string, unknown>;
   }): Promise<unknown> {
     const body: Record<string, unknown> = {
-      parent_mandate_id: options.parentMandateId,
+      source_mandate_id: options.sourceMandateId,
       child_subject_id: options.childSubjectId,
       resource_scope: options.resourceScope,
       action_scope: options.actionScope,
       validity_seconds: options.validitySeconds,
     };
+    if (options.contextTags) body.context_tags = options.contextTags;
     if (options.metadata) body.metadata = options.metadata;
     return this.exec(this.buildReq('POST', '/delegations', body));
   }
 
+  /** Generate a delegation token from source agent to target agent. */
   async getToken(options: {
-    parentAgentId: string;
-    childAgentId: string;
+    sourceAgentId: string;
+    targetAgentId: string;
     expirationSeconds?: number;
     allowedOperations?: string[];
   }): Promise<unknown> {
     const body: Record<string, unknown> = {
-      parent_agent_id: options.parentAgentId,
-      child_agent_id: options.childAgentId,
+      source_agent_id: options.sourceAgentId,
+      target_agent_id: options.targetAgentId,
       expiration_seconds: options.expirationSeconds ?? 86400,
     };
     if (options.allowedOperations) body.allowed_operations = options.allowedOperations;
     return this.exec(this.buildReq('POST', '/delegations/token', body));
   }
 
-  async getChain(agentId: string): Promise<unknown> {
-    return this.exec(this.buildReq('GET', `/delegations/chain/${agentId}`));
+  /** Peer-to-peer delegation between principals of the same type. */
+  async peerDelegate(options: {
+    sourceMandateId: string;
+    targetSubjectId: string;
+    resourceScope: string[];
+    actionScope: string[];
+    validitySeconds: number;
+    contextTags?: string[];
+  }): Promise<unknown> {
+    const body: Record<string, unknown> = {
+      source_mandate_id: options.sourceMandateId,
+      target_subject_id: options.targetSubjectId,
+      resource_scope: options.resourceScope,
+      action_scope: options.actionScope,
+      validity_seconds: options.validitySeconds,
+    };
+    if (options.contextTags) body.context_tags = options.contextTags;
+    return this.exec(this.buildReq('POST', '/delegations/peer', body));
+  }
+
+  /** Get delegation graph for an agent (all connected edges). */
+  async getGraph(agentId: string): Promise<unknown> {
+    return this.exec(this.buildReq('GET', `/delegations/graph/${agentId}`));
+  }
+
+  /** Revoke a specific delegation edge. */
+  async revokeEdge(edgeId: string, cascade: boolean = true): Promise<unknown> {
+    return this.exec(this.buildReq('DELETE', `/delegations/edges/${edgeId}`, undefined, { cascade }));
   }
 }
