@@ -34,6 +34,34 @@ By enforcing the **principle of explicit authority**, Caracal ensures no action 
 
 ---
 
+## Community
+
+<div align="center">
+<table>
+<tr>
+<td align="center">
+<a href="https://www.youtube.com/live/tZ4FdO-zjeE" target="_blank" rel="noopener">
+<img src="https://img.youtube.com/vi/tZ4FdO-zjeE/hqdefault.jpg" alt="Open Source Friday — Preview" height="180"><br>
+<strong>GitHub's Open Source Friday</strong>
+</a>
+</td>
+<td align="center">
+<div style="width:320px;height:180px;display:flex;align-items:center;justify-content:center;border-radius:6px;border:1px solid #ddd;background:#f8f8f8;font-weight:600">
+More coming soon
+</div>
+</td>
+</tr>
+</table>
+</div>
+
+</div>
+
+<div align="center">
+</div>
+
+
+---
+
 ## Core Interfaces
 
 ### 1. Caracal SDK (Python & Node.js)
