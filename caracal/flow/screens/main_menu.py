@@ -39,12 +39,6 @@ MAIN_MENU_ITEMS = [
         icon=Icons.POLICY,
     ),
     MenuItem(
-        key="ledger",
-        label="Authority Ledger",
-        description="Query authority events and view audit trail",
-        icon=Icons.LEDGER,
-    ),
-    MenuItem(
         key="mandates",
         label="Mandate Manager",
         description="Issue, validate, and revoke execution mandates",
@@ -55,6 +49,12 @@ MAIN_MENU_ITEMS = [
         label=" Delegation Center",
         description="Manage mandate delegation and relationships",
         icon="🏛",
+    ),
+    MenuItem(
+        key="ledger",
+        label="Authority Ledger",
+        description="Query authority events and view audit trail",
+        icon=Icons.LEDGER,
     ),
     MenuItem(
         key="enterprise",
