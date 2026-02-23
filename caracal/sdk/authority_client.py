@@ -225,7 +225,7 @@ class AuthorityClient:
         action_scope: List[str],
         validity_seconds: int,
         intent: Optional[Dict[str, Any]] = None,
-        parent_mandate_id: Optional[str] = None,
+        source_mandate_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -240,7 +240,7 @@ class AuthorityClient:
             action_scope: List of allowed actions (e.g., ["api_call", "database_query"])
             validity_seconds: How long the mandate is valid (TTL in seconds)
             intent: Optional intent that constrains the mandate
-            parent_mandate_id: Optional parent mandate ID for delegation
+            source_mandate_id: Optional source mandate ID for delegation
             metadata: Optional additional metadata
             
         Returns:
@@ -256,8 +256,7 @@ class AuthorityClient:
             - created_at: Creation timestamp
             - metadata: Additional metadata
             - revoked: Revocation status
-            - parent_mandate_id: Parent mandate ID (if delegated)
-            - delegation_depth: Delegation depth
+            - source_mandate_id: Source mandate ID (if delegated)
             
         Raises:
             ConnectionError: If request fails
@@ -303,8 +302,8 @@ class AuthorityClient:
         
         if intent:
             request_data["intent"] = intent
-        if parent_mandate_id:
-            request_data["parent_mandate_id"] = parent_mandate_id
+        if source_mandate_id:
+            request_data["source_mandate_id"] = source_mandate_id
         if metadata:
             request_data["metadata"] = metadata
         
@@ -628,7 +627,7 @@ class AuthorityClient:
 
     def delegate_mandate(
         self,
-        parent_mandate_id: str,
+        source_mandate_id: str,
         child_subject_id: str,
         resource_scope: List[str],
         action_scope: List[str],
@@ -642,7 +641,7 @@ class AuthorityClient:
         with scope and validity constrained by the parent.
         
         Args:
-            parent_mandate_id: Parent mandate identifier
+            source_mandate_id: Source mandate identifier
             child_subject_id: Principal ID for the child mandate subject
             resource_scope: Resource scope for child (must be subset of parent)
             action_scope: Action scope for child (must be subset of parent)
@@ -660,8 +659,7 @@ class AuthorityClient:
             - action_scope: List of allowed actions
             - signature: Cryptographic signature
             - created_at: Creation timestamp
-            - parent_mandate_id: Parent mandate ID
-            - delegation_depth: Delegation depth (parent depth + 1)
+            - source_mandate_id: Source mandate ID
             
         Raises:
             ConnectionError: If request fails
@@ -671,18 +669,17 @@ class AuthorityClient:
         Example:
             >>> client = AuthorityClient(base_url="http://localhost:8000", api_key="secret")
             >>> child_mandate = client.delegate_mandate(
-            ...     parent_mandate_id="parent-uuid",
+            ...     source_mandate_id="parent-uuid",
             ...     child_subject_id="child-agent-uuid",
             ...     resource_scope=["api:openai:gpt-3.5"],  # Subset of parent
             ...     action_scope=["api_call"],
             ...     validity_seconds=1800  # 30 minutes
             ... )
             >>> print(f"Delegated mandate: {child_mandate['mandate_id']}")
-            >>> print(f"Delegation depth: {child_mandate['delegation_depth']}")
         """
         # Validate parameters
-        if not parent_mandate_id:
-            raise SDKConfigurationError("parent_mandate_id is required")
+        if not source_mandate_id:
+            raise SDKConfigurationError("source_mandate_id is required")
         if not child_subject_id:
             raise SDKConfigurationError("child_subject_id is required")
         if not resource_scope:
@@ -693,13 +690,13 @@ class AuthorityClient:
             raise SDKConfigurationError("validity_seconds must be positive")
         
         logger.info(
-            f"Delegating mandate: parent={parent_mandate_id}, "
+            f"Delegating mandate: source={source_mandate_id}, "
             f"child_subject={child_subject_id}, validity={validity_seconds}s"
         )
         
         # Prepare request data
         request_data = {
-            "parent_mandate_id": parent_mandate_id,
+            "source_mandate_id": source_mandate_id,
             "child_subject_id": child_subject_id,
             "resource_scope": resource_scope,
             "action_scope": action_scope,
@@ -719,14 +716,13 @@ class AuthorityClient:
             
             logger.info(
                 f"Successfully delegated mandate: {response.get('mandate_id')} "
-                f"(depth: {response.get('delegation_depth')})"
             )
             
             return response
             
         except Exception as e:
             logger.error(
-                f"Failed to delegate mandate from {parent_mandate_id}: {e}",
+                f"Failed to delegate mandate from {source_mandate_id}: {e}",
                 exc_info=True
             )
             raise

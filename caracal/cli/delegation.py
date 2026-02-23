@@ -232,38 +232,38 @@ def list_delegations(ctx, agent_id: str, format: str):
                     'expires_at': edge.expires_at.isoformat() if edge.expires_at else None,
                 })
         
-        if not delegations:
-            click.echo("No delegation edges found.")
-            return
-        
-        if format.lower() == 'json':
-            # JSON output
-            click.echo(json.dumps(delegations, indent=2))
-        else:
-            # Table output
-            click.echo(f"Total delegation edges: {len(delegations)}")
-            click.echo()
+            if not delegations:
+                click.echo("No delegation edges found.")
+                return
             
-            # Print header
-            type_icons = {'user': '\ud83d\udc64', 'agent': '\ud83e\udd16', 'service': '\u2699\ufe0f'}
-            click.echo(
-                f"{'Edge ID':<38}  {'Source Type':<12}  {'Target Type':<12}  {'Deleg. Type':<14}  Tags"
-            )
-            click.echo("-" * 110)
-            
-            # Print delegations
-            for d in delegations:
-                src_icon = type_icons.get(d['source_principal_type'], '?')
-                tgt_icon = type_icons.get(d['target_principal_type'], '?')
-                tags = ', '.join(d['context_tags']) if d.get('context_tags') else ''
+            if format.lower() == 'json':
+                # JSON output
+                click.echo(json.dumps(delegations, indent=2))
+            else:
+                # Table output
+                click.echo(f"Total delegation edges: {len(delegations)}")
+                click.echo()
                 
+                # Print header
+                type_icons = {'user': '👤', 'agent': '🤖', 'service': '⚙️'}
                 click.echo(
-                    f"{d['edge_id']:<38}  "
-                    f"{src_icon} {d['source_principal_type']:<9}  "
-                    f"{tgt_icon} {d['target_principal_type']:<9}  "
-                    f"{d['delegation_type']:<14}  "
-                    f"{tags}"
+                    f"{'Edge ID':<38}  {'Source Type':<12}  {'Target Type':<12}  {'Deleg. Type':<14}  Tags"
                 )
+                click.echo("-" * 110)
+                
+                # Print delegations
+                for d in delegations:
+                    src_icon = type_icons.get(d['source_principal_type'], '?')
+                    tgt_icon = type_icons.get(d['target_principal_type'], '?')
+                    tags = ', '.join(d['context_tags']) if d.get('context_tags') else ''
+                    
+                    click.echo(
+                        f"{d['edge_id']:<38}  "
+                        f"{src_icon} {d['source_principal_type']:<9}  "
+                        f"{tgt_icon} {d['target_principal_type']:<9}  "
+                        f"{d['delegation_type']:<14}  "
+                        f"{tags}"
+                    )
         
         finally:
             db_manager.close()
