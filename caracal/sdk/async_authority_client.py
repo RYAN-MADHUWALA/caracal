@@ -197,7 +197,7 @@ class AsyncAuthorityClient:
         action_scope: List[str],
         validity_seconds: int,
         intent: Optional[Dict[str, Any]] = None,
-        parent_mandate_id: Optional[str] = None,
+        source_mandate_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
@@ -233,8 +233,8 @@ class AsyncAuthorityClient:
         
         if intent:
             request_data["intent"] = intent
-        if parent_mandate_id:
-            request_data["parent_mandate_id"] = parent_mandate_id
+        if source_mandate_id:
+            request_data["source_mandate_id"] = source_mandate_id
         if metadata:
             request_data["metadata"] = metadata
         
@@ -410,7 +410,7 @@ class AsyncAuthorityClient:
 
     async def delegate_mandate(
         self,
-        parent_mandate_id: str,
+        source_mandate_id: str,
         child_subject_id: str,
         resource_scope: List[str],
         action_scope: List[str],
@@ -423,8 +423,8 @@ class AsyncAuthorityClient:
         See AuthorityClient.delegate_mandate() for full documentation.
         """
         # Validate parameters
-        if not parent_mandate_id:
-            raise SDKConfigurationError("parent_mandate_id is required")
+        if not source_mandate_id:
+            raise SDKConfigurationError("source_mandate_id is required")
         if not child_subject_id:
             raise SDKConfigurationError("child_subject_id is required")
         if not resource_scope:
@@ -435,13 +435,13 @@ class AsyncAuthorityClient:
             raise SDKConfigurationError("validity_seconds must be positive")
         
         logger.info(
-            f"Delegating mandate (async): parent={parent_mandate_id}, "
+            f"Delegating mandate (async): source={source_mandate_id}, "
             f"child_subject={child_subject_id}, validity={validity_seconds}s"
         )
         
         # Prepare request data
         request_data = {
-            "parent_mandate_id": parent_mandate_id,
+            "source_mandate_id": source_mandate_id,
             "child_subject_id": child_subject_id,
             "resource_scope": resource_scope,
             "action_scope": action_scope,
@@ -459,8 +459,7 @@ class AsyncAuthorityClient:
         )
         
         logger.info(
-            f"Successfully delegated mandate (async): {response.get('mandate_id')} "
-            f"(depth: {response.get('delegation_depth')})"
+            f"Successfully delegated mandate (async): {response.get('mandate_id')}"
         )
         
         return response
