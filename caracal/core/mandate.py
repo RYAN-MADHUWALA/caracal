@@ -276,7 +276,7 @@ class MandateManager:
         # Validate requested validity period against policy
         if validity_seconds > issuer_policy.max_validity_seconds:
             error_msg = (
-                f"Requested validity {validity_seconds}s exceeds policy limit "
+                f"Requested mandate validity {validity_seconds}s exceeds policy maximum "
                 f"{issuer_policy.max_validity_seconds}s"
             )
             logger.warning(error_msg)

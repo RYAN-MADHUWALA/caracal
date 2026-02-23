@@ -998,7 +998,7 @@ def _step_policy(wizard: Wizard) -> Any:
 
     console.print()
     console.print(f"  [{Colors.INFO}]{Icons.INFO} Policy will be created after setup completes.[/]")
-    console.print(f"  [{Colors.DIM}]Max Validity: {int(max_validity)}s[/]")
+    console.print(f"  [{Colors.DIM}]Max mandate validity (seconds): {int(max_validity)}s[/]")
 
     return wizard.context["first_policy"]
 

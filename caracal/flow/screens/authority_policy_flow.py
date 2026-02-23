@@ -98,7 +98,7 @@ class AuthorityPolicyFlow:
                 table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
                 table.add_column("ID", style=Colors.DIM)
                 table.add_column("Principal", style=Colors.DIM)
-                table.add_column("Max Validity", style=Colors.NEUTRAL)
+                table.add_column("Max Mandate Validity (s)", style=Colors.NEUTRAL)
                 table.add_column("Actions", style=Colors.NEUTRAL)
                 table.add_column("Delegation", style=Colors.NEUTRAL)
                 table.add_column("Status", style=Colors.NEUTRAL)
@@ -159,9 +159,9 @@ class AuthorityPolicyFlow:
                 principal_id_str = self.prompt.uuid("Principal ID (Tab for suggestions)", items)
                 principal_id = UUID(principal_id_str)
                 
-                # Max validity seconds
+                # Max mandate validity seconds
                 max_validity = self.prompt.number(
-                    "Maximum validity period (seconds)",
+                    "Maximum mandate validity (seconds)",
                     default=3600,
                     min_value=60,
                 )
@@ -210,7 +210,7 @@ class AuthorityPolicyFlow:
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Policy Details:[/]")
                 self.console.print(f"    Principal: [{Colors.DIM}]{principal_id_str[:8]}...[/]")
-                self.console.print(f"    Max Validity: [{Colors.NEUTRAL}]{int(max_validity)}s[/]")
+                self.console.print(f"    Max mandate validity (seconds): [{Colors.NEUTRAL}]{int(max_validity)}s[/]")
                 self.console.print(f"    Resource Patterns: [{Colors.NEUTRAL}]{len(resource_patterns)} patterns[/]")
                 self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(actions)} actions[/]")
                 self.console.print(f"    Delegation: [{Colors.NEUTRAL}]{'Yes' if allow_delegation else 'No'}[/]")
@@ -247,7 +247,7 @@ class AuthorityPolicyFlow:
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
                         "create_authority_policy",
-                        f"Created authority policy with {max_validity}s max validity",
+                        f"Created authority policy with {max_validity}s max mandate validity",
                     ))
             
             db_manager.close()
@@ -294,7 +294,7 @@ class AuthorityPolicyFlow:
                 self.console.print(f"  [{Colors.INFO}]Policy Information:[/]")
                 self.console.print(f"    Policy ID: [{Colors.PRIMARY}]{policy.policy_id}[/]")
                 self.console.print(f"    Principal ID: [{Colors.DIM}]{policy.principal_id}[/]")
-                self.console.print(f"    Max Validity: [{Colors.NEUTRAL}]{policy.max_validity_seconds}s[/]")
+                self.console.print(f"    Max mandate validity (seconds): [{Colors.NEUTRAL}]{policy.max_validity_seconds}s[/]")
                 self.console.print(f"    Created: [{Colors.DIM}]{policy.created_at}[/]")
                 self.console.print(f"    Created By: [{Colors.DIM}]{policy.created_by}[/]")
                 self.console.print(f"    Status: [{Colors.SUCCESS if policy.active else Colors.DIM}]{'Active' if policy.active else 'Inactive'}[/]")
@@ -356,16 +356,16 @@ class AuthorityPolicyFlow:
                 # Show current values and allow editing
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Current Policy Settings:[/]")
-                self.console.print(f"    Max Validity: {policy.max_validity_seconds}s")
+                self.console.print(f"    Max mandate validity (seconds): {policy.max_validity_seconds}s")
                 self.console.print(f"    Delegation: {'Yes' if policy.allow_delegation else 'No'}")
                 if policy.allow_delegation:
                     self.console.print(f"    Max Depth: {policy.max_delegation_depth}")
                 self.console.print()
                 
-                # Edit max validity
-                if self.prompt.confirm("Update max validity?", default=False):
+                # Edit max mandate validity
+                if self.prompt.confirm("Update max mandate validity?", default=False):
                     new_validity = self.prompt.number(
-                        "New maximum validity (seconds)",
+                        "New maximum mandate validity (seconds)",
                         default=policy.max_validity_seconds,
                         min_value=60,
                     )

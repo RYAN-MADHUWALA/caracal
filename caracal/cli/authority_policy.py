@@ -118,8 +118,8 @@ def create(
             sys.exit(1)
         
         # Validate max_validity_seconds
-        if max_validity_seconds <= 0:
-            click.echo(f"Error: Max validity seconds must be positive, got {max_validity_seconds}", err=True)
+            if max_validity_seconds <= 0:
+                click.echo(f"Error: Max mandate validity seconds must be positive, got {max_validity_seconds}", err=True)
             sys.exit(1)
         
         # Validate max_delegation_depth
@@ -186,7 +186,7 @@ def create(
                 click.echo()
                 click.echo(f"Policy ID:              {policy.policy_id}")
                 click.echo(f"Principal ID:           {policy.principal_id}")
-                click.echo(f"Max Validity:           {policy.max_validity_seconds} seconds")
+                click.echo(f"Max Mandate Validity:   {policy.max_validity_seconds} seconds")
                 click.echo(f"Resource Patterns:      {', '.join(policy.allowed_resource_patterns)}")
                 click.echo(f"Allowed Actions:        {', '.join(policy.allowed_actions)}")
                 click.echo(f"Allow Delegation:       {'Yes' if policy.allow_delegation else 'No'}")
@@ -314,12 +314,12 @@ def list_policies(
                 click.echo()
                 
                 # Print header
-                click.echo(f"{'Policy ID':<38}  {'Principal ID':<38}  {'Max Validity':<15}  {'Active':<8}  Delegation")
+                click.echo(f"{ 'Policy ID':<38}  {'Principal ID':<38}  {'Max Mandate Validity':<20}  {'Active':<8}  Delegation")
                 click.echo("-" * 130)
                 
                 # Print policies
                 for p in policies:
-                    # Format max validity
+                    # Format max mandate validity
                     max_validity_str = f"{p.max_validity_seconds}s"
                     
                     # Format delegation

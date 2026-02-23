@@ -278,7 +278,7 @@ class PrincipalFlow:
                     for policy in policies:
                         status = "Active" if policy.active else "Inactive"
                         status_style = Colors.SUCCESS if policy.active else Colors.DIM
-                        self.console.print(f"    • [{status_style}]{status}[/] - Max validity: {policy.max_validity_seconds}s")
+                        self.console.print(f"    • [{status_style}]{status}[/] - Max mandate validity: {policy.max_validity_seconds}s")
                 else:
                     self.console.print(f"    [{Colors.DIM}]No policies[/]")
                 
