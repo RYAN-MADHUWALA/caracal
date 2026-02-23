@@ -22,7 +22,7 @@ __version__ = get_version()
 # -- Core API (primary) -------------------------------------------------
 
 from caracal.sdk.client import CaracalClient, CaracalBuilder, SDKConfigurationError
-from caracal.sdk.context import ContextManager, ScopeContext, BudgetCheckContext
+from caracal.sdk.context import ContextManager, ScopeContext
 from caracal.sdk.hooks import HookRegistry, SDKRequest as _SDKRequest, SDKResponse as _SDKResponse
 from caracal.sdk.extensions import CaracalExtension
 from caracal.sdk.agents import AgentOperations

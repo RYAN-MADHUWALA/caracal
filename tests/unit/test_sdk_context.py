@@ -10,7 +10,7 @@ import pytest
 
 from caracal.sdk.adapters.mock import MockAdapter
 from caracal.sdk.hooks import HookRegistry
-from caracal.sdk.context import ScopeContext, ContextManager, BudgetCheckContext
+from caracal.sdk.context import ScopeContext, ContextManager
 
 
 @pytest.fixture
@@ -121,12 +121,3 @@ class TestContextManager:
         assert switches[1][0].workspace_id == "ws_1"
         assert switches[1][1].workspace_id == "ws_2"
 
-
-class TestBudgetCheckContextDeprecation:
-    def test_deprecation_warning(self):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            BudgetCheckContext()
-            assert len(w) == 1
-            assert issubclass(w[0].category, DeprecationWarning)
-            assert "deprecated" in str(w[0].message).lower()
