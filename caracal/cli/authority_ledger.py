@@ -189,7 +189,7 @@ def query(
         from caracal.db.connection import get_db_manager
         from caracal.core.authority_ledger import AuthorityLedgerQuery
         
-        db_manager = get_db_manager()
+        db_manager = get_db_manager(cli_ctx.config)
         
         try:
             # Create ledger query
@@ -359,7 +359,7 @@ def export(
         from caracal.db.connection import get_db_manager
         from caracal.core.authority_ledger import AuthorityLedgerQuery
         
-        db_manager = get_db_manager()
+        db_manager = get_db_manager(cli_ctx.config)
         
         try:
             # Create ledger query
