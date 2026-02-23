@@ -8,7 +8,7 @@ Revision ID: b1c2d3e4f5g6
 Revises: ac870772e55c
 Create Date: 2026-02-03 10:00:00.000000
 
-Adds policy_versions table for policy versioning and audit trails (v0.3):
+Adds policy_versions table for policy versioning and audit trails :
 - Stores immutable snapshots of policy changes
 - Tracks who changed what and when
 - Enables complete audit trail of policy modifications

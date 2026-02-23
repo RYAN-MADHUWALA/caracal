@@ -1,4 +1,4 @@
-# Dockerfile for Caracal CLI (v0.3)
+# Dockerfile for Caracal CLI 
 #
 # Usage:
 #   docker build -f Dockerfile.cli -t caracal-cli:v0.3 .

@@ -188,7 +188,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Merkle Tree Metrics (v0.3)
+        # Merkle Tree Metrics 
         self.merkle_batches_created_total = Counter(
             'caracal_merkle_batches_created_total',
             'Total number of Merkle batches created',
@@ -243,7 +243,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Snapshot Metrics (v0.3)
+        # Snapshot Metrics 
         self.snapshots_created_total = Counter(
             'caracal_snapshots_created_total',
             'Total number of ledger snapshots created',
@@ -279,7 +279,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Allowlist Metrics (v0.3)
+        # Allowlist Metrics 
         self.allowlist_checks_total = Counter(
             'caracal_allowlist_checks_total',
             'Total number of allowlist checks',
@@ -328,7 +328,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Dead Letter Queue Metrics (v0.3)
+        # Dead Letter Queue Metrics 
         self.dlq_messages_total = Counter(
             'caracal_dlq_messages_total',
             'Total number of messages sent to dead letter queue',
@@ -348,7 +348,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Policy Versioning Metrics (v0.3)
+        # Policy Versioning Metrics 
         self.policy_versions_created_total = Counter(
             'caracal_policy_versions_created_total',
             'Total number of policy versions created',
@@ -363,7 +363,7 @@ class MetricsRegistry:
             registry=self.registry
         )
         
-        # Event Replay Metrics (v0.3)
+        # Event Replay Metrics 
         self.event_replay_started_total = Counter(
             'caracal_event_replay_started_total',
             'Total number of event replay operations started',
@@ -641,7 +641,7 @@ class MetricsRegistry:
             to_state=to_state.value
         ).inc()
     
-    # Merkle Tree Metrics Methods (v0.3)
+    # Merkle Tree Metrics Methods 
     
     def record_merkle_batch_created(
         self,
@@ -726,7 +726,7 @@ class MetricsRegistry:
         """
         self.merkle_events_in_current_batch.set(count)
     
-    # Snapshot Metrics Methods (v0.3)
+    # Snapshot Metrics Methods 
     
     def record_snapshot_created(
         self,
@@ -785,7 +785,7 @@ class MetricsRegistry:
             duration = time.time() - start_time
             self.record_snapshot_recovery(duration)
     
-    # Allowlist Metrics Methods (v0.3)
+    # Allowlist Metrics Methods 
     
     def record_allowlist_check(
         self,
@@ -857,7 +857,7 @@ class MetricsRegistry:
         """
         self.allowlist_patterns_active.labels(agent_id=agent_id).set(count)
     
-    # Dead Letter Queue Metrics Methods (v0.3)
+    # Dead Letter Queue Metrics Methods 
     
     def record_dlq_message(self, source_topic: str, error_type: str):
         """
@@ -890,7 +890,7 @@ class MetricsRegistry:
         """
         self.dlq_oldest_message_age_seconds.set(age_seconds)
     
-    # Policy Versioning Metrics Methods (v0.3)
+    # Policy Versioning Metrics Methods 
     
     def record_policy_version_created(self, change_type: str):
         """
@@ -910,7 +910,7 @@ class MetricsRegistry:
         """
         self.policy_version_queries_total.labels(query_type=query_type).inc()
     
-    # Event Replay Metrics Methods (v0.3)
+    # Event Replay Metrics Methods 
     
     def record_event_replay_started(self, source: str):
         """

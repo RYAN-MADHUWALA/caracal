@@ -154,7 +154,7 @@ compatibility:
 # ============================================================================
 defaults:
   currency: USD
-  time_window: daily # Options: hourly, daily, weekly, monthly (v0.3)
+  time_window: daily # Options: hourly, daily, weekly, monthly
 
 # ============================================================================
 # LOGGING CONFIGURATION
