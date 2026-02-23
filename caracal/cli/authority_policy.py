@@ -136,7 +136,7 @@ def create(
         from caracal.db.models import AuthorityPolicy, Principal
         from uuid import uuid4
         
-        db_manager = get_db_manager()
+        db_manager = get_db_manager(cli_ctx.config)
         
         try:
             session = db_manager.get_session()
@@ -270,7 +270,7 @@ def list_policies(
         from caracal.db.connection import get_db_manager
         from caracal.db.models import AuthorityPolicy
         
-        db_manager = get_db_manager()
+        db_manager = get_db_manager(cli_ctx.config)
         
         try:
             # Query policies
