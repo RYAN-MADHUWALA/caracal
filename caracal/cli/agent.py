@@ -50,19 +50,13 @@ def get_agent_registry(config) -> AgentRegistry:
     help='Owner identifier (email or username)',
 )
 @click.option(
-    '--parent-id',
-    '-p',
-    default=None,
-    help='Parent agent ID for hierarchical relationships',
-)
-@click.option(
     '--metadata',
     '-m',
     multiple=True,
     help='Metadata key=value pairs (can be specified multiple times)',
 )
 @click.pass_context
-def register(ctx, name: str, owner: str, parent_id: str, metadata: tuple):
+def register(ctx, name: str, owner: str, metadata: tuple):
     """
     Register a new AI agent with a unique identity.
     
@@ -99,12 +93,11 @@ def register(ctx, name: str, owner: str, parent_id: str, metadata: tuple):
         # Create agent registry
         registry = get_agent_registry(cli_ctx.config)
         
-        # Register agent with optional parent
+        # Register agent
         agent = registry.register_agent(
             name=name,
             owner=owner,
             metadata=metadata_dict,
-            parent_agent_id=parent_id
         )
         
         # Display success message
@@ -114,9 +107,6 @@ def register(ctx, name: str, owner: str, parent_id: str, metadata: tuple):
         click.echo(f"Name:        {agent.name}")
         click.echo(f"Owner:       {agent.owner}")
         click.echo(f"Created:     {agent.created_at}")
-        
-        if agent.parent_agent_id:
-            click.echo(f"Parent ID:   {agent.parent_agent_id}")
         
         if agent.metadata:
             # Filter out keys for display (don't show private keys)

@@ -117,10 +117,8 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
         
         # Generate token
         token = registry.generate_delegation_token(
-            parent_agent_id=parent_id,
-            child_agent_id=child_id,
-            spending_limit=authority_scope,
-            currency=currency,
+            source_agent_id=parent_id,
+            target_agent_id=child_id,
             expiration_seconds=expiration,
             allowed_operations=allowed_operations
         )
@@ -132,8 +130,8 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
         # Display success message
         click.echo("✓ Delegation token generated successfully!")
         click.echo()
-        click.echo(f"Parent Agent:    {parent_id}")
-        click.echo(f"Child Agent:     {child_id}")
+        click.echo(f"Source Agent:    {parent_id}")
+        click.echo(f"Target Agent:    {child_id}")
         click.echo(f"Authority Scope: {authority_scope} {currency}")
         click.echo(f"Expires In:      {expiration} seconds")
         click.echo()
@@ -157,11 +155,6 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
     help='Agent ID to list delegations for (shows both delegated to and from)',
 )
 @click.option(
-    '--parent-id',
-    '-p',
-    help='Show only delegations from this parent agent',
-)
-@click.option(
     '--format',
     '-f',
     type=click.Choice(['table', 'json'], case_sensitive=False),
@@ -169,13 +162,12 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
     help='Output format (default: table)',
 )
 @click.pass_context
-def list_delegations(ctx, agent_id: str, parent_id: str, format: str):
+def list_delegations(ctx, agent_id: str, format: str):
     """
-    List delegation relationships and policies.
+    List delegation relationships from the delegation graph.
     
-    Shows parent-child agent relationships and delegation policies.
-    Can filter by agent ID (shows delegations to/from that agent) or
-    parent ID (shows all delegations from that parent).
+    Shows delegation edges between mandates with principal types,
+    delegation types, and context tags.
     
     Examples:
     
@@ -183,117 +175,65 @@ def list_delegations(ctx, agent_id: str, parent_id: str, format: str):
         
         caracal delegation list --agent-id 550e8400-e29b-41d4-a716-446655440000
         
-        caracal delegation list --parent-id 550e8400-e29b-41d4-a716-446655440000
-        
         caracal delegation list --format json
     """
     try:
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create registry and policy store
-        from pathlib import Path
-        from caracal.core.policy import PolicyStore
+        from caracal.db.connection import get_db_manager
+        from caracal.db.models import DelegationEdgeModel
         
-        registry_path = Path(cli_ctx.config.storage.agent_registry).expanduser()
-        policy_path = Path(cli_ctx.config.storage.policy_store).expanduser()
-        backup_count = cli_ctx.config.storage.backup_count
+        db_manager = get_db_manager(cli_ctx.config)
         
-        registry = AgentRegistry(str(registry_path), backup_count=backup_count)
-        policy_store = PolicyStore(str(policy_path), agent_registry=registry, backup_count=backup_count)
-        
-        # Get delegations based on filters
-        delegations = []
-        
-        if agent_id:
-            # Show delegations for specific agent (as child or parent)
-            agent = registry.get_agent(agent_id)
-            if not agent:
-                click.echo(f"Error: Agent not found: {agent_id}", err=True)
-                sys.exit(1)
+        try:
+            session = db_manager.get_session()
             
-            # Get children (delegations from this agent)
-            children = registry.get_children(agent_id)
-            for child in children:
-                policies = policy_store.get_policies(child.agent_id)
-                delegated_policies = [p for p in policies if p.delegated_from_agent_id == agent_id]
-                
-                for policy in delegated_policies:
-                    delegations.append({
-                        'parent_id': agent_id,
-                        'parent_name': agent.name,
-                        'child_id': child.agent_id,
-                        'child_name': child.name,
-                        'policy_id': policy.policy_id,
-                        'time_window': policy.time_window,
-                        'created_at': policy.created_at,
-                        'active': policy.active
-                    })
+            # Query delegation edges
+            query = session.query(DelegationEdgeModel).filter(
+                DelegationEdgeModel.revoked == False
+            )
             
-            # Get parent delegations (delegations to this agent)
-            if agent.parent_agent_id:
-                parent = registry.get_agent(agent.parent_agent_id)
-                policies = policy_store.get_policies(agent_id)
-                delegated_policies = [p for p in policies if p.delegated_from_agent_id == agent.parent_agent_id]
+            if agent_id:
+                # Filter edges involving this agent (as source or target principal)
+                from caracal.db.models import ExecutionMandate
+                # Get mandates for this agent
+                mandates = session.query(ExecutionMandate.mandate_id).filter(
+                    ExecutionMandate.subject_id == agent_id
+                ).all()
+                mandate_ids = [m.mandate_id for m in mandates]
                 
-                for policy in delegated_policies:
-                    delegations.append({
-                        'parent_id': agent.parent_agent_id,
-                        'parent_name': parent.name if parent else 'Unknown',
-                        'child_id': agent_id,
-                        'child_name': agent.name,
-                        'policy_id': policy.policy_id,
-                        'time_window': policy.time_window,
-                        'created_at': policy.created_at,
-                        'active': policy.active
-                    })
-        
-        elif parent_id:
-            # Show all delegations from specific parent
-            parent = registry.get_agent(parent_id)
-            if not parent:
-                click.echo(f"Error: Parent agent not found: {parent_id}", err=True)
-                sys.exit(1)
+                if mandate_ids:
+                    query = query.filter(
+                        (DelegationEdgeModel.source_mandate_id.in_(mandate_ids)) |
+                        (DelegationEdgeModel.target_mandate_id.in_(mandate_ids))
+                    )
+                else:
+                    click.echo(f"No mandates found for agent: {agent_id}")
+                    return
             
-            children = registry.get_children(parent_id)
-            for child in children:
-                policies = policy_store.get_policies(child.agent_id)
-                delegated_policies = [p for p in policies if p.delegated_from_agent_id == parent_id]
-                
-                for policy in delegated_policies:
-                    delegations.append({
-                        'parent_id': parent_id,
-                        'parent_name': parent.name,
-                        'child_id': child.agent_id,
-                        'child_name': child.name,
-                        'policy_id': policy.policy_id,
-                        'time_window': policy.time_window,
-                        'created_at': policy.created_at,
-                        'active': policy.active
-                    })
-        
-        else:
-            # Show all delegations in the system
-            all_policies = policy_store.list_all_policies()
-            delegated_policies = [p for p in all_policies if p.delegated_from_agent_id is not None]
+            edges = query.all()
             
-            for policy in delegated_policies:
-                parent = registry.get_agent(policy.delegated_from_agent_id)
-                child = registry.get_agent(policy.agent_id)
-                
+            if not edges:
+                click.echo("No delegation edges found.")
+                return
+            
+            delegations = []
+            for edge in edges:
                 delegations.append({
-                    'parent_id': policy.delegated_from_agent_id,
-                    'parent_name': parent.name if parent else 'Unknown',
-                    'child_id': policy.agent_id,
-                    'child_name': child.name if child else 'Unknown',
-                    'policy_id': policy.policy_id,
-                    'time_window': policy.time_window,
-                    'created_at': policy.created_at,
-                    'active': policy.active
+                    'edge_id': str(edge.edge_id),
+                    'source_mandate_id': str(edge.source_mandate_id),
+                    'target_mandate_id': str(edge.target_mandate_id),
+                    'source_principal_type': edge.source_principal_type,
+                    'target_principal_type': edge.target_principal_type,
+                    'delegation_type': edge.delegation_type,
+                    'context_tags': edge.context_tags,
+                    'granted_at': edge.granted_at.isoformat() if edge.granted_at else None,
+                    'expires_at': edge.expires_at.isoformat() if edge.expires_at else None,
                 })
         
         if not delegations:
-            click.echo("No delegations found.")
+            click.echo("No delegation edges found.")
             return
         
         if format.lower() == 'json':
@@ -301,26 +241,33 @@ def list_delegations(ctx, agent_id: str, parent_id: str, format: str):
             click.echo(json.dumps(delegations, indent=2))
         else:
             # Table output
-            click.echo(f"Total delegations: {len(delegations)}")
+            click.echo(f"Total delegation edges: {len(delegations)}")
             click.echo()
             
             # Print header
+            type_icons = {'user': '\ud83d\udc64', 'agent': '\ud83e\udd16', 'service': '\u2699\ufe0f'}
             click.echo(
-                f"{'Parent Agent':<30}  {'Child Agent':<30}  {'Window':<10}  {'Status':<8}"
+                f"{'Edge ID':<38}  {'Source Type':<12}  {'Target Type':<12}  {'Deleg. Type':<14}  Tags"
             )
-            click.echo("-" * 105)
+            click.echo("-" * 110)
             
             # Print delegations
-            for delegation in delegations:
-                parent_display = f"{delegation['parent_name'][:27]}..." if len(delegation['parent_name']) > 30 else delegation['parent_name']
-                child_display = f"{delegation['child_name'][:27]}..." if len(delegation['child_name']) > 30 else delegation['child_name']
-                status = "Active" if delegation['active'] else "Inactive"
+            for d in delegations:
+                src_icon = type_icons.get(d['source_principal_type'], '?')
+                tgt_icon = type_icons.get(d['target_principal_type'], '?')
+                tags = ', '.join(d['context_tags']) if d.get('context_tags') else ''
                 
                 click.echo(
-                    f"{parent_display:<30}  {child_display:<30}  "
-                    f"{delegation['time_window']:<10}  {status:<8}"
+                    f"{d['edge_id']:<38}  "
+                    f"{src_icon} {d['source_principal_type']:<9}  "
+                    f"{tgt_icon} {d['target_principal_type']:<9}  "
+                    f"{d['delegation_type']:<14}  "
+                    f"{tags}"
                 )
         
+        finally:
+            db_manager.close()
+    
     except CaracalError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
