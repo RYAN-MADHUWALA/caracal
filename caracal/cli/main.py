@@ -259,12 +259,14 @@ def authority():
 
 
 try:
-    from caracal.cli.authority import issue, validate, revoke, list_mandates, delegate
+    from caracal.cli.authority import issue, validate, revoke, list_mandates, delegate, graph, peer_delegate_cmd
     authority.add_command(issue)
     authority.add_command(validate)
     authority.add_command(revoke)
     authority.add_command(list_mandates, name='list')
     authority.add_command(delegate)
+    authority.add_command(graph)
+    authority.add_command(peer_delegate_cmd, name='peer-delegate')
 except ImportError as e:
     # Authority commands not available
     import logging
