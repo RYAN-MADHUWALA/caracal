@@ -190,8 +190,8 @@ class TestLoggingConfiguration:
         logger = get_logger("test")
         log_delegation_token_validation(
             logger,
-            parent_agent_id="parent-123",
-            child_agent_id="child-456",
+            source_agent_id="parent-123",
+            target_agent_id="child-456",
             success=True
         )
         
@@ -199,8 +199,8 @@ class TestLoggingConfiguration:
         log_content = log_file.read_text()
         log_entry = json.loads(log_content.strip().split("\n")[0])
         assert log_entry["event_type"] == "delegation_token_validation"
-        assert log_entry["parent_agent_id"] == "parent-123"
-        assert log_entry["child_agent_id"] == "child-456"
+        assert log_entry["source_agent_id"] == "parent-123"
+        assert log_entry["target_agent_id"] == "child-456"
         assert log_entry["success"] is True
         assert log_entry["level"] == "info"
     
@@ -212,8 +212,8 @@ class TestLoggingConfiguration:
         logger = get_logger("test")
         log_delegation_token_validation(
             logger,
-            parent_agent_id="parent-123",
-            child_agent_id="child-456",
+            source_agent_id="parent-123",
+            target_agent_id="child-456",
             success=False,
             reason="invalid_signature"
         )
@@ -222,8 +222,8 @@ class TestLoggingConfiguration:
         log_content = log_file.read_text()
         log_entry = json.loads(log_content.strip().split("\n")[0])
         assert log_entry["event_type"] == "delegation_token_validation"
-        assert log_entry["parent_agent_id"] == "parent-123"
-        assert log_entry["child_agent_id"] == "child-456"
+        assert log_entry["source_agent_id"] == "parent-123"
+        assert log_entry["target_agent_id"] == "child-456"
         assert log_entry["success"] is False
         assert log_entry["reason"] == "invalid_signature"
         assert log_entry["level"] == "warning"

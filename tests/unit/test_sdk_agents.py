@@ -22,7 +22,7 @@ def scoped_setup():
         ("POST", "/agents"): SDKResponse(status_code=201, body={"id": "a2", "name": "new"}, elapsed_ms=2.0),
         ("PATCH", "/agents/a1"): SDKResponse(status_code=200, body={"id": "a1", "name": "updated"}, elapsed_ms=1.0),
         ("DELETE", "/agents/a1"): SDKResponse(status_code=204, body=None, elapsed_ms=0.5),
-        ("POST", "/agents/a1/children"): SDKResponse(status_code=201, body={"id": "child1"}, elapsed_ms=1.5),
+        ("POST", "/agents/a1/delegate"): SDKResponse(status_code=201, body={"id": "child1"}, elapsed_ms=1.5),
     })
     hooks = HookRegistry()
     ctx = ScopeContext(
@@ -74,13 +74,13 @@ class TestAgentOperations:
         assert adapter.sent_requests[0].method == "DELETE"
 
     @pytest.mark.asyncio
-    async def test_create_child(self, scoped_setup):
+    async def test_delegate_authority(self, scoped_setup):
         ctx, adapter, _ = scoped_setup
-        result = await ctx.agents.create_child(
-            parent_agent_id="a1", child_name="child", child_owner="alice",
+        result = await ctx.agents.delegate_authority(
+            source_agent_id="a1", target_agent_id="child1",
         )
         assert result["id"] == "child1"
-        assert adapter.sent_requests[0].path == "/agents/a1/children"
+        assert adapter.sent_requests[0].path == "/agents/a1/delegate"
 
     @pytest.mark.asyncio
     async def test_hooks_fire_in_order(self, scoped_setup):

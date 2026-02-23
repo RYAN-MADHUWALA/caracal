@@ -23,7 +23,7 @@ def scoped_setup():
         ("GET", "/mandates"): SDKResponse(status_code=200, body=[{"id": "m1"}], elapsed_ms=0.5),
         ("POST", "/delegations"): SDKResponse(status_code=201, body={"id": "d1"}, elapsed_ms=1.0),
         ("POST", "/delegations/token"): SDKResponse(status_code=200, body={"token": "jwt..."}, elapsed_ms=0.5),
-        ("GET", "/delegations/chain/a1"): SDKResponse(status_code=200, body=[{"level": 0}], elapsed_ms=0.5),
+        ("GET", "/delegations/graph/a1"): SDKResponse(status_code=200, body={"nodes": [], "edges": []}, elapsed_ms=0.5),
     })
     hooks = HookRegistry()
     ctx = ScopeContext(
@@ -83,7 +83,7 @@ class TestDelegationOperations:
     async def test_create(self, scoped_setup):
         ctx, adapter, _ = scoped_setup
         result = await ctx.delegation.create(
-            parent_mandate_id="m1",
+            source_mandate_id="m1",
             child_subject_id="child_1",
             resource_scope=["data.*"],
             action_scope=["read"],
@@ -91,19 +91,19 @@ class TestDelegationOperations:
         )
         assert result["id"] == "d1"
         sent = adapter.sent_requests[0]
-        assert sent.body["parent_mandate_id"] == "m1"
+        assert sent.body["source_mandate_id"] == "m1"
         assert sent.body["resource_scope"] == ["data.*"]
 
     @pytest.mark.asyncio
     async def test_get_token(self, scoped_setup):
         ctx, _, _ = scoped_setup
         result = await ctx.delegation.get_token(
-            parent_agent_id="parent_1", child_agent_id="child_1",
+            source_agent_id="parent_1", target_agent_id="child_1",
         )
         assert result["token"] == "jwt..."
 
     @pytest.mark.asyncio
-    async def test_get_chain(self, scoped_setup):
+    async def test_get_graph(self, scoped_setup):
         ctx, _, _ = scoped_setup
-        result = await ctx.delegation.get_chain("a1")
-        assert len(result) == 1
+        result = await ctx.delegation.get_graph("a1")
+        assert "nodes" in result
