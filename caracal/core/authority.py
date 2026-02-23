@@ -16,16 +16,17 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from caracal.core.crypto import verify_mandate_signature
-from caracal.db.models import ExecutionMandate, Principal
+from caracal.db.models import ExecutionMandate, Principal, DelegationEdgeModel
 from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Import AuthorityLedgerWriter and RedisMandateCache for type hints (avoid circular import)
+# Import for type hints (avoid circular import)
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from caracal.core.authority_ledger import AuthorityLedgerWriter
     from caracal.redis.mandate_cache import RedisMandateCache
+    from caracal.core.delegation_graph import DelegationGraph
 
 
 @dataclass
@@ -56,7 +57,7 @@ class AuthorityEvaluator:
     Any error or uncertainty results in denial of authority.
     """
     
-    def __init__(self, db_session: Session, ledger_writer=None, mandate_cache=None):
+    def __init__(self, db_session: Session, ledger_writer=None, mandate_cache=None, delegation_graph=None):
         """
         Initialize AuthorityEvaluator.
         
@@ -64,10 +65,12 @@ class AuthorityEvaluator:
             db_session: SQLAlchemy database session
             ledger_writer: AuthorityLedgerWriter instance (optional, for recording events)
             mandate_cache: RedisMandateCache instance (optional, for caching mandates)
+            delegation_graph: DelegationGraph instance (optional, for graph-based chain validation)
         """
         self.db_session = db_session
         self.ledger_writer = ledger_writer
         self.mandate_cache = mandate_cache
+        self.delegation_graph = delegation_graph
         logger.info(f"AuthorityEvaluator initialized (cache_enabled={mandate_cache is not None})")
     
     def _get_principal(self, principal_id: UUID) -> Optional[Principal]:
@@ -383,8 +386,7 @@ class AuthorityEvaluator:
                 "valid_until": mandate.valid_until.isoformat(),
                 "resource_scope": mandate.resource_scope,
                 "action_scope": mandate.action_scope,
-                "delegation_depth": mandate.delegation_depth,
-                "parent_mandate_id": str(mandate.parent_mandate_id) if mandate.parent_mandate_id else None,
+                "delegation_type": mandate.delegation_type,
                 "intent_hash": mandate.intent_hash
             }
             
@@ -503,9 +505,9 @@ class AuthorityEvaluator:
             )
             return decision
         
-        # Validate delegation chain if applicable
-        if mandate.parent_mandate_id:
-            chain_valid = self.check_delegation_chain(mandate)
+        # Validate delegation chain if applicable (graph-based)
+        if self.delegation_graph:
+            chain_valid = self.delegation_graph.check_delegation_chain(mandate.mandate_id)
             if not chain_valid:
                 reason = f"Delegation chain is invalid for mandate {mandate.mandate_id}"
                 logger.warning(reason)
@@ -555,12 +557,10 @@ class AuthorityEvaluator:
         mandate: ExecutionMandate
     ) -> bool:
         """
-        Validate entire delegation chain.
+        Validate delegation chain via the graph.
 
-        Traverses parent mandates recursively and validates each:
-        - Not revoked
-        - Not expired
-        - Scope constraints maintained
+        Uses delegation_graph if available, otherwise checks inbound edges
+        directly.
 
         Returns True if chain is valid, False otherwise.
 
@@ -572,90 +572,75 @@ class AuthorityEvaluator:
         """
         logger.info(f"Checking delegation chain for mandate {mandate.mandate_id}")
         
-        # If no parent, chain is valid (root mandate)
-        if not mandate.parent_mandate_id:
-            logger.debug(f"Mandate {mandate.mandate_id} is a root mandate (no parent)")
+        if self.delegation_graph:
+            return self.delegation_graph.check_delegation_chain(mandate.mandate_id)
+        
+        # Fallback: check inbound edges directly
+        inbound_edges = self.db_session.query(DelegationEdgeModel).filter(
+            DelegationEdgeModel.target_mandate_id == mandate.mandate_id,
+            DelegationEdgeModel.revoked == False,
+        ).all()
+        
+        # No inbound edges means this is a root mandate — valid
+        if not inbound_edges:
+            logger.debug(f"Mandate {mandate.mandate_id} is a root mandate (no inbound edges)")
             return True
         
-        # Get parent mandate
-        try:
-            parent_mandate = self.db_session.query(ExecutionMandate).filter(
-                ExecutionMandate.mandate_id == mandate.parent_mandate_id
+        now = datetime.utcnow()
+        
+        for edge in inbound_edges:
+            # Check if edge is expired
+            if edge.expires_at and now > edge.expires_at:
+                logger.warning(f"Delegation edge {edge.edge_id} is expired")
+                return False
+            
+            # Check source mandate
+            source_mandate = self.db_session.query(ExecutionMandate).filter(
+                ExecutionMandate.mandate_id == edge.source_mandate_id
             ).first()
             
-            if not parent_mandate:
-                logger.warning(f"Parent mandate {mandate.parent_mandate_id} not found")
+            if not source_mandate:
+                logger.warning(f"Source mandate {edge.source_mandate_id} not found")
                 return False
             
-        except Exception as e:
-            # Fail-closed: Any error in database query results in denial
-            logger.error(f"Failed to get parent mandate {mandate.parent_mandate_id}: {e}", exc_info=True)
-            return False
-        
-        # Check if parent is revoked
-        if parent_mandate.revoked:
-            logger.warning(
-                f"Parent mandate {parent_mandate.mandate_id} is revoked, "
-                f"invalidating child mandate {mandate.mandate_id}"
-            )
-            return False
-        
-        # Check if parent is expired
-        current_time = datetime.utcnow()
-        if current_time > parent_mandate.valid_until:
-            logger.warning(
-                f"Parent mandate {parent_mandate.mandate_id} is expired, "
-                f"invalidating child mandate {mandate.mandate_id}"
-            )
-            return False
-        
-        if current_time < parent_mandate.valid_from:
-            logger.warning(
-                f"Parent mandate {parent_mandate.mandate_id} is not yet valid, "
-                f"invalidating child mandate {mandate.mandate_id}"
-            )
-            return False
-        
-        # Check scope constraints are maintained
-        # Child resource scope must be subset of parent resource scope
-        for child_resource in mandate.resource_scope:
-            match_found = False
-            for parent_resource in parent_mandate.resource_scope:
-                if self._match_pattern(child_resource, parent_resource):
-                    match_found = True
-                    break
-            
-            if not match_found:
-                logger.warning(
-                    f"Child mandate {mandate.mandate_id} has resource '{child_resource}' "
-                    f"not in parent scope {parent_mandate.resource_scope}"
-                )
+            if source_mandate.revoked:
+                logger.warning(f"Source mandate {edge.source_mandate_id} is revoked")
                 return False
-        
-        # Child action scope must be subset of parent action scope
-        for child_action in mandate.action_scope:
-            match_found = False
-            for parent_action in parent_mandate.action_scope:
-                if self._match_pattern(child_action, parent_action):
-                    match_found = True
-                    break
             
-            if not match_found:
-                logger.warning(
-                    f"Child mandate {mandate.mandate_id} has action '{child_action}' "
-                    f"not in parent scope {parent_mandate.action_scope}"
-                )
+            if now > source_mandate.valid_until:
+                logger.warning(f"Source mandate {edge.source_mandate_id} is expired")
                 return False
-        
-        # Recursively check parent's delegation chain
-        parent_chain_valid = self.check_delegation_chain(parent_mandate)
-        
-        if not parent_chain_valid:
-            logger.warning(
-                f"Parent mandate {parent_mandate.mandate_id} has invalid delegation chain, "
-                f"invalidating child mandate {mandate.mandate_id}"
-            )
-            return False
+            
+            if now < source_mandate.valid_from:
+                logger.warning(f"Source mandate {edge.source_mandate_id} is not yet valid")
+                return False
+            
+            # Validate scope constraints
+            for child_resource in mandate.resource_scope:
+                match_found = False
+                for parent_resource in source_mandate.resource_scope:
+                    if self._match_pattern(child_resource, parent_resource):
+                        match_found = True
+                        break
+                if not match_found:
+                    logger.warning(
+                        f"Mandate {mandate.mandate_id} has resource '{child_resource}' "
+                        f"not in source scope {source_mandate.resource_scope}"
+                    )
+                    return False
+            
+            for child_action in mandate.action_scope:
+                match_found = False
+                for parent_action in source_mandate.action_scope:
+                    if self._match_pattern(child_action, parent_action):
+                        match_found = True
+                        break
+                if not match_found:
+                    logger.warning(
+                        f"Mandate {mandate.mandate_id} has action '{child_action}' "
+                        f"not in source scope {source_mandate.action_scope}"
+                    )
+                    return False
         
         logger.info(f"Delegation chain is valid for mandate {mandate.mandate_id}")
         return True

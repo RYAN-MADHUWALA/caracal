@@ -5,8 +5,9 @@ Caracal, a product of Garudex Labs
 SQLAlchemy models for Caracal Core PostgreSQL backend.
 
 This module defines the database schema for:
-- Principal identities with parent-child relationships
-- Authority policies with delegation tracking
+- Principal identities (user, agent, service)
+- Graph-based authority delegation (DelegationEdgeModel)
+- Authority policies with delegation constraints
 - Ledger events for immutable resource usage records
 - Execution mandates for authority enforcement
 
@@ -241,14 +242,6 @@ class Principal(Base):
     principal_type = Column(String(50), nullable=False, index=True)  # agent, user, service
     owner = Column(String(255), nullable=False)
     
-    # Hierarchy
-    parent_principal_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("principals.principal_id"),
-        nullable=True,
-        index=True,
-    )
-    
     # Cryptographic keys
     public_key_pem = Column(String(2000), nullable=True)
     private_key_pem = Column(String(4000), nullable=True)  # Encrypted or stored in KMS
@@ -256,14 +249,6 @@ class Principal(Base):
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     principal_metadata = Column("metadata", JSONB, nullable=True)
-    
-    # Relationships
-    parent = relationship(
-        "Principal",
-        remote_side=[principal_id],
-        backref="children",
-        foreign_keys=[parent_principal_id],
-    )
     
     def __repr__(self):
         return f"<Principal(principal_id={self.principal_id}, name={self.name}, type={self.principal_type})>"
@@ -317,14 +302,12 @@ class ExecutionMandate(Base):
     revoked_at = Column(DateTime, nullable=True)
     revocation_reason = Column(String(1000), nullable=True)
     
-    # Delegation
-    parent_mandate_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("execution_mandates.mandate_id"),
-        nullable=True,
-        index=True,
-    )
-    delegation_depth = Column(Integer, nullable=False, default=0)
+    # Graph-based delegation
+    delegation_type = Column(
+        String(50), nullable=False, default="hierarchical",
+        server_default="hierarchical"
+    )  # hierarchical, peer
+    context_tags = Column(JSONB, nullable=True)  # Context tags for dynamic filtering
     
     # Intent constraint (optional)
     intent_hash = Column(String(64), nullable=True)  # SHA-256 hash of intent
@@ -332,10 +315,85 @@ class ExecutionMandate(Base):
     # Relationships
     issuer = relationship("Principal", foreign_keys=[issuer_id], backref="issued_mandates")
     subject = relationship("Principal", foreign_keys=[subject_id], backref="received_mandates")
-    parent_mandate = relationship("ExecutionMandate", remote_side=[mandate_id], backref="child_mandates")
     
     def __repr__(self):
         return f"<ExecutionMandate(mandate_id={self.mandate_id}, subject_id={self.subject_id}, revoked={self.revoked})>"
+
+
+class DelegationEdgeModel(Base):
+    """
+    Directed edge in the authority delegation graph.
+    
+    Represents a delegation relationship between two mandates,
+    tracking the principal types involved and delegation direction.
+    Authority flows downward: user → agent → service.
+    
+    """
+    
+    __tablename__ = "delegation_edges"
+    
+    # Primary key
+    edge_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    
+    # Edge endpoints
+    source_mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id"),
+        nullable=False,
+        index=True,
+    )
+    target_mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id"),
+        nullable=False,
+        index=True,
+    )
+    
+    # Principal type tracking
+    source_principal_type = Column(String(50), nullable=False, index=True)  # user, agent, service
+    target_principal_type = Column(String(50), nullable=False, index=True)  # user, agent, service
+    
+    # Delegation metadata
+    delegation_type = Column(
+        String(50), nullable=False, default="hierarchical"
+    )  # hierarchical, peer
+    context_tags = Column(JSONB, nullable=True)  # ["production", "read-only"]
+    
+    # Validity
+    granted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    
+    # Revocation
+    revoked = Column(Boolean, nullable=False, default=False, index=True)
+    revoked_at = Column(DateTime, nullable=True)
+    
+    # Metadata
+    edge_metadata = Column("metadata", JSONB, nullable=True)
+    
+    # Relationships
+    source_mandate = relationship(
+        "ExecutionMandate",
+        foreign_keys=[source_mandate_id],
+        backref="outgoing_edges",
+    )
+    target_mandate = relationship(
+        "ExecutionMandate",
+        foreign_keys=[target_mandate_id],
+        backref="incoming_edges",
+    )
+    
+    # Composite indexes
+    __table_args__ = (
+        Index("ix_delegation_edges_source_target", "source_mandate_id", "target_mandate_id"),
+        Index("ix_delegation_edges_types", "source_principal_type", "target_principal_type"),
+    )
+    
+    def __repr__(self):
+        return (
+            f"<DelegationEdge(edge_id={self.edge_id}, "
+            f"{self.source_principal_type}→{self.target_principal_type}, "
+            f"type={self.delegation_type}, revoked={self.revoked})>"
+        )
 
 
 class AuthorityLedgerEvent(Base):
