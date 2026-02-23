@@ -72,7 +72,7 @@ class LedgerEvent(Base):
     # Metadata
     event_metadata = Column("metadata", JSONB, nullable=True)
     
-    # Merkle tree integration (v0.3)
+    # Merkle tree integration 
     merkle_root_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("merkle_roots.root_id", ondelete="SET NULL"),

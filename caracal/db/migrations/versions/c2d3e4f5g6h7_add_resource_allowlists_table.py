@@ -8,7 +8,7 @@ Revision ID: c2d3e4f5g6h7
 Revises: b1c2d3e4f5g6
 Create Date: 2026-02-03 12:00:00.000000
 
-Adds resource_allowlists table for fine-grained access control (v0.3):
+Adds resource_allowlists table for fine-grained access control :
 - Stores whitelist patterns (regex or glob) for resource access
 - Enables per-agent resource restrictions
 - Supports both regex and glob pattern matching

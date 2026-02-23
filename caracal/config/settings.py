@@ -774,7 +774,7 @@ def _validate_config(config: CaracalConfig) -> None:
             f"max_retries must be at least 1, got {config.performance.max_retries}"
         )
     
-    # Validate database configuration (v0.2)
+    # Validate database configuration 
     try:
         config.database.port = int(config.database.port)
         config.database.pool_size = int(config.database.pool_size)
@@ -806,7 +806,7 @@ def _validate_config(config: CaracalConfig) -> None:
             f"database pool_timeout must be positive, got {config.database.pool_timeout}"
         )
     
-    # Validate gateway configuration (v0.2)
+    # Validate gateway configuration 
     if config.gateway.enabled:
         if not config.gateway.listen_address:
             raise InvalidConfigurationError("gateway listen_address cannot be empty when gateway is enabled")
@@ -838,7 +838,7 @@ def _validate_config(config: CaracalConfig) -> None:
                 f"gateway nonce_cache_ttl must be positive, got {config.gateway.nonce_cache_ttl}"
             )
     
-    # Validate policy cache configuration (v0.2)
+    # Validate policy cache configuration 
     if config.policy_cache.enabled:
         if config.policy_cache.ttl_seconds <= 0:
             raise InvalidConfigurationError(
@@ -849,12 +849,12 @@ def _validate_config(config: CaracalConfig) -> None:
                 f"policy_cache max_size must be at least 1, got {config.policy_cache.max_size}"
             )
     
-    # Validate MCP adapter configuration (v0.2)
+    # Validate MCP adapter configuration 
     if config.mcp_adapter.enabled:
         if not config.mcp_adapter.listen_address:
             raise InvalidConfigurationError("mcp_adapter listen_address cannot be empty when MCP adapter is enabled")
     
-    # Validate ASE configuration (v0.2)
+    # Validate ASE configuration 
     if config.ase.delegation_token_expiration_seconds <= 0:
         raise InvalidConfigurationError(
             f"ase delegation_token_expiration_seconds must be positive, "
@@ -978,7 +978,7 @@ def _validate_config(config: CaracalConfig) -> None:
     # Validate compatibility configuration
     # Note: enable_merkle, enable_redis are just boolean flags - no validation needed
     
-    # Validate snapshot configuration (v0.3)
+    # Validate snapshot configuration 
     if config.snapshot.enabled:
         if config.snapshot.retention_days < 1:
             raise InvalidConfigurationError(
@@ -997,7 +997,7 @@ def _validate_config(config: CaracalConfig) -> None:
                 f"got {len(cron_fields)} fields: '{config.snapshot.schedule_cron}'"
             )
     
-    # Validate allowlist configuration (v0.3)
+    # Validate allowlist configuration 
     if config.allowlist.enabled:
         valid_default_behaviors = ["allow", "deny"]
         if config.allowlist.default_behavior not in valid_default_behaviors:
@@ -1017,7 +1017,7 @@ def _validate_config(config: CaracalConfig) -> None:
                 f"got {config.allowlist.max_patterns_per_agent}"
             )
     
-    # Validate event replay configuration (v0.3)
+    # Validate event replay configuration 
     if config.event_replay.batch_size < 1:
         raise InvalidConfigurationError(
             f"event_replay batch_size must be at least 1, got {config.event_replay.batch_size}"
