@@ -188,7 +188,14 @@ class FlowApp:
             action = show_submenu("help", self.console)
             if action is None:
                 break
-            
+
+            if action == "docs":
+                url = "https://docs.garudexlabs.com"
+                self.console.print(f"  [{Colors.INFO}]Documentation:[/]")
+                self.console.print(f"  [{Colors.HINT}][link={url}]{url}[/]")
+                self.console.print()
+                self.console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
+                input()
             if action == "shortcuts":
                 self._show_shortcuts()
             elif action == "about":
