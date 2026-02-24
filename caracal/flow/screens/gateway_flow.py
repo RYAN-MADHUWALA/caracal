@@ -39,7 +39,6 @@ from caracal.core.gateway_features import (
     reset_gateway_features,
     DEPLOYMENT_MANAGED,
     DEPLOYMENT_ON_PREM,
-    DEPLOYMENT_OSS,
 )
 from caracal.enterprise.license import load_enterprise_config, save_enterprise_config
 from caracal.flow.components.menu import Menu, MenuItem
@@ -85,8 +84,8 @@ class GatewayFlow:
             ),
             MenuItem(
                 key="connect",
-                label="Connect / Reconfigure Gateway",
-                description="Set gateway endpoint, API key, and deployment type",
+                label="Sync Gateway Configuration",
+                description="Pull gateway config from Enterprise dashboard (auto-configures endpoint and keys)",
                 icon="🔗",
             ),
         ]
@@ -170,7 +169,7 @@ class GatewayFlow:
         if not flags or not flags.gateway_enabled:
             self.console.print(
                 f"  [{Colors.WARNING}]⚠ Gateway not configured[/]  "
-                f"[{Colors.DIM}]OSS broker mode active[/]"
+                f"[{Colors.DIM}]Run 'Sync from Enterprise' to auto-configure[/]"
             )
         else:
             mode_label = {
@@ -211,7 +210,6 @@ class GatewayFlow:
         deploy = {
             DEPLOYMENT_MANAGED: f"[bold {Colors.PRIMARY}]Managed (Caracal platform)[/]",
             DEPLOYMENT_ON_PREM: f"[bold {Colors.PRIMARY}]On-Prem (customer)[/]",
-            DEPLOYMENT_OSS: f"[{Colors.DIM}]OSS (broker only)[/]",
         }.get(flags.deployment_type, flags.deployment_type)
         table.add_row("Deployment Type", deploy)
         table.add_row("Endpoint", flags.gateway_endpoint or f"[{Colors.DIM}]Not set[/]")
@@ -245,73 +243,76 @@ class GatewayFlow:
 
         self.console.print(Panel(
             "[bold]Connect Enterprise Gateway[/bold]\n\n"
-            "Choose your deployment type and enter the gateway connection details.\n\n"
+            "The gateway configuration is automatically synced from your\n"
+            "Enterprise dashboard.  No manual endpoint or key entry is needed.\n\n"
             "[bold]Managed (Caracal platform)[/bold] — gateway is hosted and operated by Caracal;\n"
-            "endpoint and key are provided from your Enterprise dashboard.\n\n"
-            "[bold]On-Prem (customer)[/bold] — you deploy the gateway in your own infrastructure;\n"
-            "use the Docker Compose or Helm chart from docs.garudexlabs.com/gateway.",
+            "endpoint and key are auto-provisioned when your workspace is created.\n\n"
+            "[bold]On-Prem (customer)[/bold] — gateway runs in your infrastructure but\n"
+            "configuration is still managed centrally via the Enterprise dashboard.",
             border_style=Colors.PRIMARY,
             padding=(1, 2),
         ))
         self.console.print()
 
-        deploy_choice = Prompt.ask(
-            f"[{Colors.PRIMARY}]Deployment type[/]",
-            choices=["managed", "on_prem"],
-            default="managed",
-        )
-
-        endpoint = Prompt.ask(
-            f"[{Colors.PRIMARY}]Gateway endpoint URL[/]",
-            default="https://gw.caracal.cloud" if deploy_choice == "managed" else "https://gw.yourdomain.com",
-        ).rstrip("/")
-
-        api_key = Prompt.ask(
-            f"[{Colors.PRIMARY}]Gateway API key[/]",
-            default="",
-            password=True,
-        )
-
-        fail_closed_input = Prompt.ask(
-            f"[{Colors.PRIMARY}]Fail-closed mode (deny if gateway unreachable)?[/]",
-            choices=["y", "n"],
-            default="y",
-        )
-        fail_closed = fail_closed_input == "y"
-
-        use_registry = Prompt.ask(
-            f"[{Colors.PRIMARY}]Enforce provider registry (block client-supplied target URLs)?[/]",
-            choices=["y", "n"],
-            default="y",
-        )
-        use_provider_registry = use_registry == "y"
-
-        self.console.print(f"\n[{Colors.DIM}]Saving gateway configuration...[/]")
-
-        # Persist to enterprise.json workspace config
         cfg = load_enterprise_config()
-        cfg["gateway"] = {
-            "enabled": True,
-            "deployment_type": deploy_choice,
-            "endpoint": endpoint,
-            "api_key": api_key,
-            "fail_closed": fail_closed,
-            "use_provider_registry": use_provider_registry,
-        }
-        save_enterprise_config(cfg)
+        if not cfg.get("enterprise_api_url") and not cfg.get("sync_api_key"):
+            self.console.print(
+                f"[{Colors.WARNING}]No enterprise license connected.[/]\n"
+                f"[{Colors.DIM}]Connect your license first via Enterprise → Connect Enterprise License.[/]"
+            )
+            Prompt.ask("Press Enter to continue", default="")
+            return
 
-        # Reload flags
-        reset_gateway_features()
-        flags = get_gateway_features(reload=True)
-        self._flags = flags
+        self.console.print(f"[{Colors.DIM}]Syncing gateway configuration from Enterprise...[/]")
 
-        self.console.print(f"[{Colors.SUCCESS}]✓ Gateway configuration saved.[/]")
+        try:
+            from caracal.enterprise.sync import EnterpriseSyncClient
+            client = EnterpriseSyncClient()
+            result = client.pull_gateway_config()
+
+            self.console.print()
+
+            if result.get("success") and result.get("gateway_configured"):
+                deploy_type = result.get("deployment_type", "managed")
+                endpoint = result.get("gateway_endpoint", "—")
+                mode_label = (
+                    "Managed (Caracal platform)" if deploy_type == "managed"
+                    else "On-Prem (customer)"
+                )
+
+                self.console.print(Panel(
+                    f"[bold {Colors.SUCCESS}]✓ Gateway configuration synced successfully![/]\n\n"
+                    f"[bold]Deployment:[/]  {mode_label}\n"
+                    f"[bold]Endpoint:[/]   {endpoint}\n"
+                    f"[bold]API Key:[/]    ●●●●●●●●\n"
+                    f"[bold]Fail-Closed:[/] Yes\n"
+                    f"[bold]Provider Registry:[/] Enabled\n\n"
+                    f"[{Colors.DIM}]These settings are managed by your Enterprise dashboard.[/]\n"
+                    f"[{Colors.DIM}]Changes made there will be picked up on the next sync.[/]",
+                    border_style=Colors.SUCCESS,
+                    padding=(1, 2),
+                ))
+
+                # Reload flags
+                reset_gateway_features()
+                self._flags = get_gateway_features(reload=True)
+
+                # Verify connectivity
+                if endpoint and endpoint != "—":
+                    self._check_gateway_health(endpoint)
+            elif result.get("success"):
+                self.console.print(
+                    f"[{Colors.WARNING}]Gateway not yet provisioned on your Enterprise workspace.[/]\n"
+                    f"[{Colors.DIM}]{result.get('message', '')}[/]"
+                )
+            else:
+                self.console.print(
+                    f"[{Colors.ERROR}]Failed to sync gateway config: {result.get('message', 'Unknown error')}[/]"
+                )
+        except Exception as exc:
+            self.console.print(f"[{Colors.ERROR}]Error syncing: {exc}[/]")
+
         self.console.print()
-
-        # Verify connectivity
-        if endpoint:
-            self._check_gateway_health(endpoint)
-
         Prompt.ask("Press Enter to continue", default="")
 
     def show_providers(self) -> None:
