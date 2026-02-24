@@ -897,11 +897,11 @@ def _step_principal(wizard: Wizard) -> Any:
     import os
     import getpass
     system_user = getpass.getuser()
-    default_name = f"{system_user}-admin"
+    default_name = f"{system_user}-principal"
     default_email = f"{system_user}@localhost"
     
     console.print(f"  [{Colors.NEUTRAL}]Let's register your first principal.")
-    console.print(f"  [{Colors.DIM}]This will be your admin user account.[/]")
+    console.print(f"  [{Colors.DIM}]This will be the first agent, user, or service you want to start with.[/]")
     console.print()
     
     principal_type = prompt.select(
