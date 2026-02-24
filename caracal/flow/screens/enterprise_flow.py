@@ -73,31 +73,31 @@ class EnterpriseFlow:
                     key="gateway",
                     label="API Gateway",
                     description="Connect and manage enterprise gateway enforcement",
-                    icon="🌐",
+                    icon="",
                 ),
                 MenuItem(
                     key="secrets",
                     label="Secret Vault",
                     description="Manage tier-appropriate secret backend (CaracalVault / AWS SM)",
-                    icon="🔐",
+                    icon="",
                 ),
                 MenuItem(
                     key="status",
                     label="Connection Status",
                     description="View license details, sync API key, and sync status",
-                    icon="🔗",
+                    icon="",
                 ),
                 MenuItem(
                     key="sync",
                     label="Sync to Enterprise",
                     description="Push local data (principals, policies, mandates) to Enterprise dashboard",
-                    icon="🔄",
+                    icon="",
                 ),
                 MenuItem(
                     key="disconnect",
                     label="Disconnect License",
                     description="Remove enterprise license from this workspace",
-                    icon="🔓",
+                    icon="",
                 ),
             ])
         else:
