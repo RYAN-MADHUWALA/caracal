@@ -340,6 +340,64 @@ def _load_local_ledger() -> List[Dict[str, Any]]:
     return []
 
 
+def _load_local_delegation() -> List[Dict[str, Any]]:
+    """Load delegation edges from the local workspace."""
+    try:
+        from caracal.db.connection import DatabaseConnectionManager, DatabaseConfig
+        from caracal.flow.workspace import get_workspace
+        from sqlalchemy import text
+        import yaml
+
+        ws = get_workspace()
+        config_path = ws.config_path
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            db_cfg = cfg.get("database", {})
+            schema = db_cfg.get("schema", cfg.get("schema", f"ws_{ws.root.name}"))
+            db_config = DatabaseConfig(
+                host=db_cfg.get("host", "localhost"),
+                port=int(db_cfg.get("port", 5432)),
+                database=db_cfg.get("database", "caracal"),
+                user=db_cfg.get("user", "caracal"),
+                password=db_cfg.get("password", ""),
+            )
+            mgr = DatabaseConnectionManager(db_config)
+            mgr.initialize()
+            with mgr.session_scope() as session:
+                rows = session.execute(
+                    text(
+                        f'SELECT edge_id, source_mandate_id, target_mandate_id, '
+                        f'source_principal_type, target_principal_type, '
+                        f'delegation_type, context_tags, granted_at, expires_at, revoked, metadata '
+                        f'FROM "{schema}".delegation_edges WHERE revoked = false'
+                    )
+                ).fetchall()
+            mgr.close()
+            results = []
+            for r in rows:
+                granted_at = r[7]
+                expires_at = r[8]
+                results.append({
+                    "edge_id": str(r[0]),
+                    "source_mandate_id": str(r[1]),
+                    "target_mandate_id": str(r[2]),
+                    "source_principal_type": r[3] or "agent",
+                    "target_principal_type": r[4] or "agent",
+                    "delegation_type": r[5] or "hierarchical",
+                    "context_tags": r[6],
+                    "granted_at": granted_at.isoformat() if granted_at else None,
+                    "expires_at": expires_at.isoformat() if expires_at else None,
+                    "revoked": bool(r[9]) if r[9] is not None else False,
+                    "edge_metadata": r[10],
+                })
+            return results
+    except Exception as exc:
+        logger.debug("Could not load delegation edges from DB: %s", exc)
+
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Sync Client
 # ---------------------------------------------------------------------------
@@ -395,8 +453,9 @@ class EnterpriseSyncClient:
         policies = _load_local_policies()
         mandates = _load_local_mandates()
         ledger_entries = _load_local_ledger()
+        delegation_edges = _load_local_delegation()
 
-        if not any([principals, policies, mandates, ledger_entries]):
+        if not any([principals, policies, mandates, ledger_entries, delegation_edges]):
             return SyncResult(
                 success=True,
                 message="No local data to sync.",
@@ -405,6 +464,7 @@ class EnterpriseSyncClient:
                     "policies": 0,
                     "mandates": 0,
                     "ledger_entries": 0,
+                    "delegation_edges": 0,
                 },
             )
 
@@ -413,6 +473,7 @@ class EnterpriseSyncClient:
             "policies": policies,
             "mandates": mandates,
             "ledger_entries": ledger_entries,
+            "delegation_edges": delegation_edges,
         }
 
         # Prefer API key auth; fall back to license key
