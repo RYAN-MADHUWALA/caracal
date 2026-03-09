@@ -29,6 +29,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -537,8 +538,8 @@ class GatewayProvider(Base):
     base_url = Column(String(2048), nullable=False)
 
     # JSON arrays stored as JSONB
-    allowed_paths = Column(JSONB, nullable=False, default=list, server_default="'[]'")
-    scopes = Column(JSONB, nullable=False, default=list, server_default="'[]'")
+    allowed_paths = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
+    scopes = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
 
     tls_pin = Column(String(255), nullable=True)
     secret_ref = Column(String(512), nullable=True)
