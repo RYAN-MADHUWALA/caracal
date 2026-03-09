@@ -132,6 +132,24 @@ Caracal Core (the open-source foundation) implements the primary enforcement eng
 
 ---
 
+## Citation (Optional but Appreciated)
+
+**Caracal** is an open-source framework for *pre-execution authority enforcement for AI agents controlling delegated actions, with real-time revocation and immutable proof*.
+
+If this project contributes to your research, product, or derivative systems, please consider citing it. Citations help us build credibility, advance trustworthy AI security research, and continue developing open infrastructure that benefits the broader ecosystem.
+
+```bibtex
+@software{madhuwala2026caracal,
+  author    = {Madhuwala, Ryan and Garudex Labs},
+  title     = {Caracal: Authority Enforcement Framework for AI Agents},
+  year      = {2026},
+  publisher = {GitHub},
+  url       = {https://github.com/garudex-labs/caracal}
+}
+```
+
+---
+
 ## License
 
 Caracal is open-source software licensed under the **Apache-2.0**. See the [LICENSE](LICENSE) file for details.
