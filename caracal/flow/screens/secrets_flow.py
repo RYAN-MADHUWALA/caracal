@@ -107,8 +107,9 @@ class SecretsFlow:
 
         items.append(MenuItem("back", "Back", "Return to previous menu", Icons.ARROW_LEFT))
 
-        menu = Menu(items=items, console=self.console)
-        return menu.show()
+        menu = Menu(title="", items=items)
+        result = menu.run()
+        return result.key if result else "back"
 
     # ── Vault status ───────────────────────────────────────────────────
 
