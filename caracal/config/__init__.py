@@ -8,7 +8,6 @@ Handles loading and validation of configuration files.
 """
 
 from caracal.config.settings import (
-    ASEConfig,
     CaracalConfig,
     DatabaseConfig,
     DefaultsConfig,
@@ -26,7 +25,6 @@ from caracal.config.settings import (
 )
 
 __all__ = [
-    "ASEConfig",
     "CaracalConfig",
     "DatabaseConfig",
     "DefaultsConfig",
