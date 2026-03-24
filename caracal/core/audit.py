@@ -6,11 +6,19 @@ Audit Log Management for Caracal Core v0.3.
 
 Provides functionality for querying and exporting audit logs in multiple formats.
 
+Enhanced AuditReference implementation with improvements over ASE:
+- Hash algorithm specification for crypto agility
+- Chain verification support (previous_hash) for blockchain-style integrity
+- Cryptographic signatures for non-repudiation
+- Tamper detection via hash comparison
+- Entry count for validation of audit completeness
 """
 
 import csv
-import json
+import hashlib
 import io
+import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from uuid import UUID
@@ -23,6 +31,127 @@ from caracal.db.connection import get_connection_manager
 from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class AuditReference:
+    """
+    Enhanced audit trail reference with cryptographic verification.
+    
+    Improvements over ASE:
+    - Hash algorithm specification enables crypto agility
+    - Previous hash enables blockchain-style chain verification
+    - Signatures provide non-repudiation
+    - Entry count enables validation of audit completeness
+    - Tamper detection via hash comparison
+    
+    Attributes:
+        audit_id: Unique identifier for the audit entry
+        location: Optional URL or storage path for audit data
+        hash: Cryptographic hash of audit data (required for verification)
+        hash_algorithm: Algorithm used for hashing (default: SHA-256)
+        previous_hash: Optional hash of previous audit entry for chain verification
+        signature: Optional cryptographic signature
+        signer_id: Optional identity of the signer
+        timestamp: When the audit entry was created
+        entry_count: Number of entries in the audit bundle
+    """
+    audit_id: str
+    location: Optional[str] = None
+    hash: str = ""
+    hash_algorithm: str = "SHA-256"
+    previous_hash: Optional[str] = None
+    signature: Optional[str] = None
+    signer_id: Optional[str] = None
+    timestamp: Optional[datetime] = None
+    entry_count: int = 0
+    
+    def __post_init__(self):
+        """Validate fields and set defaults."""
+        if not self.audit_id or not isinstance(self.audit_id, str):
+            raise ValueError("audit_id must be non-empty string")
+        
+        if self.timestamp is None:
+            self.timestamp = datetime.utcnow()
+    
+    def verify_hash(self, content: bytes) -> bool:
+        """
+        Verify that hash matches content.
+        
+        Args:
+            content: Content to verify against the stored hash
+            
+        Returns:
+            True if hash matches, False otherwise
+            
+        Raises:
+            ValueError: If hash_algorithm is not supported
+        """
+        if self.hash_algorithm == "SHA-256":
+            computed_hash = hashlib.sha256(content).hexdigest()
+        elif self.hash_algorithm == "SHA3-256":
+            computed_hash = hashlib.sha3_256(content).hexdigest()
+        else:
+            raise ValueError(f"Unsupported hash algorithm: {self.hash_algorithm}")
+        
+        return computed_hash == self.hash
+    
+    def verify_chain(self, previous_ref: "AuditReference") -> bool:
+        """
+        Verify chain integrity with previous audit reference.
+        
+        Args:
+            previous_ref: Previous audit reference in the chain
+            
+        Returns:
+            True if chain is valid, False otherwise
+        """
+        if self.previous_hash is None:
+            return True  # First in chain
+        
+        return self.previous_hash == previous_ref.hash
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert to dictionary for JSON serialization.
+        
+        Returns:
+            Dictionary representation of the audit reference
+        """
+        return {
+            "audit_id": self.audit_id,
+            "location": self.location,
+            "hash": self.hash,
+            "hash_algorithm": self.hash_algorithm,
+            "previous_hash": self.previous_hash,
+            "signature": self.signature,
+            "signer_id": self.signer_id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "entry_count": self.entry_count
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AuditReference":
+        """
+        Create AuditReference from dictionary.
+        
+        Args:
+            data: Dictionary containing audit reference data
+            
+        Returns:
+            AuditReference instance
+        """
+        return cls(
+            audit_id=data["audit_id"],
+            location=data.get("location"),
+            hash=data.get("hash", ""),
+            hash_algorithm=data.get("hash_algorithm", "SHA-256"),
+            previous_hash=data.get("previous_hash"),
+            signature=data.get("signature"),
+            signer_id=data.get("signer_id"),
+            timestamp=datetime.fromisoformat(data["timestamp"]) if data.get("timestamp") else None,
+            entry_count=data.get("entry_count", 0)
+        )
 
 
 class AuditLogManager:
