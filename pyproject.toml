@@ -12,7 +12,7 @@ license = {file = "LICENSE"}
 authors = [
     {name = "Caracal Contributors"}
 ]
-keywords = ["ai", "agents", "authority", "enforcement", "mandate", "ledger", "ase", "delegation", "policy", "security"]
+keywords = ["ai", "agents", "authority", "enforcement", "mandate", "ledger", "delegation", "policy", "security"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -30,7 +30,6 @@ dependencies = [
     "click>=8.1.0",
     "pyyaml>=6.0",
     "hypothesis>=6.0.0",
-    "ase-protocol==1.2.0",
     "sqlalchemy>=2.0.0",
     "alembic>=1.12.0",
     "psycopg2-binary>=2.9.0",

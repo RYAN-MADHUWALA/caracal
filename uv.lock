@@ -50,20 +50,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ase-protocol"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography" },
-    { name = "pydantic" },
-    { name = "pyjwt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/33/8ca878fd15ea2fc48b451aa5231f3a4b858a7f0e9fc44023aec87c7fd1b6/ase_protocol-1.2.0.tar.gz", hash = "sha256:5f0e6ba562cfe419c289bf8cf5098336cfea9efdd5ce5376c2fa071752664b16", size = 85201, upload-time = "2026-02-13T09:37:14.796Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/65/1900b366d7585afb386d353fe99742fa9a90860f6753d9475fc6a2be3371/ase_protocol-1.2.0-py3-none-any.whl", hash = "sha256:0486c27d2deaac559336ccbe30859d2aadac1a8a3b52d4a364bcd7d0f64ccd76", size = 45039, upload-time = "2026-02-13T09:37:12.038Z" },
-]
-
-[[package]]
 name = "async-timeout"
 version = "5.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -200,7 +186,6 @@ name = "caracal-core"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
-    { name = "ase-protocol" },
     { name = "bcrypt" },
     { name = "cachetools" },
     { name = "click" },
@@ -233,7 +218,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.12.0" },
-    { name = "ase-protocol", specifier = "==1.2.0" },
     { name = "bcrypt", specifier = ">=4.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "cachetools", specifier = ">=5.3.0" },
