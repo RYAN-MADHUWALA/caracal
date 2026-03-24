@@ -207,7 +207,17 @@ class MCPAdapter:
             # In a real implementation, this would call the actual MCP server
             tool_result = await self._forward_to_mcp_server(tool_name, tool_args)
             
-            # 6. Emit metering event (usage tracking only)
+            # 6. Emit metering event (usage tracking only) with enhanced features
+            # Generate correlation_id for tracing
+            import uuid
+            correlation_id = str(uuid.uuid4())
+            
+            # Extract parent_event_id from context if present
+            parent_event_id = mcp_context.get("parent_event_id")
+            
+            # Create tags for categorization
+            tags = ["mcp", "tool", tool_name]
+            
             metering_event = MeteringEvent(
                 agent_id=agent_id,
                 resource_type=f"mcp.tool.{tool_name}",
@@ -218,7 +228,10 @@ class MCPAdapter:
                     "tool_args": tool_args,
                     "mcp_context": mcp_context.metadata,
                     "mandate_id": str(mandate_id)
-                }
+                },
+                correlation_id=correlation_id,
+                parent_event_id=parent_event_id,
+                tags=tags
             )
             
             self.metering_collector.collect_event(metering_event)
