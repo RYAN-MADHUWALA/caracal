@@ -86,7 +86,12 @@ class TestEnterpriseGatewayMetering:
             mock_stream_context = AsyncMock()
             mock_stream_context.__aenter__.return_value = mock_response
             mock_stream_context.__aexit__.return_value = None
-            mock_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+            
+            # Create async iterator for aiter_bytes
+            async def async_iter():
+                yield b'{"result": "success"}'
+            
+            mock_response.aiter_bytes = async_iter
             mock_stream.return_value = mock_stream_context
             
             # Create a mock request
@@ -144,7 +149,12 @@ class TestEnterpriseGatewayMetering:
                 mock_stream_context = AsyncMock()
                 mock_stream_context.__aenter__.return_value = mock_response
                 mock_stream_context.__aexit__.return_value = None
-                mock_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+                
+                # Create async iterator for aiter_bytes
+                async def async_iter():
+                    yield b'{"result": "success"}'
+                
+                mock_response.aiter_bytes = async_iter
                 mock_stream.return_value = mock_stream_context
                 
                 mock_request = Mock(spec=Request)
@@ -186,9 +196,12 @@ class TestEnterpriseGatewayMetering:
             mock_stream_context = AsyncMock()
             mock_stream_context.__aenter__.return_value = mock_response
             mock_stream_context.__aexit__.return_value = None
-            mock_response.aiter_bytes = AsyncMock(
-                return_value=[b'{"id": "12345", "status": "created"}']
-            )
+            
+            # Create async iterator for aiter_bytes
+            async def async_iter():
+                yield b'{"id": "12345", "status": "created"}'
+            
+            mock_response.aiter_bytes = async_iter
             mock_stream.return_value = mock_stream_context
             
             mock_request = Mock(spec=Request)
@@ -238,7 +251,12 @@ class TestEnterpriseGatewayMetering:
             mock_stream_context = AsyncMock()
             mock_stream_context.__aenter__.return_value = mock_response
             mock_stream_context.__aexit__.return_value = None
-            mock_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+            
+            # Create async iterator for aiter_bytes
+            async def async_iter():
+                yield b'{"result": "success"}'
+            
+            mock_response.aiter_bytes = async_iter
             mock_stream.return_value = mock_stream_context
             
             mock_request = Mock(spec=Request)
@@ -276,7 +294,12 @@ class TestEnterpriseGatewayMetering:
             mock_stream_context = AsyncMock()
             mock_stream_context.__aenter__.return_value = mock_response
             mock_stream_context.__aexit__.return_value = None
-            mock_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+            
+            # Create async iterator for aiter_bytes
+            async def async_iter():
+                yield b'{"result": "success"}'
+            
+            mock_response.aiter_bytes = async_iter
             mock_stream.return_value = mock_stream_context
             
             # Mock metering collector to raise an exception
@@ -316,7 +339,12 @@ class TestEnterpriseGatewayMetering:
             mock_stream_context = AsyncMock()
             mock_stream_context.__aenter__.return_value = mock_response
             mock_stream_context.__aexit__.return_value = None
-            mock_response.aiter_bytes = AsyncMock(return_value=[b'{"result": "success"}'])
+            
+            # Create async iterator for aiter_bytes
+            async def async_iter():
+                yield b'{"result": "success"}'
+            
+            mock_response.aiter_bytes = async_iter
             mock_stream.return_value = mock_stream_context
             
             # Create mock tenant
