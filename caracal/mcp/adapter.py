@@ -365,10 +365,21 @@ class MCPAdapter:
             # 5. Fetch resource from MCP server
             resource = await self._fetch_resource(resource_uri)
             
-            # 6. Emit metering event (usage tracking only)
+            # 6. Emit metering event (usage tracking only) with enhanced features
+            # Generate correlation_id for tracing
+            import uuid
+            correlation_id = str(uuid.uuid4())
+            
+            # Extract parent_event_id from context if present
+            parent_event_id = mcp_context.get("parent_event_id")
+            
+            # Create tags for categorization
+            resource_type_tag = self._get_resource_type(resource_uri)
+            tags = ["mcp", "resource", resource_type_tag]
+            
             metering_event = MeteringEvent(
                 agent_id=agent_id,
-                resource_type=f"mcp.resource.{self._get_resource_type(resource_uri)}",
+                resource_type=f"mcp.resource.{resource_type_tag}",
                 quantity=Decimal(str(resource.size)),  # Size in bytes
                 timestamp=datetime.utcnow(),
                 metadata={
@@ -377,7 +388,10 @@ class MCPAdapter:
                     "size_bytes": resource.size,
                     "mcp_context": mcp_context.metadata,
                     "mandate_id": str(mandate_id)
-                }
+                },
+                correlation_id=correlation_id,
+                parent_event_id=parent_event_id,
+                tags=tags
             )
             
             self.metering_collector.collect_event(metering_event)
@@ -815,7 +829,17 @@ class MCPAdapter:
                     else:
                         tool_result = func(*args, **kwargs)
                     
-                    # 4. Emit metering event
+                    # 4. Emit metering event with enhanced features
+                    # Generate correlation_id for tracing
+                    import uuid
+                    correlation_id = str(uuid.uuid4())
+                    
+                    # Extract parent_event_id from context if present
+                    parent_event_id = mcp_context.get("parent_event_id")
+                    
+                    # Create tags for categorization
+                    tags = ["mcp", "tool", tool_name, "decorator"]
+                    
                     metering_event = MeteringEvent(
                         agent_id=str(agent_id),
                         resource_type=f"mcp.tool.{tool_name}",
@@ -825,7 +849,10 @@ class MCPAdapter:
                             "tool_name": tool_name,
                             "decorator_mode": True,
                             "mandate_id": str(mandate_id)
-                        }
+                        },
+                        correlation_id=correlation_id,
+                        parent_event_id=parent_event_id,
+                        tags=tags
                     )
                     
                     self.metering_collector.collect_event(metering_event)
