@@ -205,13 +205,9 @@ class MCPAdapterConfig:
     health_check_enabled: bool = True
 
 
-@dataclass
-class ASEConfig:
-    """ASE protocol configuration."""
-    
-    version: str = "1.0.8"
-    delegation_token_expiration_seconds: int = 86400  # 24 hours
-    key_algorithm: str = "RS256"  # RS256 or ES256
+# ASE configuration removed - delegation settings moved inline to delegation module
+# delegation_token_expiration_seconds: Default is 86400 (24 hours)
+# key_algorithm: Default is "RS256" (RS256 or ES256)
 
 
 @dataclass
@@ -333,7 +329,6 @@ class CaracalConfig:
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     policy_cache: PolicyCacheConfig = field(default_factory=PolicyCacheConfig)
     mcp_adapter: MCPAdapterConfig = field(default_factory=MCPAdapterConfig)
-    ase: ASEConfig = field(default_factory=ASEConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     merkle: MerkleConfig = field(default_factory=MerkleConfig)
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
@@ -587,13 +582,7 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
         health_check_enabled=mcp_adapter_data.get('health_check_enabled', default_config.mcp_adapter.health_check_enabled),
     )
     
-    # Parse ASE configuration (optional, for v0.2)
-    ase_data = config_data.get('ase', {})
-    ase = ASEConfig(
-        version=ase_data.get('version', default_config.ase.version),
-        delegation_token_expiration_seconds=ase_data.get('delegation_token_expiration_seconds', default_config.ase.delegation_token_expiration_seconds),
-        key_algorithm=ase_data.get('key_algorithm', default_config.ase.key_algorithm),
-    )
+    # ASE configuration removed - delegation settings are now inline in delegation module
     
     # Parse Merkle configuration (optional, for v0.3)
     merkle_data = config_data.get('merkle', {})
@@ -691,7 +680,6 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
         gateway=gateway,
         policy_cache=policy_cache,
         mcp_adapter=mcp_adapter,
-        ase=ase,
         redis=redis,
         merkle=merkle,
         snapshot=snapshot,
@@ -854,21 +842,7 @@ def _validate_config(config: CaracalConfig) -> None:
         if not config.mcp_adapter.listen_address:
             raise InvalidConfigurationError("mcp_adapter listen_address cannot be empty when MCP adapter is enabled")
     
-    # Validate ASE configuration 
-    if config.ase.delegation_token_expiration_seconds <= 0:
-        raise InvalidConfigurationError(
-            f"ase delegation_token_expiration_seconds must be positive, "
-            f"got {config.ase.delegation_token_expiration_seconds}"
-        )
-    
-    valid_key_algorithms = ["RS256", "ES256"]
-    if config.ase.key_algorithm not in valid_key_algorithms:
-        raise InvalidConfigurationError(
-            f"ase key_algorithm must be one of {valid_key_algorithms}, "
-            f"got '{config.ase.key_algorithm}'"
-        )
-    
-
+    # ASE configuration validation removed - delegation settings are now inline in delegation module
     
     # Validate Merkle configuration
     if config.compatibility.enable_merkle:
