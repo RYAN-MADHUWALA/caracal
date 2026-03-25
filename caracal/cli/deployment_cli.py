@@ -10,9 +10,10 @@ Provides command-line interface for mode, edition, workspace, sync, and provider
 import json
 import os
 import sys
+import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import click
 import yaml
@@ -800,32 +801,210 @@ def sync_auto_disable(workspace: Optional[str]):
 # Provider command group
 @click.group(name="provider")
 def provider_group():
-    """Manage AI provider configurations."""
+    """Manage external service provider configurations."""
     pass
+
+
+def _parse_metadata_pairs(pairs: tuple[str, ...]) -> Dict[str, str]:
+    """Parse repeated --metadata key=value options into a dictionary."""
+    metadata: Dict[str, str] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise click.ClickException(f"Invalid metadata entry '{pair}', expected key=value")
+        key, value = pair.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise click.ClickException("Metadata key cannot be empty")
+        metadata[key] = value.strip()
+    return metadata
+
+
+def _normalize_auth_scheme(auth_scheme: str) -> str:
+    """Normalize CLI auth scheme naming to internal representation."""
+    return auth_scheme.strip().replace("-", "_").lower()
+
+
+def _require_workspace(config_manager: ConfigManager, workspace: Optional[str]) -> str:
+    """Resolve workspace or fail with a user-facing error."""
+    resolved = _resolve_workspace_name(config_manager, workspace)
+    if not resolved:
+        raise click.ClickException("No workspaces found. Create one first.")
+    return resolved
+
+
+def _load_workspace_providers(config_manager: ConfigManager, workspace: str) -> Dict[str, Dict[str, Any]]:
+    """Load provider registry from workspace metadata."""
+    config = config_manager.get_workspace_config(workspace)
+    metadata = dict(config.metadata or {})
+    providers = metadata.get("providers", {})
+
+    if isinstance(providers, list):
+        # Backward compatibility if metadata stored as a list.
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for item in providers:
+            if isinstance(item, dict) and item.get("name"):
+                normalized[item["name"]] = item
+        return normalized
+
+    return providers if isinstance(providers, dict) else {}
+
+
+def _save_workspace_providers(
+    config_manager: ConfigManager,
+    workspace: str,
+    providers: Dict[str, Dict[str, Any]],
+) -> None:
+    """Persist provider registry in workspace metadata."""
+    config = config_manager.get_workspace_config(workspace)
+    metadata = dict(config.metadata or {})
+    metadata["provider_registry"] = {
+        "mode": "broker",
+        "version": "v1",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    metadata["providers"] = providers
+    config.metadata = metadata
+    config_manager.set_workspace_config(workspace, config)
+
+
+def _build_oss_broker(config_manager: ConfigManager, workspace: str):
+    """Build an OSS broker from persisted provider registry entries."""
+    from caracal.deployment.broker import Broker, ProviderConfig
+
+    broker = Broker(config_manager=config_manager, workspace=workspace)
+    providers = _load_workspace_providers(config_manager, workspace)
+
+    for provider_name, entry in providers.items():
+        provider_config = ProviderConfig(
+            name=provider_name,
+            provider_type=entry.get("service_type", entry.get("provider_type", "api")),
+            api_key_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
+            credential_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
+            auth_scheme=entry.get("auth_scheme", "api_key"),
+            base_url=entry.get("base_url"),
+            timeout_seconds=int(entry.get("timeout_seconds", 30)),
+            max_retries=int(entry.get("max_retries", 3)),
+            rate_limit_rpm=entry.get("rate_limit_rpm"),
+            healthcheck_path=entry.get("healthcheck_path", "/health"),
+            default_headers=entry.get("default_headers", {}),
+            auth_metadata=entry.get("auth_metadata", {}),
+            version=entry.get("version"),
+            capabilities=entry.get("capabilities", []),
+            tags=entry.get("tags", []),
+            access_policy=entry.get("access_policy", {}),
+            metadata=entry.get("metadata", {}),
+        )
+        broker.configure_provider(provider_name, provider_config)
+
+    return broker, providers
 
 
 @provider_group.command(name="add")
 @click.argument("name")
-@click.option("--api-key", required=True, help="Provider API key")
+@click.option("--service-type", default="api", show_default=True, help="Service type (llm, api, database, infra, internal)")
+@click.option("--base-url", help="Provider base URL")
+@click.option(
+    "--auth-scheme",
+    type=click.Choice([
+        "none",
+        "api-key",
+        "bearer",
+        "basic",
+        "header",
+        "oauth2-client-credentials",
+        "service-account",
+    ]),
+    default="api-key",
+    show_default=True,
+    help="Authentication scheme",
+)
+@click.option("--credential", help="Credential value to store as encrypted secret")
+@click.option("--credential-ref", help="Existing secret reference for credential")
+@click.option("--auth-header-name", help="Header name for --auth-scheme header")
+@click.option("--health-path", default="/health", show_default=True, help="Health check path for provider test")
+@click.option("--timeout-seconds", type=int, default=30, show_default=True, help="Request timeout in seconds")
+@click.option("--max-retries", type=int, default=3, show_default=True, help="Retry attempts")
+@click.option("--rate-limit-rpm", type=int, help="Client-side requests per minute limit")
+@click.option("--version", help="Provider API/version label")
+@click.option("--tag", "tags", multiple=True, help="Tag (repeatable)")
+@click.option("--scope", "scopes", multiple=True, help="Allowed authority scope (repeatable)")
+@click.option("--metadata", "metadata_pairs", multiple=True, help="Metadata key=value (repeatable)")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-def provider_add(name: str, api_key: str, workspace: Optional[str]):
+def provider_add(
+    name: str,
+    service_type: str,
+    base_url: Optional[str],
+    auth_scheme: str,
+    credential: Optional[str],
+    credential_ref: Optional[str],
+    auth_header_name: Optional[str],
+    health_path: str,
+    timeout_seconds: int,
+    max_retries: int,
+    rate_limit_rpm: Optional[int],
+    version: Optional[str],
+    tags: tuple[str, ...],
+    scopes: tuple[str, ...],
+    metadata_pairs: tuple[str, ...],
+    workspace: Optional[str],
+):
     """Add a provider configuration."""
     try:
         config_manager = ConfigManager()
-        
-        if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.")
-                sys.exit(1)
-            workspace = workspaces[0]
-        
-        # Store API key as secret
-        key_name = f"provider_{name}_api_key"
-        config_manager.store_secret(key_name, api_key, workspace)
-        
+
+        workspace = _require_workspace(config_manager, workspace)
+        normalized_auth = _normalize_auth_scheme(auth_scheme)
+
+        if credential and credential_ref:
+            raise click.ClickException("Use either --credential or --credential-ref, not both")
+
+        if normalized_auth != "none" and not (credential or credential_ref):
+            raise click.ClickException(
+                "Authenticated providers require --credential or --credential-ref"
+            )
+
+        if normalized_auth == "none" and (credential or credential_ref):
+            raise click.ClickException("Do not supply credentials when --auth-scheme is none")
+
+        if normalized_auth == "header" and not auth_header_name:
+            raise click.ClickException("--auth-header-name is required for --auth-scheme header")
+
+        secret_ref = credential_ref
+        if credential:
+            secret_ref = f"provider_{name}_credential"
+            config_manager.store_secret(secret_ref, credential, workspace)
+
+        providers = _load_workspace_providers(config_manager, workspace)
+        existing = providers.get(name, {})
+        metadata = _parse_metadata_pairs(metadata_pairs)
+
+        providers[name] = {
+            "name": name,
+            "service_type": service_type,
+            "base_url": base_url,
+            "auth_scheme": normalized_auth,
+            "credential_ref": secret_ref,
+            "healthcheck_path": health_path,
+            "timeout_seconds": timeout_seconds,
+            "max_retries": max_retries,
+            "rate_limit_rpm": rate_limit_rpm,
+            "version": version,
+            "tags": list(tags),
+            "capabilities": [],
+            "access_policy": {"scopes": list(scopes)},
+            "auth_metadata": {"header_name": auth_header_name} if auth_header_name else {},
+            "default_headers": existing.get("default_headers", {}),
+            "metadata": metadata,
+            "created_at": existing.get("created_at", datetime.utcnow().isoformat()),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        _save_workspace_providers(config_manager, workspace, providers)
+
         console.print(f"[green]✓[/green] Provider added: {name}")
         console.print(f"  Workspace: {workspace}")
+        console.print(f"  Service Type: {service_type}")
+        console.print(f"  Auth Scheme: {normalized_auth}")
         
     except Exception as e:
         logger.error("provider_add_failed", error=str(e))
@@ -841,44 +1020,78 @@ def provider_list(workspace: Optional[str], format: str):
     try:
         config_manager = ConfigManager()
         edition_manager = EditionManager()
-        
-        if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.")
-                sys.exit(1)
-            workspace = workspaces[0]
-        
-        # Get provider client based on edition
-        provider_client = edition_manager.get_provider_client()
-        
-        # List providers
-        providers = provider_client.list_providers()
+
+        workspace = _require_workspace(config_manager, workspace)
+
+        providers_data: List[Dict[str, Any]] = []
+
+        if edition_manager.is_enterprise():
+            from caracal.deployment.gateway_client import GatewayClient
+
+            gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+            if not gateway_url:
+                raise click.ClickException("Gateway URL is not configured for enterprise provider listing")
+
+            gateway_client = GatewayClient(
+                gateway_url=gateway_url,
+                config_manager=config_manager,
+                workspace=workspace,
+            )
+            try:
+                providers = asyncio.run(gateway_client.get_available_providers())
+            finally:
+                asyncio.run(gateway_client.close())
+
+            providers_data = [
+                {
+                    "name": provider.name,
+                    "service_type": provider.service_type,
+                    "auth_scheme": provider.auth_scheme,
+                    "base_url": provider.metadata.get("base_url") if isinstance(provider.metadata, dict) else None,
+                    "version": provider.version,
+                    "status": provider.status,
+                    "tags": provider.tags,
+                }
+                for provider in providers
+            ]
+        else:
+            broker, registry = _build_oss_broker(config_manager, workspace)
+            providers = broker.list_providers()
+            for provider in providers:
+                stored = registry.get(provider.name, {})
+                providers_data.append(
+                    {
+                        "name": provider.name,
+                        "service_type": provider.service_type,
+                        "auth_scheme": provider.auth_scheme,
+                        "base_url": provider.base_url,
+                        "version": provider.version,
+                        "status": provider.status,
+                        "tags": stored.get("tags", []),
+                    }
+                )
         
         if format == "json":
-            providers_data = []
-            for provider in providers:
-                providers_data.append({
-                    "name": provider.name,
-                    "type": provider.provider_type,
-                    "status": provider.status
-                })
             click.echo(json.dumps({"workspace": workspace, "providers": providers_data}))
         else:
-            if not providers:
+            if not providers_data:
                 console.print(f"No providers configured for workspace '{workspace}'")
                 return
             
             table = Table(title=f"Providers for workspace '{workspace}'")
             table.add_column("Name", style="cyan")
-            table.add_column("Type", style="yellow")
+            table.add_column("Service", style="yellow")
+            table.add_column("Auth", style="blue")
+            table.add_column("Endpoint", style="magenta")
             table.add_column("Status", style="green")
             
-            for provider in providers:
+            for provider in providers_data:
                 table.add_row(
-                    provider.name,
-                    provider.provider_type,
-                    provider.status
+                    provider["name"],
+                    provider["service_type"],
+                    provider.get("auth_scheme") or "n/a",
+                    provider.get("base_url") or "configured",
+                    provider["status"],
                 )
             
             console.print(table)
@@ -895,10 +1108,10 @@ def provider_list(workspace: Optional[str], format: str):
 def provider_test(name: str, workspace: Optional[str]):
     """Test provider connectivity."""
     try:
+        config_manager = ConfigManager()
         edition_manager = EditionManager()
-        
-        # Get provider client based on edition
-        provider_client = edition_manager.get_provider_client()
+
+        workspace = _require_workspace(config_manager, workspace)
         
         with Progress(
             SpinnerColumn(),
@@ -906,14 +1119,52 @@ def provider_test(name: str, workspace: Optional[str]):
             console=console,
         ) as progress:
             task = progress.add_task(f"Testing provider '{name}'...", total=None)
-            health = provider_client.test_provider(name)
+
+            if edition_manager.is_enterprise():
+                from caracal.deployment.gateway_client import GatewayClient
+
+                gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+                if not gateway_url:
+                    raise click.ClickException("Gateway URL is not configured for enterprise provider testing")
+
+                gateway_client = GatewayClient(
+                    gateway_url=gateway_url,
+                    config_manager=config_manager,
+                    workspace=workspace,
+                )
+                try:
+                    gateway_health = asyncio.run(gateway_client.check_connection())
+                    providers = asyncio.run(gateway_client.get_available_providers())
+                finally:
+                    asyncio.run(gateway_client.close())
+
+                selected = next((p for p in providers if p.name == name), None)
+                is_healthy = bool(gateway_health.healthy and selected and selected.available)
+                error_message = None
+                if not gateway_health.healthy:
+                    error_message = gateway_health.error
+                elif not selected:
+                    error_message = "Provider not found in gateway registry"
+                elif not selected.available:
+                    error_message = "Provider is currently unavailable"
+            else:
+                broker, _ = _build_oss_broker(config_manager, workspace)
+                try:
+                    health = asyncio.run(broker.test_provider(name))
+                finally:
+                    asyncio.run(broker.close())
+
+                is_healthy = health.is_healthy
+                error_message = health.error_message
+
             progress.update(task, completed=True)
         
-        if health.is_healthy:
+        if is_healthy:
             console.print(f"[green]✓[/green] Provider '{name}' is healthy")
         else:
             console.print(f"[red]✗[/red] Provider '{name}' is unhealthy")
-            console.print(f"  Error: {health.error_message}")
+            if error_message:
+                console.print(f"  Error: {error_message}")
         
     except Exception as e:
         logger.error("provider_test_failed", error=str(e))
@@ -929,25 +1180,33 @@ def provider_remove(name: str, workspace: Optional[str], force: bool):
     """Remove a provider configuration."""
     try:
         config_manager = ConfigManager()
-        
-        if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.")
-                sys.exit(1)
-            workspace = workspaces[0]
+
+        workspace = _require_workspace(config_manager, workspace)
+
+        providers = _load_workspace_providers(config_manager, workspace)
+        if name not in providers:
+            raise click.ClickException(f"Provider not found: {name}")
         
         if not force:
             if not click.confirm(f"Remove provider '{name}'?"):
                 console.print("Cancelled.")
                 return
-        
-        # Remove API key secret
-        key_name = f"provider_{name}_api_key"
+
+        provider = providers.pop(name)
+        _save_workspace_providers(config_manager, workspace, providers)
+
+        # Remove provider credential secret if managed by this registry.
+        credential_ref = provider.get("credential_ref")
         vault = config_manager._load_vault(workspace)
-        if key_name in vault:
-            del vault[key_name]
-            config_manager._save_vault(workspace, vault)
+        if credential_ref and credential_ref in vault:
+            del vault[credential_ref]
+
+        # Backward compatibility cleanup for legacy secret names.
+        for legacy_key in (f"provider_{name}_api_key", f"provider_{name}_credential"):
+            if legacy_key in vault:
+                del vault[legacy_key]
+
+        config_manager._save_vault(workspace, vault)
         
         console.print(f"[green]✓[/green] Provider removed: {name}")
         
