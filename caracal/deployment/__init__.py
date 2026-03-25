@@ -17,6 +17,14 @@ from caracal.deployment.config_manager import (
     SyncDirection,
     ConflictStrategy,
 )
+from caracal.deployment.migration import MigrationManager
+from caracal.deployment.version import (
+    VersionChecker,
+    SemanticVersion,
+    CompatibilityLevel,
+    VersionCompatibility,
+    get_version_checker,
+)
 
 __all__ = [
     "Mode",
@@ -28,4 +36,12 @@ __all__ = [
     "PostgresConfig",
     "SyncDirection",
     "ConflictStrategy",
+    "MigrationManager",
+    "VersionChecker",
+    "SemanticVersion",
+    "CompatibilityLevel",
+    "VersionCompatibility",
+    "get_version_checker",
 ]
+
+

@@ -303,6 +303,10 @@ system.add_command(secrets_group, name='secrets')
 from caracal.cli.config_encryption import config_encrypt_group
 system.add_command(config_encrypt_group, name='config')
 
+# System -> migrate
+from caracal.cli.migration import migrate_group
+system.add_command(migrate_group, name='migrate')
+
 # Legacy Ledger (Moving to system/ledger for now to maintain functions)
 @system.group()
 def ledger():
