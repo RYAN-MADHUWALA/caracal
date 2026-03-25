@@ -302,130 +302,117 @@ def workspace():
     pass
 
 
-# Import workspace commands from deployment_cli if available
-try:
-    from caracal.cli.deployment_cli import workspace_group
-    # Import commands from the workspace group
-    for cmd in workspace_group.commands.values():
-        workspace.add_command(cmd)
-except ImportError:
-    # Fallback to basic workspace commands if deployment_cli not available
-    pass
-
-
-# Add basic workspace commands if not imported from deployment_cli
-if not workspace.commands:
-    @workspace.command(name='list')
-    @click.option('--format', type=click.Choice(['table', 'json']), default='table')
-    @click.pass_context
-    def workspace_list(ctx, format):
-        """List all workspaces."""
-        from caracal.deployment.config_manager import ConfigManager
-        import json as json_lib
+@workspace.command(name='list')
+@click.option('--format', type=click.Choice(['table', 'json']), default='table')
+@click.pass_context
+def workspace_list(ctx, format):
+    """List all workspaces."""
+    from caracal.deployment.config_manager import ConfigManager
+    import json as json_lib
+    
+    try:
+        config_mgr = ConfigManager()
+        workspaces = config_mgr.list_workspaces()
         
-        try:
-            config_mgr = ConfigManager()
-            workspaces = config_mgr.list_workspaces()
-            
-            if format == 'json':
-                data = [
-                    {
-                        'name': ws.name,
-                        'active': ws.is_default,
-                        'sync_enabled': ws.sync_enabled,
-                        'created': ws.created_at.isoformat() if ws.created_at else None
-                    }
-                    for ws in workspaces
-                ]
-                click.echo(json_lib.dumps(data, indent=2))
-            else:
-                if not workspaces:
-                    click.echo("No workspaces found. Run 'caracal init' to create default workspace.")
-                    return
-                
-                click.echo()
-                click.echo(click.style("WORKSPACES", bold=True))
-                click.echo()
-                for ws in workspaces:
-                    marker = click.style("●", fg='green') if ws.is_default else " "
-                    sync_status = click.style("synced", fg='cyan') if ws.sync_enabled else click.style("local", fg='yellow')
-                    click.echo(f"  {marker} {click.style(ws.name, bold=True)} ({sync_status})")
-                click.echo()
-                
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
-
-
-    @workspace.command(name='create')
-    @click.argument('name')
-    @click.option('--template', type=click.Choice(['none', 'enterprise', 'local-dev']), default='none')
-    @click.pass_context
-    def workspace_create(ctx, name, template):
-        """Create a new workspace."""
-        from caracal.deployment.config_manager import ConfigManager
-        
-        try:
-            config_mgr = ConfigManager()
-            template_val = None if template == 'none' else template
-            config_mgr.create_workspace(name, template=template_val)
-            
-            click.echo(f"✓ Workspace '{click.style(name, fg='cyan', bold=True)}' created")
-            click.echo(f"  Switch to it: caracal workspace use {name}")
-            
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
-
-
-    @workspace.command(name='use')
-    @click.argument('name')
-    @click.pass_context
-    def workspace_use(ctx, name):
-        """Switch to a different workspace."""
-        from caracal.deployment.config_manager import ConfigManager
-        
-        try:
-            config_mgr = ConfigManager()
-            config_mgr.set_default_workspace(name)
-            
-            click.echo(f"✓ Switched to workspace: {click.style(name, fg='cyan', bold=True)}")
-            
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
-
-
-    @workspace.command(name='current')
-    @click.pass_context
-    def workspace_current(ctx):
-        """Show current workspace."""
-        active_ws = ctx.obj['workspace']
-        click.echo(active_ws)
-
-
-    @workspace.command(name='delete')
-    @click.argument('name')
-    @click.option('--force', is_flag=True, help='Skip confirmation')
-    @click.pass_context
-    def workspace_delete(ctx, name, force):
-        """Delete a workspace."""
-        from caracal.deployment.config_manager import ConfigManager
-        
-        if not force:
-            if not click.confirm(f"Delete workspace '{name}'? This cannot be undone."):
-                click.echo("Cancelled")
+        if format == 'json':
+            data = [
+                {
+                    'name': ws.name,
+                    'active': ws.is_default,
+                    'sync_enabled': ws.sync_enabled,
+                    'created': ws.created_at.isoformat() if ws.created_at else None
+                }
+                for ws in workspaces
+            ]
+            click.echo(json_lib.dumps(data, indent=2))
+        else:
+            if not workspaces:
+                click.echo("No workspaces found. Run 'caracal init' to create default workspace.")
                 return
+            
+            click.echo()
+            click.echo(click.style("WORKSPACES", bold=True))
+            click.echo()
+            for ws in workspaces:
+                marker = click.style("●", fg='green') if ws.is_default else " "
+                sync_status = click.style("synced", fg='cyan') if ws.sync_enabled else click.style("local", fg='yellow')
+                click.echo(f"  {marker} {click.style(ws.name, bold=True)} ({sync_status})")
+            click.echo()
+            
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@workspace.command(name='create')
+@click.argument('name')
+@click.option('--template', type=click.Choice(['none', 'enterprise', 'local-dev']), default='none')
+@click.pass_context
+def workspace_create(ctx, name, template):
+    """Create a new workspace."""
+    from caracal.deployment.config_manager import ConfigManager
+    
+    try:
+        config_mgr = ConfigManager()
+        template_val = None if template == 'none' else template
+        config_mgr.create_workspace(name, template=template_val)
         
-        try:
-            config_mgr = ConfigManager()
-            config_mgr.delete_workspace(name, backup=True)
-            
-            click.echo(f"✓ Workspace '{name}' deleted (backup created)")
-            
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            sys.exit(1)
+        click.echo(f"✓ Workspace '{click.style(name, fg='cyan', bold=True)}' created")
+        click.echo(f"  Switch to it: caracal workspace use {name}")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@workspace.command(name='use')
+@click.argument('name')
+@click.pass_context
+def workspace_use(ctx, name):
+    """Switch to a different workspace."""
+    from caracal.deployment.config_manager import ConfigManager
+    
+    try:
+        config_mgr = ConfigManager()
+        config_mgr.set_default_workspace(name)
+        
+        click.echo(f"✓ Switched to workspace: {click.style(name, fg='cyan', bold=True)}")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@workspace.command(name='current')
+@click.pass_context
+def workspace_current(ctx):
+    """Show current workspace."""
+    active_ws = ctx.obj['workspace']
+    click.echo(active_ws)
+
+
+@workspace.command(name='delete')
+@click.argument('name')
+@click.option('--force', is_flag=True, help='Skip confirmation')
+@click.pass_context
+def workspace_delete(ctx, name, force):
+    """Delete a workspace."""
+    from caracal.deployment.config_manager import ConfigManager
+    
+    if not force:
+        if not click.confirm(f"Delete workspace '{name}'? This cannot be undone."):
+            click.echo("Cancelled")
+            return
+    
+    try:
+        config_mgr = ConfigManager()
+        config_mgr.delete_workspace(name, backup=True)
+        
+        click.echo(f"✓ Workspace '{name}' deleted (backup created)")
+        
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 # =============================================================================
@@ -564,10 +551,17 @@ def sync(ctx):
 
 
 try:
-    from caracal.cli.deployment_cli import sync_group
-    # Import commands from the sync group
-    for cmd in sync_group.commands.values():
-        sync.add_command(cmd)
+    from caracal.cli.deployment_cli import (
+        sync_connect, sync_disconnect, sync_now, sync_status,
+        sync_conflicts, sync_auto_enable, sync_auto_disable
+    )
+    sync.add_command(sync_connect, name='connect')
+    sync.add_command(sync_disconnect, name='disconnect')
+    sync.add_command(sync_now, name='now')
+    sync.add_command(sync_status, name='status')
+    sync.add_command(sync_conflicts, name='conflicts')
+    sync.add_command(sync_auto_enable, name='auto-enable')
+    sync.add_command(sync_auto_disable, name='auto-disable')
 except ImportError:
     pass
 
@@ -594,10 +588,15 @@ def config(ctx):
 
 
 try:
-    from caracal.cli.deployment_cli import config_group
-    # Import commands from the config group
-    for cmd in config_group.commands.values():
-        config.add_command(cmd)
+    from caracal.cli.deployment_cli import (
+        config_list, config_get, config_set,
+        config_mode, config_edition
+    )
+    config.add_command(config_list, name='list')
+    config.add_command(config_get, name='get')
+    config.add_command(config_set, name='set')
+    config.add_command(config_mode, name='mode')
+    config.add_command(config_edition, name='edition')
 except ImportError:
     pass
 
@@ -625,10 +624,13 @@ def provider(ctx):
 
 
 try:
-    from caracal.cli.deployment_cli import provider_group
-    # Import commands from the provider group
-    for cmd in provider_group.commands.values():
-        provider.add_command(cmd)
+    from caracal.cli.deployment_cli import (
+        provider_list, provider_add, provider_test, provider_remove
+    )
+    provider.add_command(provider_list, name='list')
+    provider.add_command(provider_add, name='add')
+    provider.add_command(provider_test, name='test')
+    provider.add_command(provider_remove, name='remove')
 except ImportError:
     pass
 
