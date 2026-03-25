@@ -84,6 +84,9 @@ def create(
     
     Defines rules for how mandates can be issued to a principal,
     including scope limits and validity period constraints.
+
+    If the principal UUID does not exist yet, this command will auto-provision
+    a principal record (preferring agent registry metadata when available).
     
     Examples:
     
@@ -118,8 +121,11 @@ def create(
             sys.exit(1)
         
         # Validate max_validity_seconds
-            if max_validity_seconds <= 0:
-                click.echo(f"Error: Max mandate validity seconds must be positive, got {max_validity_seconds}", err=True)
+        if max_validity_seconds <= 0:
+            click.echo(
+                f"Error: Max mandate validity seconds must be positive, got {max_validity_seconds}",
+                err=True,
+            )
             sys.exit(1)
         
         # Validate max_delegation_depth
@@ -134,6 +140,8 @@ def create(
         # Create database connection
         from caracal.db.connection import get_db_manager
         from caracal.db.models import AuthorityPolicy, Principal
+        from caracal.core.identity import AgentRegistry
+        from pathlib import Path
         from uuid import uuid4
         
         db_manager = get_db_manager(cli_ctx.config)
@@ -145,10 +153,40 @@ def create(
             principal = session.query(Principal).filter(
                 Principal.principal_id == principal_uuid
             ).first()
-            
+
+            principal_auto_created = False
             if not principal:
-                click.echo(f"Error: Principal not found: {principal_id}", err=True)
-                sys.exit(1)
+                # Auto-provision principal so policy workflows can be executed via CLI
+                # without requiring separate, hidden setup steps.
+                principal_name = f"principal-{principal_uuid}"
+                principal_owner = "unknown"
+                principal_type = "agent"
+
+                try:
+                    registry_path = Path(cli_ctx.config.storage.agent_registry).expanduser()
+                    backup_count = cli_ctx.config.storage.backup_count
+                    registry = AgentRegistry(str(registry_path), backup_count=backup_count)
+                    agent = registry.get_agent(str(principal_uuid))
+                    if agent:
+                        principal_name = agent.name
+                        principal_owner = agent.owner
+                except Exception:
+                    # Best-effort enrichment only; fallback values are safe.
+                    pass
+
+                principal = Principal(
+                    principal_id=principal_uuid,
+                    name=principal_name,
+                    principal_type=principal_type,
+                    owner=principal_owner,
+                    principal_metadata={
+                        "auto_provisioned": True,
+                        "source": "caracal policy create",
+                    },
+                )
+                session.add(principal)
+                session.flush()
+                principal_auto_created = True
             
             # Create policy
             policy = AuthorityPolicy(
@@ -193,6 +231,8 @@ def create(
                 click.echo(f"Max Delegation Depth:   {policy.max_delegation_depth}")
                 click.echo(f"Active:                 {'Yes' if policy.active else 'No'}")
                 click.echo(f"Created:                {policy.created_at}")
+                if principal_auto_created:
+                    click.echo("Principal Record:       Auto-provisioned")
         
         finally:
             # Close database connection

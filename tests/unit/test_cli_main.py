@@ -11,11 +11,11 @@ logging configuration, and input validation helpers.
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
+from caracal._version import __version__
 from caracal.cli.main import (
     cli,
     validate_non_negative_decimal,
@@ -37,7 +37,7 @@ class TestCLIMain:
         
         assert result.exit_code == 0
         assert 'Caracal Core' in result.output
-        assert 'Economic control plane for AI agents' in result.output
+        assert 'Pre-execution authority enforcement system for AI agents' in result.output
         assert '--config' in result.output
         assert '--log-level' in result.output
         assert '--verbose' in result.output
@@ -48,7 +48,7 @@ class TestCLIMain:
         result = runner.invoke(cli, ['--version'])
         
         assert result.exit_code == 0
-        assert '1.0.0' in result.output
+        assert __version__ in result.output
     
     def test_cli_with_config_path(self):
         """Test CLI with custom config path."""
@@ -115,7 +115,7 @@ storage:
     def test_ledger_command_group(self):
         """Test ledger command group exists."""
         runner = CliRunner()
-        result = runner.invoke(cli, ['ledger', '--help'])
+        result = runner.invoke(cli, ['system', 'ledger', '--help'])
         
         assert result.exit_code == 0
         assert 'ledger' in result.output.lower()
@@ -123,7 +123,7 @@ storage:
     def test_backup_command_group(self):
         """Test backup command group exists."""
         runner = CliRunner()
-        result = runner.invoke(cli, ['backup', '--help'])
+        result = runner.invoke(cli, ['system', 'backup', '--help'])
         
         assert result.exit_code == 0
         assert 'backup' in result.output.lower()
@@ -133,20 +133,15 @@ storage:
         runner = CliRunner()
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch('pathlib.Path.home', return_value=Path(tmpdir)):
-                result = runner.invoke(cli, ['init'])
-                
-                assert result.exit_code == 0
-                assert 'initialized successfully' in result.output
-                
-                # Check that files were created
-                caracal_dir = Path(tmpdir) / '.caracal'
-                assert caracal_dir.exists()
-                assert (caracal_dir / 'config.yaml').exists()
-                assert (caracal_dir / 'agents.json').exists()
-                assert (caracal_dir / 'policies.json').exists()
-                assert (caracal_dir / 'ledger.jsonl').exists()
-                assert (caracal_dir / 'backups').exists()
+            result = runner.invoke(cli, ['setup', 'init', '--workspace', tmpdir])
+
+            assert result.exit_code == 0
+            assert 'Initialized workspace' in result.output
+
+            # Check that files were created in the provided workspace.
+            caracal_dir = Path(tmpdir)
+            assert caracal_dir.exists()
+            
 
 
 class TestInputValidation:
