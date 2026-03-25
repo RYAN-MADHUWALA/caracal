@@ -77,7 +77,7 @@ class TestAgentOperations:
     async def test_delegate_authority(self, scoped_setup):
         ctx, adapter, _ = scoped_setup
         result = await ctx.agents.delegate_authority(
-            source_agent_id="a1", target_agent_id="child1",
+            source_principal_id="a1", target_principal_id="child1",
         )
         assert result["id"] == "child1"
         assert adapter.sent_requests[0].path == "/agents/a1/delegate"

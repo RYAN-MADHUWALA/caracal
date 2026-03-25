@@ -32,7 +32,7 @@ class TestLedgerEvent:
         )
         
         assert event.event_id == 1
-        assert event.agent_id == "test-agent-123"
+        assert event.principal_id == "test-agent-123"
         assert event.resource_type == "openai.gpt-5.2.input_tokens"
         assert event.quantity == "1"
         assert event.metadata == {"model": "gpt-5.2"}
@@ -101,7 +101,7 @@ class TestLedgerWriter:
         )
         
         assert event.event_id == 1
-        assert event.agent_id == "test-agent-123"
+        assert event.principal_id == "test-agent-123"
         assert event.resource_type == "openai.gpt-5.2.input_tokens"
         assert event.quantity == "1"
         
@@ -318,8 +318,8 @@ class TestLedgerQuery:
         events = query.get_events()
         
         assert len(events) == 2
-        assert events[0].agent_id == "agent-1"
-        assert events[1].agent_id == "agent-2"
+        assert events[0].principal_id == "agent-1"
+        assert events[1].principal_id == "agent-2"
     
     def test_get_events_filter_by_agent_id(self, temp_dir):
         """Test filtering events by agent ID."""
@@ -350,7 +350,7 @@ class TestLedgerQuery:
         events = query.get_events(agent_id="agent-1")
         
         assert len(events) == 2
-        assert all(e.agent_id == "agent-1" for e in events)
+        assert all(e.principal_id == "agent-1" for e in events)
     
     def test_get_events_filter_by_resource_type(self, temp_dir):
         """Test filtering events by resource type."""
@@ -469,7 +469,7 @@ class TestLedgerQuery:
         )
         
         assert len(events) == 1
-        assert events[0].agent_id == "agent-1"
+        assert events[0].principal_id == "agent-1"
         assert events[0].resource_type == "resource-1"
     
     def test_get_events_handles_malformed_json(self, temp_dir):
@@ -489,5 +489,5 @@ class TestLedgerQuery:
         events = query.get_events()
         
         assert len(events) == 2
-        assert events[0].agent_id == "agent-1"
-        assert events[1].agent_id == "agent-2"
+        assert events[0].principal_id == "agent-1"
+        assert events[1].principal_id == "agent-2"
