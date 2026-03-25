@@ -117,7 +117,7 @@ class TestPrincipalIdentityProperties:
         restored_identity = PrincipalIdentity.from_dict(identity_dict)
         
         # Verify all fields match
-        assert restored_identity.agent_id == identity.agent_id
+        assert restored_identity.principal_id == identity.principal_id
         assert restored_identity.name == identity.name
         assert restored_identity.owner == identity.owner
         assert restored_identity.created_at == identity.created_at

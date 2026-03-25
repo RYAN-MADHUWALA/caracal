@@ -86,13 +86,13 @@ async def main():
             name="demo-mcp-agent",
             owner="demo-user"
         )
-        print(f"✓ Agent registered: {agent.name} ({agent.agent_id})")
+        print(f"✓ Agent registered: {agent.name} ({agent.principal_id})")
         print()
         
         # Create budget policy
         print("Creating budget policy...")
         policy = policy_store.create_policy(
-            agent_id=agent.agent_id,
+            agent_id=agent.principal_id,
             limit_amount=Decimal("10.00"),
             time_window="daily"
         )
@@ -101,7 +101,7 @@ async def main():
         
         # Create MCP context
         context = MCPContext(
-            agent_id=agent.agent_id,
+            agent_id=agent.principal_id,
             metadata={"source": "demo", "environment": "test"}
         )
         
@@ -189,7 +189,7 @@ async def main():
         
         from datetime import datetime, timedelta
         events = ledger_query.get_events(
-            agent_id=agent.agent_id,
+            agent_id=agent.principal_id,
             start_time=datetime.utcnow() - timedelta(minutes=1),
             end_time=datetime.utcnow() + timedelta(minutes=1)
         )

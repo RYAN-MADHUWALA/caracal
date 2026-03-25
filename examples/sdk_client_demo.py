@@ -77,14 +77,14 @@ logging:
             owner="demo@example.com",
             metadata={"purpose": "SDK demonstration"}
         )
-        print(f"   ✓ Agent registered: {agent.agent_id}")
+        print(f"   ✓ Agent registered: {agent.principal_id}")
         print(f"   ✓ Agent name: {agent.name}")
         print(f"   ✓ Agent owner: {agent.owner}")
         
         # 3. Create a budget policy
         print("\n3. Creating budget policy...")
         policy = client.policy_store.create_policy(
-            agent_id=agent.agent_id,
+            agent_id=agent.principal_id,
             limit_amount=Decimal("100.00"),
             time_window="daily"
         )
@@ -93,18 +93,18 @@ logging:
         
         # 4. Check budget (should pass - no spending yet)
         print("\n4. Checking budget...")
-        is_within_budget = client.check_budget(agent.agent_id)
+        is_within_budget = client.check_budget(agent.principal_id)
         print(f"   ✓ Budget check result: {is_within_budget}")
         
         # 5. Get remaining budget
         print("\n5. Getting remaining budget...")
-        remaining = client.get_remaining_budget(agent.agent_id)
+        remaining = client.get_remaining_budget(agent.principal_id)
         print(f"   ✓ Remaining budget: ${remaining}")
         
         # 6. Emit a metering event
         print("\n6. Emitting metering event...")
         client.emit_event(
-            agent_id=agent.agent_id,
+            agent_id=agent.principal_id,
             resource_type="openai.gpt-5.2.input_tokens",
             quantity=Decimal("1"),
             metadata={
@@ -117,19 +117,19 @@ logging:
         
         # 7. Check budget again
         print("\n7. Checking budget after event...")
-        is_within_budget = client.check_budget(agent.agent_id)
+        is_within_budget = client.check_budget(agent.principal_id)
         print(f"   ✓ Budget check result: {is_within_budget}")
         
         # 8. Get remaining budget again
         print("\n8. Getting remaining budget after event...")
-        remaining = client.get_remaining_budget(agent.agent_id)
+        remaining = client.get_remaining_budget(agent.principal_id)
         print(f"   ✓ Remaining budget: ${remaining}")
         
         # 9. Emit more events
         print("\n9. Emitting multiple events...")
         for i in range(3):
             client.emit_event(
-                agent_id=agent.agent_id,
+                agent_id=agent.principal_id,
                 resource_type="openai.gpt-5.2.output_tokens",
                 quantity=Decimal("1"),
                 metadata={"request_id": f"demo_req_{i+2:03d}"}
@@ -139,13 +139,13 @@ logging:
         
         # 10. Final budget check
         print("\n10. Final budget status...")
-        remaining = client.get_remaining_budget(agent.agent_id)
+        remaining = client.get_remaining_budget(agent.principal_id)
         print(f"   ✓ Remaining budget: ${remaining}")
         print(f"   ✓ Total spent: ${Decimal('100.00') - remaining}")
         
         # 11. Query ledger
         print("\n11. Querying ledger...")
-        events = client.ledger_query.get_events(agent_id=agent.agent_id)
+        events = client.ledger_query.get_events(agent_id=agent.principal_id)
         print(f"   ✓ Total events in ledger: {len(events)}")
         
         print("\n" + "=" * 60)
