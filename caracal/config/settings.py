@@ -127,7 +127,7 @@ def _has_encrypted_values(value: Any) -> bool:
 class StorageConfig:
     """Storage configuration for file paths."""
     
-    agent_registry: str
+    principal_registry: str
     policy_store: str
     ledger: str
     backup_dir: str
@@ -356,7 +356,7 @@ def get_default_config() -> CaracalConfig:
     home_dir = str(ws.root)
     
     storage = StorageConfig(
-        agent_registry=str(ws.agents_path),
+        principal_registry=str(ws.agents_path),
         policy_store=str(ws.policies_path),
         ledger=str(ws.ledger_path),
         backup_dir=str(ws.backups_dir),
@@ -490,8 +490,8 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
     
     # Expand paths with user home directory
     storage = StorageConfig(
-        agent_registry=os.path.expanduser(
-            storage_data.get('agent_registry', default_config.storage.agent_registry)
+        principal_registry=os.path.expanduser(
+            storage_data.get('principal_registry', default_config.storage.principal_registry)
         ),
         policy_store=os.path.expanduser(
             storage_data.get('policy_store', default_config.storage.policy_store)
@@ -707,9 +707,9 @@ def _validate_config(config: CaracalConfig) -> None:
         InvalidConfigurationError: If configuration is invalid
     """
     # Validate storage paths are not empty
-    if not config.storage.agent_registry:
-        logger.error("Configuration validation failed: agent_registry path cannot be empty")
-        raise InvalidConfigurationError("agent_registry path cannot be empty")
+    if not config.storage.principal_registry:
+        logger.error("Configuration validation failed: principal_registry path cannot be empty")
+        raise InvalidConfigurationError("principal_registry path cannot be empty")
     if not config.storage.policy_store:
         logger.error("Configuration validation failed: policy_store path cannot be empty")
         raise InvalidConfigurationError("policy_store path cannot be empty")
@@ -717,9 +717,9 @@ def _validate_config(config: CaracalConfig) -> None:
         logger.error("Configuration validation failed: ledger path cannot be empty")
         raise InvalidConfigurationError("ledger path cannot be empty")
     # Validate agent registry path is not empty
-    if not config.storage.agent_registry:
-        logger.error("Configuration validation failed: agent_registry path cannot be empty")
-        raise InvalidConfigurationError("agent_registry path cannot be empty")
+    if not config.storage.principal_registry:
+        logger.error("Configuration validation failed: principal_registry path cannot be empty")
+        raise InvalidConfigurationError("principal_registry path cannot be empty")
     
     # Validate backup count is positive
     if config.storage.backup_count < 1:

@@ -542,7 +542,7 @@ async def main():
     session = db_manager.get_session()
     
     # Initialize core components
-    agent_registry = AgentRegistry(session)
+    principal_registry = AgentRegistry(session)
     ledger_writer = LedgerWriter(session)
     authority_ledger_writer = AuthorityLedgerWriter(session)
     

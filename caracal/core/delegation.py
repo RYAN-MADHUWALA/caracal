@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from caracal.exceptions import (
-    AgentNotFoundError,
+    PrincipalNotFoundError,
     InvalidDelegationTokenError,
     TokenExpiredError,
     TokenValidationError,
@@ -85,14 +85,14 @@ class DelegationTokenManager:
     
     """
 
-    def __init__(self, agent_registry):
+    def __init__(self, principal_registry):
         """
         Initialize DelegationTokenManager.
         
         Args:
-            agent_registry: AgentRegistry instance for key management
+            principal_registry: PrincipalRegistry instance for key management
         """
-        self.agent_registry = agent_registry
+        self.principal_registry = principal_registry
         logger.info("DelegationTokenManager initialized")
 
     def generate_key_pair(self) -> tuple[bytes, bytes]:
@@ -126,8 +126,8 @@ class DelegationTokenManager:
 
     def generate_token(
         self,
-        source_agent_id: UUID,
-        target_agent_id: UUID,
+        source_principal_id: UUID,
+        target_principal_id: UUID,
         expiration_seconds: int = 86400,
         allowed_operations: Optional[List[str]] = None,
         delegation_type: str = "hierarchical",
@@ -143,8 +143,8 @@ class DelegationTokenManager:
         ECDSA P-256 (ES256) algorithm.
         
         Args:
-            source_agent_id: Source principal ID (issuer/delegator)
-            target_agent_id: Target principal ID (subject/delegate)
+            source_principal_id: Source principal ID (issuer/delegator)
+            target_principal_id: Target principal ID (subject/delegate)
             expiration_seconds: Token validity duration (default: 86400 = 24 hours)
             allowed_operations: List of allowed operations (default: ["api_call", "mcp_tool"])
             delegation_type: Type of delegation (hierarchical/peer)
@@ -157,26 +157,26 @@ class DelegationTokenManager:
             JWT token string
             
         Raises:
-            AgentNotFoundError: If source principal does not exist
+            PrincipalNotFoundError: If source principal does not exist
             InvalidDelegationTokenError: If source principal has no private key
             
         """
         # Get source agent
-        source_agent = self.agent_registry.get_agent(str(source_agent_id))
-        if source_agent is None:
-            logger.error(f"Source principal not found: {source_agent_id}")
-            raise AgentNotFoundError(
-                f"Source principal with ID '{source_agent_id}' does not exist"
+        source_principal = self.principal_registry.get_principal(str(source_principal_id))
+        if source_principal is None:
+            logger.error(f"Source principal not found: {source_principal_id}")
+            raise PrincipalNotFoundError(
+                f"Source principal with ID '{source_principal_id}' does not exist"
             )
         
         # Get source agent's private key from metadata
-        if source_agent.metadata is None or "private_key_pem" not in source_agent.metadata:
-            logger.error(f"Source principal {source_agent_id} has no private key")
+        if source_principal.metadata is None or "private_key_pem" not in source_principal.metadata:
+            logger.error(f"Source principal {source_principal_id} has no private key")
             raise InvalidDelegationTokenError(
-                f"Source principal '{source_agent_id}' has no private key for signing"
+                f"Source principal '{source_principal_id}' has no private key for signing"
             )
         
-        private_key_pem = source_agent.metadata["private_key_pem"]
+        private_key_pem = source_principal.metadata["private_key_pem"]
         
         # Load private key
         try:
@@ -186,9 +186,9 @@ class DelegationTokenManager:
                 backend=default_backend()
             )
         except Exception as e:
-            logger.error(f"Failed to load private key for principal {source_agent_id}: {e}")
+            logger.error(f"Failed to load private key for principal {source_principal_id}: {e}")
             raise InvalidDelegationTokenError(
-                f"Failed to load private key for principal '{source_agent_id}': {e}"
+                f"Failed to load private key for principal '{source_principal_id}': {e}"
             ) from e
         
         # Set default allowed operations
@@ -206,8 +206,8 @@ class DelegationTokenManager:
         # Build JWT payload
         payload = {
             # Standard JWT claims
-            "iss": str(source_agent_id),
-            "sub": str(target_agent_id),
+            "iss": str(source_principal_id),
+            "sub": str(target_principal_id),
             "aud": "caracal-core",
             "exp": int(expiration.timestamp()),
             "iat": int(now.timestamp()),
@@ -230,7 +230,7 @@ class DelegationTokenManager:
         headers = {
             "alg": "ES256",
             "typ": "JWT",
-            "kid": str(source_agent_id)
+            "kid": str(source_principal_id)
         }
         
         # Sign token with ES256 (ECDSA P-256)
@@ -273,7 +273,7 @@ class DelegationTokenManager:
         Raises:
             TokenValidationError: If token is invalid or signature verification fails
             TokenExpiredError: If token has expired
-            AgentNotFoundError: If issuer agent does not exist
+            PrincipalNotFoundError: If issuer agent does not exist
             
         """
         try:
@@ -296,11 +296,11 @@ class DelegationTokenManager:
                 raise error
             
             # Get issuer agent
-            issuer_agent = self.agent_registry.get_agent(issuer_id)
+            issuer_agent = self.principal_registry.get_principal(issuer_id)
             if issuer_agent is None:
                 # Fail closed: deny if issuer agent doesn't exist (Requirement 23.3)
                 error_handler = get_error_handler("delegation-token-manager")
-                error = AgentNotFoundError(f"Issuer agent with ID '{issuer_id}' does not exist")
+                error = PrincipalNotFoundError(f"Issuer agent with ID '{issuer_id}' does not exist")
                 error_handler.handle_error(
                     error=error,
                     category=ErrorCategory.DELEGATION,
@@ -438,7 +438,7 @@ class DelegationTokenManager:
             
             return claims
             
-        except (TokenValidationError, TokenExpiredError, AgentNotFoundError):
+        except (TokenValidationError, TokenExpiredError, PrincipalNotFoundError):
             # Re-raise known exceptions
             raise
         except Exception as e:
