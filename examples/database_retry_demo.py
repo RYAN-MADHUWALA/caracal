@@ -42,13 +42,13 @@ def query_agent_by_id(session, agent_id):
     from sqlalchemy import select
     from caracal.db.models import AgentIdentity
     
-    stmt = select(AgentIdentity).where(AgentIdentity.agent_id == agent_id)
+    stmt = select(AgentIdentity).where(AgentIdentity.principal_id == agent_id)
     result = session.execute(stmt)
     return result.scalar_one_or_none()
 
 
 @retry_database_operation(max_retries=3)
-def create_agent(session, name, owner):
+def create_principal(session, name, owner):
     """
     Create a new agent with automatic retry on transient failures.
     """
@@ -76,7 +76,7 @@ def calculate_spending(session, agent_id, start_time, end_time):
     
     stmt = (
         select(func.sum(LedgerEvent.cost))
-        .where(LedgerEvent.agent_id == agent_id)
+        .where(LedgerEvent.principal_id == agent_id)
         .where(LedgerEvent.timestamp >= start_time)
         .where(LedgerEvent.timestamp <= end_time)
     )
@@ -147,14 +147,14 @@ def update_with_optimistic_locking(session, agent_id, new_value):
     from caracal.db.models import AgentIdentity
     
     # Query current version
-    stmt = select(AgentIdentity).where(AgentIdentity.agent_id == agent_id)
+    stmt = select(AgentIdentity).where(AgentIdentity.principal_id == agent_id)
     result = session.execute(stmt)
     agent = result.scalar_one()
     
     # Update with version check
     stmt = (
         update(AgentIdentity)
-        .where(AgentIdentity.agent_id == agent_id)
+        .where(AgentIdentity.principal_id == agent_id)
         .values(metadata=new_value)
     )
     session.execute(stmt)

@@ -193,7 +193,7 @@ class TestMeteringEventProperties:
         restored_event = MeteringEvent.from_dict(event_dict)
         
         # Verify all fields match
-        assert restored_event.agent_id == event.agent_id
+        assert restored_event.principal_id == event.principal_id
         assert restored_event.resource_type == event.resource_type
         assert restored_event.quantity == event.quantity
         assert restored_event.metadata == event.metadata

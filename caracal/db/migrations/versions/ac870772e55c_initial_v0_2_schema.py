@@ -38,15 +38,15 @@ def upgrade() -> None:
         sa.Column('name', sa.String(length=255), nullable=False),
         sa.Column('owner', sa.String(length=255), nullable=False),
         sa.Column('created_at', sa.DateTime(), nullable=False),
-        sa.Column('parent_principal_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('source_principal_id', postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column('metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column('api_key_hash', sa.String(length=255), nullable=True),
-        sa.ForeignKeyConstraint(['parent_principal_id'], ['principal_identities.principal_id'], ),
+        sa.ForeignKeyConstraint(['source_principal_id'], ['principal_identities.principal_id'], ),
         sa.PrimaryKeyConstraint('principal_id'),
         sa.UniqueConstraint('name')
     )
     op.create_index(op.f('ix_principal_identities_name'), 'principal_identities', ['name'], unique=False)
-    op.create_index(op.f('ix_principal_identities_parent_principal_id'), 'principal_identities', ['parent_principal_id'], unique=False)
+    op.create_index(op.f('ix_principal_identities_source_principal_id'), 'principal_identities', ['source_principal_id'], unique=False)
     
     # Create budget_policies table
     op.create_table(
@@ -125,6 +125,6 @@ def downgrade() -> None:
     op.drop_index('ix_budget_policies_agent_active', table_name='budget_policies')
     op.drop_table('budget_policies')
     
-    op.drop_index(op.f('ix_principal_identities_parent_principal_id'), table_name='principal_identities')
+    op.drop_index(op.f('ix_principal_identities_source_principal_id'), table_name='principal_identities')
     op.drop_index(op.f('ix_principal_identities_name'), table_name='principal_identities')
     op.drop_table('principal_identities')
