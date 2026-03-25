@@ -103,7 +103,7 @@ class TestConfigurationLoading:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             yaml.dump({
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
                     'backup_dir': '/tmp/backups',
@@ -135,7 +135,7 @@ class TestConfigurationLoading:
             config = load_config(config_path)
             
             # Verify storage
-            assert config.storage.agent_registry == '/tmp/agents.json'
+            assert config.storage.principal_registry == '/tmp/agents.json'
             
             # Verify Redis
             assert config.redis.host == 'redis.example.com'
@@ -261,7 +261,7 @@ class TestEnvironmentVariableSubstitution:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             yaml.dump({
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
                     'backup_dir': '/tmp/backups',
@@ -283,7 +283,7 @@ class TestEnvironmentVariableSubstitution:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             yaml.dump({
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
                     'backup_dir': '/tmp/backups',

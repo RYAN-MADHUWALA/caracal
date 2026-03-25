@@ -14,9 +14,9 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from caracal.core.delegation import DelegationTokenManager, DelegationTokenClaims
-from caracal.core.identity import AgentRegistry, AgentIdentity
+from caracal.core.identity import PrincipalRegistry, PrincipalIdentity
 from caracal.exceptions import (
-    AgentNotFoundError,
+    PrincipalNotFoundError,
     InvalidDelegationTokenError,
     TokenExpiredError,
     TokenValidationError,
@@ -30,24 +30,24 @@ def temp_registry_path(tmp_path):
 
 
 @pytest.fixture
-def agent_registry(temp_registry_path):
+def principal_registry(temp_registry_path):
     """Create agent registry with delegation token manager."""
-    delegation_manager = DelegationTokenManager(agent_registry=None)
-    registry = AgentRegistry(temp_registry_path, delegation_token_manager=delegation_manager)
-    delegation_manager.agent_registry = registry
+    delegation_manager = DelegationTokenManager(principal_registry=None)
+    registry = PrincipalRegistry(temp_registry_path, delegation_token_manager=delegation_manager)
+    delegation_manager.principal_registry = registry
     return registry
 
 
 @pytest.fixture
-def delegation_manager(agent_registry):
+def delegation_manager(principal_registry):
     """Get delegation token manager from registry."""
-    return agent_registry.delegation_token_manager
+    return principal_registry.delegation_token_manager
 
 
 @pytest.fixture
-def parent_agent(agent_registry):
+def parent_agent(principal_registry):
     """Create source agent with keys."""
-    return agent_registry.register_agent(
+    return principal_registry.register_agent(
         name="parent-agent",
         owner="parent@example.com",
         generate_keys=True
@@ -55,9 +55,9 @@ def parent_agent(agent_registry):
 
 
 @pytest.fixture
-def child_agent(agent_registry, parent_agent):
+def child_agent(principal_registry, parent_agent):
     """Create target agent with keys."""
-    return agent_registry.register_agent(
+    return principal_registry.register_agent(
         name="child-agent",
         owner="child@example.com",
         generate_keys=True
@@ -98,16 +98,16 @@ class TestDelegationTokenManager:
         """Test token generation fails when source agent not found."""
         fake_parent_id = uuid4()
         
-        with pytest.raises(AgentNotFoundError):
+        with pytest.raises(PrincipalNotFoundError):
             delegation_manager.generate_token(
                 source_agent_id=fake_parent_id,
                 target_agent_id=UUID(child_agent.agent_id),
             )
     
-    def test_generate_token_no_private_key(self, agent_registry, delegation_manager, child_agent):
+    def test_generate_token_no_private_key(self, principal_registry, delegation_manager, child_agent):
         """Test token generation fails when parent has no private key."""
         # Create parent without keys
-        parent_no_keys = agent_registry.register_agent(
+        parent_no_keys = principal_registry.register_agent(
             name="parent-no-keys",
             owner="parent@example.com",
             generate_keys=False
@@ -171,7 +171,7 @@ class TestDelegationTokenManager:
         with pytest.raises(TokenValidationError):
             delegation_manager.validate_token(tampered_token)
     
-    def test_validate_token_issuer_not_found(self, delegation_manager, parent_agent, child_agent, agent_registry):
+    def test_validate_token_issuer_not_found(self, delegation_manager, parent_agent, child_agent, principal_registry):
         """Test token validation fails when issuer agent deleted."""
         # Generate token
         token = delegation_manager.generate_token(
@@ -180,18 +180,18 @@ class TestDelegationTokenManager:
         )
         
         # Remove source agent from registry (simulate deletion)
-        del agent_registry._agents[parent_agent.agent_id]
+        del principal_registry._agents[parent_agent.agent_id]
         
         # Validate should fail
-        with pytest.raises(AgentNotFoundError):
+        with pytest.raises(PrincipalNotFoundError):
             delegation_manager.validate_token(token)
     
-class TestAgentRegistryDelegation:
-    """Test AgentRegistry delegation token integration."""
+class TestPrincipalRegistryDelegation:
+    """Test PrincipalRegistry delegation token integration."""
     
-    def test_register_agent_generates_keys(self, agent_registry):
+    def test_register_agent_generates_keys(self, principal_registry):
         """Test agent registration generates key pair."""
-        agent = agent_registry.register_agent(
+        agent = principal_registry.register_agent(
             name="test-agent",
             owner="test@example.com",
             generate_keys=True
@@ -203,9 +203,9 @@ class TestAgentRegistryDelegation:
         assert agent.metadata["private_key_pem"].startswith("-----BEGIN PRIVATE KEY-----")
         assert agent.metadata["public_key_pem"].startswith("-----BEGIN PUBLIC KEY-----")
     
-    def test_register_agent_no_keys(self, agent_registry):
+    def test_register_agent_no_keys(self, principal_registry):
         """Test agent registration without key generation."""
-        agent = agent_registry.register_agent(
+        agent = principal_registry.register_agent(
             name="test-agent-no-keys",
             owner="test@example.com",
             generate_keys=False
@@ -215,9 +215,9 @@ class TestAgentRegistryDelegation:
         assert "private_key_pem" not in agent.metadata
         assert "public_key_pem" not in agent.metadata
     
-    def test_generate_delegation_token(self, agent_registry, parent_agent, child_agent):
+    def test_generate_delegation_token(self, principal_registry, parent_agent, child_agent):
         """Test delegation token generation via registry."""
-        token = agent_registry.generate_delegation_token(
+        token = principal_registry.generate_delegation_token(
             source_agent_id=parent_agent.agent_id,
             target_agent_id=child_agent.agent_id,
         )
@@ -227,29 +227,29 @@ class TestAgentRegistryDelegation:
         assert isinstance(token, str)
         
         # Verify token metadata stored in target agent
-        child = agent_registry.get_agent(child_agent.agent_id)
+        child = principal_registry.get_agent(child_agent.agent_id)
         assert "delegation_tokens" in child.metadata
         assert len(child.metadata["delegation_tokens"]) == 1
         
         token_metadata = child.metadata["delegation_tokens"][0]
         assert token_metadata["source_agent_id"] == parent_agent.agent_id
     
-    def test_generate_delegation_token_parent_not_found(self, agent_registry, child_agent):
+    def test_generate_delegation_token_parent_not_found(self, principal_registry, child_agent):
         """Test delegation token generation fails when parent not found."""
         fake_parent_id = str(uuid4())
         
-        with pytest.raises(AgentNotFoundError):
-            agent_registry.generate_delegation_token(
+        with pytest.raises(PrincipalNotFoundError):
+            principal_registry.generate_delegation_token(
                 source_agent_id=fake_parent_id,
                 target_agent_id=child_agent.agent_id,
             )
     
-    def test_generate_delegation_token_child_not_found(self, agent_registry, parent_agent):
+    def test_generate_delegation_token_child_not_found(self, principal_registry, parent_agent):
         """Test delegation token generation fails when child not found."""
         fake_child_id = str(uuid4())
         
-        with pytest.raises(AgentNotFoundError):
-            agent_registry.generate_delegation_token(
+        with pytest.raises(PrincipalNotFoundError):
+            principal_registry.generate_delegation_token(
                 source_agent_id=parent_agent.agent_id,
                 target_agent_id=fake_child_id,
             )

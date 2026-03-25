@@ -39,31 +39,31 @@ class TestNativeImports:
         assert hasattr(MeteringEvent, 'matches_resource_pattern')
     
     def test_import_agent_identity(self):
-        """Test that AgentIdentity can be imported from caracal.core.identity."""
-        from caracal.core.identity import AgentIdentity
+        """Test that PrincipalIdentity can be imported from caracal.core.identity."""
+        from caracal.core.identity import PrincipalIdentity
         
         # Verify it's a class
-        assert isinstance(AgentIdentity, type)
+        assert isinstance(PrincipalIdentity, type)
         
         # Verify it has expected attributes
-        assert hasattr(AgentIdentity, 'agent_id')
-        assert hasattr(AgentIdentity, 'name')
-        assert hasattr(AgentIdentity, 'owner')
-        assert hasattr(AgentIdentity, 'created_at')
-        assert hasattr(AgentIdentity, 'metadata')
-        assert hasattr(AgentIdentity, 'public_key')
-        assert hasattr(AgentIdentity, 'org_id')
-        assert hasattr(AgentIdentity, 'role')
-        assert hasattr(AgentIdentity, 'verification_status')
-        assert hasattr(AgentIdentity, 'trust_level')
-        assert hasattr(AgentIdentity, 'capabilities')
-        assert hasattr(AgentIdentity, 'last_verified_at')
+        assert hasattr(PrincipalIdentity, 'agent_id')
+        assert hasattr(PrincipalIdentity, 'name')
+        assert hasattr(PrincipalIdentity, 'owner')
+        assert hasattr(PrincipalIdentity, 'created_at')
+        assert hasattr(PrincipalIdentity, 'metadata')
+        assert hasattr(PrincipalIdentity, 'public_key')
+        assert hasattr(PrincipalIdentity, 'org_id')
+        assert hasattr(PrincipalIdentity, 'role')
+        assert hasattr(PrincipalIdentity, 'verification_status')
+        assert hasattr(PrincipalIdentity, 'trust_level')
+        assert hasattr(PrincipalIdentity, 'capabilities')
+        assert hasattr(PrincipalIdentity, 'last_verified_at')
         
         # Verify it has expected methods
-        assert hasattr(AgentIdentity, 'to_dict')
-        assert hasattr(AgentIdentity, 'from_dict')
-        assert hasattr(AgentIdentity, 'has_capability')
-        assert hasattr(AgentIdentity, 'is_verified')
+        assert hasattr(PrincipalIdentity, 'to_dict')
+        assert hasattr(PrincipalIdentity, 'from_dict')
+        assert hasattr(PrincipalIdentity, 'has_capability')
+        assert hasattr(PrincipalIdentity, 'is_verified')
     
     def test_import_verification_status(self):
         """Test that VerificationStatus can be imported from caracal.core.identity."""

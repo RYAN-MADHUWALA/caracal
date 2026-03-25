@@ -44,7 +44,7 @@ class TestDefaultConfiguration:
         config = get_default_config()
         
         # Check storage paths
-        assert config.storage.agent_registry.endswith("agents.json")
+        assert config.storage.principal_registry.endswith("agents.json")
         assert config.storage.policy_store.endswith("policies.json")
         assert config.storage.ledger.endswith("ledger.jsonl")
 
@@ -86,7 +86,7 @@ class TestConfigurationLoading:
             # Create a valid config file
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -111,7 +111,7 @@ class TestConfigurationLoading:
             
             config = load_config(config_path)
             
-            assert config.storage.agent_registry == '/tmp/agents.json'
+            assert config.storage.principal_registry == '/tmp/agents.json'
             assert config.storage.backup_count == 5
 
             assert config.logging.level == 'DEBUG'
@@ -126,7 +126,7 @@ class TestConfigurationLoading:
             # Create a minimal config file (only storage)
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -140,7 +140,7 @@ class TestConfigurationLoading:
             config = load_config(config_path)
             
             # Storage should be from file
-            assert config.storage.agent_registry == '/tmp/agents.json'
+            assert config.storage.principal_registry == '/tmp/agents.json'
             
             # Defaults should be from default config
 
@@ -154,7 +154,7 @@ class TestConfigurationLoading:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '~/caracal/agents.json',
+                    'principal_registry': '~/caracal/agents.json',
                     'policy_store': '~/caracal/policies.json',
                     'ledger': '~/caracal/ledger.jsonl',
 
@@ -168,8 +168,8 @@ class TestConfigurationLoading:
             config = load_config(config_path)
             
             # Paths should be expanded
-            assert not config.storage.agent_registry.startswith('~')
-            assert os.path.expanduser('~') in config.storage.agent_registry
+            assert not config.storage.principal_registry.startswith('~')
+            assert os.path.expanduser('~') in config.storage.principal_registry
 
 
 class TestConfigurationValidation:
@@ -215,7 +215,7 @@ class TestConfigurationValidation:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -243,7 +243,7 @@ class TestConfigurationValidation:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -269,7 +269,7 @@ class TestConfigurationValidation:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -293,7 +293,7 @@ class TestConfigurationValidation:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -339,7 +339,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -374,7 +374,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -419,7 +419,7 @@ class TestAdvancedConfiguration:
             try:
                 config_data = {
                     'storage': {
-                        'agent_registry': '/tmp/agents.json',
+                        'principal_registry': '/tmp/agents.json',
                         'policy_store': '/tmp/policies.json',
                         'ledger': '/tmp/ledger.jsonl',
 
@@ -455,7 +455,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -481,7 +481,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -514,7 +514,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
@@ -547,7 +547,7 @@ class TestAdvancedConfiguration:
             
             config_data = {
                 'storage': {
-                    'agent_registry': '/tmp/agents.json',
+                    'principal_registry': '/tmp/agents.json',
                     'policy_store': '/tmp/policies.json',
                     'ledger': '/tmp/ledger.jsonl',
 
