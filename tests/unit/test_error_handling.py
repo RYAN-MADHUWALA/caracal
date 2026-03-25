@@ -40,7 +40,7 @@ class TestErrorContext:
             category=ErrorCategory.VALIDATION,
             severity=ErrorSeverity.HIGH,
             operation="test_operation",
-            agent_id="test-agent-123",
+            principal_id="test-agent-123",
             request_id="req-456",
             metadata={"key": "value"}
         )
@@ -63,7 +63,7 @@ class TestErrorContext:
             category=ErrorCategory.AUTHENTICATION,
             severity=ErrorSeverity.CRITICAL,
             operation="authenticate",
-            agent_id="agent-123"
+            principal_id="agent-123"
         )
         
         data = context.to_dict()
@@ -73,7 +73,7 @@ class TestErrorContext:
         assert data["category"] == "authentication"
         assert data["severity"] == "critical"
         assert data["operation"] == "authenticate"
-        assert data["agent_id"] == "agent-123"
+        assert data["principal_id"] == "agent-123"
         assert "timestamp" in data
         assert "stack_trace" in data  # Included for CRITICAL severity
 
@@ -177,7 +177,7 @@ class TestFailClosedErrorHandler:
             error=error,
             category=ErrorCategory.VALIDATION,
             operation="validate_input",
-            agent_id="agent-123",
+            principal_id="agent-123",
             request_id="req-456",
             metadata={"input": "invalid"}
         )
@@ -239,7 +239,7 @@ class TestFailClosedErrorHandler:
             error=error,
             category=ErrorCategory.DELEGATION,
             operation="validate_token",
-            agent_id="agent-123"
+            principal_id="agent-123"
         )
         
         response = handler.create_error_response(context, include_details=False)
@@ -312,7 +312,7 @@ class TestConvenienceFunctions:
             error=error,
             category=ErrorCategory.POLICY_EVALUATION,
             operation="evaluate_policy",
-            agent_id="agent-123"
+            principal_id="agent-123"
         )
         
         assert should_deny is True

@@ -22,7 +22,7 @@ from caracal.mcp.cost_calculator import MCPCostCalculator
 from caracal.core.policy import PolicyEvaluator, PolicyStore, PolicyDecision
 from caracal.core.metering import MeteringCollector, LedgerWriter
 from caracal.core.pricebook import Pricebook
-from caracal.core.identity import AgentRegistry
+from caracal.core.identity import PrincipalRegistry
 
 
 def setup_caracal_components():

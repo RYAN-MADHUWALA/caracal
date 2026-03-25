@@ -44,7 +44,7 @@ openai.gpt-5.2.cached_input_tokens,0.175,USD,2024-01-15T10:00:00Z
         config_path = temp_path / "config.yaml"
         config_content = f"""
 storage:
-  agent_registry: {temp_path}/agents.json
+  principal_registry: {temp_path}/agents.json
   policy_store: {temp_path}/policies.json
   ledger: {temp_path}/ledger.jsonl
   pricebook: {pricebook_path}
@@ -72,7 +72,7 @@ logging:
         
         # 2. Register an agent
         print("\n2. Registering an agent...")
-        agent = client.agent_registry.register_agent(
+        agent = client.principal_registry.register_principal(
             name="demo-agent",
             owner="demo@example.com",
             metadata={"purpose": "SDK demonstration"}
