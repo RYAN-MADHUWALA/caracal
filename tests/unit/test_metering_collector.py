@@ -154,7 +154,7 @@ class TestMeteringCollectorWithEnhancedTypes:
         
         # Create event with empty agent_id (bypassing MeteringEvent validation)
         event = MeteringEvent.__new__(MeteringEvent)
-        event.agent_id = ""
+        event.principal_id = ""
         event.resource_type = "test"
         event.quantity = Decimal("1")
         event.timestamp = datetime.utcnow()
@@ -174,7 +174,7 @@ class TestMeteringCollectorWithEnhancedTypes:
         
         # Create event with empty resource_type (bypassing MeteringEvent validation)
         event = MeteringEvent.__new__(MeteringEvent)
-        event.agent_id = "agent-123"
+        event.principal_id = "agent-123"
         event.resource_type = ""
         event.quantity = Decimal("1")
         event.timestamp = datetime.utcnow()
@@ -194,7 +194,7 @@ class TestMeteringCollectorWithEnhancedTypes:
         
         # Create event with negative quantity (bypassing MeteringEvent validation)
         event = MeteringEvent.__new__(MeteringEvent)
-        event.agent_id = "agent-123"
+        event.principal_id = "agent-123"
         event.resource_type = "test"
         event.quantity = Decimal("-1")
         event.timestamp = datetime.utcnow()
@@ -214,7 +214,7 @@ class TestMeteringCollectorWithEnhancedTypes:
         
         # Create event with invalid quantity type (bypassing MeteringEvent validation)
         event = MeteringEvent.__new__(MeteringEvent)
-        event.agent_id = "agent-123"
+        event.principal_id = "agent-123"
         event.resource_type = "test"
         event.quantity = 1  # int instead of Decimal
         event.timestamp = datetime.utcnow()
@@ -234,7 +234,7 @@ class TestMeteringCollectorWithEnhancedTypes:
         
         # Create event with invalid timestamp type (bypassing MeteringEvent validation)
         event = MeteringEvent.__new__(MeteringEvent)
-        event.agent_id = "agent-123"
+        event.principal_id = "agent-123"
         event.resource_type = "test"
         event.quantity = Decimal("1")
         event.timestamp = "2024-01-15T10:30:00Z"  # string instead of datetime

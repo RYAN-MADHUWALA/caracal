@@ -49,7 +49,7 @@ class TestErrorContext:
         assert context.category == ErrorCategory.VALIDATION
         assert context.severity == ErrorSeverity.HIGH
         assert context.operation == "test_operation"
-        assert context.agent_id == "test-agent-123"
+        assert context.principal_id == "test-agent-123"
         assert context.request_id == "req-456"
         assert context.metadata == {"key": "value"}
         assert context.timestamp is not None
@@ -186,7 +186,7 @@ class TestFailClosedErrorHandler:
         assert context.category == ErrorCategory.VALIDATION
         assert context.severity == ErrorSeverity.HIGH  # Auto-determined
         assert context.operation == "validate_input"
-        assert context.agent_id == "agent-123"
+        assert context.principal_id == "agent-123"
         assert context.request_id == "req-456"
         assert handler._error_count == 1
         assert handler._error_count_by_category[ErrorCategory.VALIDATION] == 1
@@ -256,7 +256,7 @@ class TestFailClosedErrorHandler:
         context = handler.handle_error(
             error=error,
             category=ErrorCategory.VALIDATION,
-            operation="get_agent"
+            operation="get_principal"
         )
         
         response = handler.create_error_response(context, include_details=True)
