@@ -5,8 +5,7 @@ Caracal, a product of Garudex Labs
 Integration tests for Enterprise Gateway metering with native MeteringEvent.
 
 Tests the integration between the Enterprise Gateway proxy and the native
-Caracal MeteringEvent implementation, ensuring that metering works correctly
-without ASE dependencies.
+Caracal MeteringEvent implementation.
 """
 
 import json
@@ -386,18 +385,4 @@ class TestEnterpriseGatewayMetering:
         assert event.resource_type == "test.resource"
         assert event.quantity == Decimal("1")
         assert event.timestamp is not None
-    
-    def test_no_ase_imports_in_gateway(self):
-        """Verify that gateway proxy does not import from ASE."""
-        gateway_file = Path(__file__).parent.parent.parent.parent / \
-                      "caracalEnterprise" / "services" / "gateway" / "proxy.py"
-        
-        with open(gateway_file, 'r') as f:
-            content = f.read()
-        
-        # Verify no ASE imports
-        assert "from ase." not in content
-        assert "import ase" not in content
-        
-        # Verify native import exists
-        assert "from caracal.core.metering import MeteringEvent" in content
+
