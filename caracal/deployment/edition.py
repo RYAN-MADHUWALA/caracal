@@ -328,12 +328,17 @@ class EditionManager:
         edition = self.get_edition()
         
         if edition == Edition.ENTERPRISE:
+            gateway_url = self.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+            if not gateway_url:
+                raise EditionConfigurationError(
+                    "Gateway URL is required for Enterprise provider client"
+                )
             logger.debug(
                 "provider_client_created",
                 edition=edition.value,
                 client_type="GatewayClient"
             )
-            return GatewayClient()
+            return GatewayClient(gateway_url=gateway_url)
         else:
             logger.debug(
                 "provider_client_created",
