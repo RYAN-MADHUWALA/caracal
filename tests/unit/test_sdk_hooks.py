@@ -170,7 +170,7 @@ class TestCaracalExtension:
 
         ext = DemoExtension()
         assert ext.name == "demo"
-        assert ext.version == "1.0.0"
+        assert ext.version == get_version()
 
         ext.install(registry)
         # Verify hooks were registered

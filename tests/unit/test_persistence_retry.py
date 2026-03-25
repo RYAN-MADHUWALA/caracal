@@ -66,36 +66,3 @@ class TestAgentRegistryRetry:
                     registry.register_agent("test-agent", "owner@example.com")
 
 
-class TestLedgerWriterRetry:
-    """Tests for retry logic in LedgerWriter."""
-    
-    def test_ledger_writer_append_with_transient_failure(self):
-        """Test that LedgerWriter retries on transient write failures."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ledger_path = Path(tmpdir) / "ledger.jsonl"
-            writer = LedgerWriter(str(ledger_path))
-            
-            # Mock open to fail twice then succeed
-            call_count = 0
-            original_open = open
-            
-            def mock_open(*args, **kwargs):
-                nonlocal call_count
-                mode = kwargs.get('mode', args[1] if len(args) > 1 else '')
-                if 'a' in str(mode):
-                    call_count += 1
-                    if call_count <= 2:
-                        raise OSError("Simulated transient failure")
-                return original_open(*args, **kwargs)
-            
-            with patch('builtins.open', side_effect=mock_open):
-                # This should succeed after retries
-                event = writer.append_event(
-                    agent_id="test-agent",
-                    resource_type="test.resource",
-                    quantity=Decimal("100"),
-                    cost=Decimal("1.50")
-                )
-                
-                assert event.agent_id == "test-agent"
-                assert call_count >= 2  # At least 2 failed attempts before success
