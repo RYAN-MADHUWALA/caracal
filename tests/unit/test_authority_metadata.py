@@ -5,7 +5,7 @@ Caracal, a product of Garudex Labs
 Unit tests for AuthorityMetadata implementation.
 
 These tests validate the AuthorityMetadata class functionality including
-instantiation, serialization, and integration with AgentIdentity and AuditReference.
+instantiation, serialization, and integration with PrincipalIdentity and AuditReference.
 """
 
 from datetime import datetime
@@ -13,7 +13,7 @@ from datetime import datetime
 import pytest
 
 from caracal.core.authority_metadata import AuthorityMetadata
-from caracal.core.identity import AgentIdentity, VerificationStatus
+from caracal.core.identity import PrincipalIdentity, VerificationStatus
 from caracal.core.audit import AuditReference
 
 
@@ -27,7 +27,7 @@ class TestAuthorityMetadata:
         **Validates: Requirements 19.1**
         """
         # Create agent identity
-        agent_identity = AgentIdentity(
+        agent_identity = PrincipalIdentity(
             agent_id="agent-123",
             name="Test Agent",
             owner="test-owner",
@@ -105,7 +105,7 @@ class TestAuthorityMetadata:
         **Validates: Requirements 19.2**
         """
         # Create agent identity
-        agent_identity = AgentIdentity(
+        agent_identity = PrincipalIdentity(
             agent_id="agent-123",
             name="Test Agent",
             owner="test-owner",
@@ -192,12 +192,12 @@ class TestAuthorityMetadata:
     
     def test_integration_with_agent_identity(self):
         """
-        Test integration with AgentIdentity.
+        Test integration with PrincipalIdentity.
         
         **Validates: Requirements 19.3**
         """
         # Create agent identity with enhanced fields
-        agent_identity = AgentIdentity(
+        agent_identity = PrincipalIdentity(
             agent_id="agent-123",
             name="Test Agent",
             owner="test-owner",

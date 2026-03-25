@@ -25,7 +25,7 @@ from caracal.core.error_handling import (
 from caracal.exceptions import (
     PolicyEvaluationError,
     TokenValidationError,
-    AgentNotFoundError
+    PrincipalNotFoundError
 )
 
 
@@ -251,7 +251,7 @@ class TestFailClosedErrorHandler:
     def test_create_error_response_with_details(self):
         """Test creating error response with details."""
         handler = FailClosedErrorHandler()
-        error = AgentNotFoundError("Agent not found")
+        error = PrincipalNotFoundError("Agent not found")
         
         context = handler.handle_error(
             error=error,
@@ -263,7 +263,7 @@ class TestFailClosedErrorHandler:
         
         assert response.error_code == "validation_error"
         assert response.details is not None
-        assert "AgentNotFoundError" in response.details
+        assert "PrincipalNotFoundError" in response.details
     
     def test_get_stats(self):
         """Test getting error statistics."""

@@ -69,7 +69,7 @@ class TestCLIInit:
                 
                 content = config_path.read_text()
                 assert "storage:" in content
-                assert "agent_registry:" in content
+                assert "principal_registry:" in content
                 assert "policy_store:" in content
                 assert "ledger:" in content
                 assert "backup_dir:" in content

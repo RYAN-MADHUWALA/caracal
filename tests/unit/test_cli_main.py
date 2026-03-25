@@ -57,7 +57,7 @@ class TestCLIMain:
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             f.write("""
 storage:
-  agent_registry: /tmp/agents.json
+  principal_registry: /tmp/agents.json
   policy_store: /tmp/policies.json
   ledger: /tmp/ledger.jsonl
   backup_dir: /tmp/backups
