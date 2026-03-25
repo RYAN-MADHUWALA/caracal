@@ -7,13 +7,18 @@ CLI commands for principal identity management.
 Provides commands for registering, listing, and retrieving principal identities.
 """
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from uuid import UUID
 
 import click
 
 from caracal.core.identity import PrincipalRegistry
+from caracal.db.connection import get_db_manager
+from caracal.db.models import Principal
 from caracal.exceptions import (
     PrincipalNotFoundError,
     CaracalError,
@@ -36,6 +41,62 @@ def get_principal_registry(config) -> PrincipalRegistry:
     return PrincipalRegistry(str(registry_path), backup_count=backup_count)
 
 
+def _format_created(value) -> str:
+    """Normalize created timestamps for human-readable output."""
+    if isinstance(value, datetime):
+        return value.replace(microsecond=0).isoformat(sep=" ")
+    if isinstance(value, str):
+        return value.replace("T", " ").replace("Z", "")
+    return ""
+
+
+def _principal_to_dict(principal) -> dict:
+    """Convert DB or legacy principal object to a consistent dict payload."""
+    if hasattr(principal, "to_dict"):
+        data = principal.to_dict()
+        data.setdefault("principal_type", getattr(principal, "principal_type", "agent"))
+        data.setdefault("metadata", getattr(principal, "metadata", {}) or {})
+        return data
+
+    return {
+        "principal_id": str(principal.principal_id),
+        "name": principal.name,
+        "principal_type": getattr(principal, "principal_type", "agent"),
+        "owner": principal.owner,
+        "created_at": principal.created_at,
+        "metadata": getattr(principal, "principal_metadata", {}) or {},
+    }
+
+
+def _load_principals_from_db(config, principal_type: str = "all") -> list[dict]:
+    """Load principals from PostgreSQL (primary source for Flow + CLI consistency)."""
+    db_manager = get_db_manager(config)
+    try:
+        with db_manager.session_scope() as db_session:
+            query = db_session.query(Principal)
+            if principal_type != "all":
+                query = query.filter_by(principal_type=principal_type)
+            rows = query.order_by(Principal.created_at.asc()).all()
+            return [_principal_to_dict(row) for row in rows]
+    finally:
+        db_manager.close()
+
+
+def _get_principal_from_db(config, principal_id: str) -> Optional[dict]:
+    """Get one principal from PostgreSQL by UUID string."""
+    db_manager = get_db_manager(config)
+    try:
+        with db_manager.session_scope() as db_session:
+            try:
+                parsed_id = UUID(principal_id)
+            except ValueError:
+                return None
+            row = db_session.query(Principal).filter_by(principal_id=parsed_id).first()
+            return _principal_to_dict(row) if row else None
+    finally:
+        db_manager.close()
+
+
 @click.command('register')
 @click.option(
     "--type",
@@ -55,13 +116,6 @@ def get_principal_registry(config) -> PrincipalRegistry:
     '-o',
     required=True,
     help='Owner identifier (email or username)',
-)
-@click.option(
-    "--type",
-    "principal_type",
-    type=click.Choice(["user", "agent", "service"]),
-    default="agent",
-    help="Type of principal (user, agent, service)",
 )
 @click.option(
     '--metadata',
@@ -100,31 +154,62 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
             key, value = item.split('=', 1)
             metadata_dict[key.strip()] = value.strip()
         
-        # Create principal registry
-        registry = get_principal_registry(cli_ctx.config)
-        
-        # Register principal
-        principal = registry.register_principal(
-            name=name,
-            principal_type=principal_type,
-            owner=owner,
-            metadata=metadata_dict,
-        )
+        principal = None
+
+        # Primary path: write to PostgreSQL so CLI and Flow stay consistent.
+        try:
+            db_manager = get_db_manager(cli_ctx.config)
+            try:
+                with db_manager.session_scope() as db_session:
+                    existing = db_session.query(Principal).filter_by(name=name).first()
+                    if existing:
+                        raise DuplicatePrincipalNameError(f"Principal with name '{name}' already exists")
+
+                    principal = Principal(
+                        name=name,
+                        principal_type=principal_type,
+                        owner=owner,
+                        created_at=datetime.utcnow(),
+                        principal_metadata=metadata_dict or None,
+                    )
+                    db_session.add(principal)
+                    db_session.flush()
+
+                    principal = {
+                        "principal_id": str(principal.principal_id),
+                        "name": principal.name,
+                        "principal_type": principal.principal_type,
+                        "owner": principal.owner,
+                        "created_at": principal.created_at.isoformat(),
+                        "metadata": principal.principal_metadata or {},
+                    }
+            finally:
+                db_manager.close()
+        except Exception:
+            # Legacy fallback for file-based registry setups.
+            registry = get_principal_registry(cli_ctx.config)
+            principal_obj = registry.register_principal(
+                name=name,
+                principal_type=principal_type,
+                owner=owner,
+                metadata=metadata_dict,
+            )
+            principal = _principal_to_dict(principal_obj)
         
         # Display success message
         click.echo("✓ Principal registered successfully!")
         click.echo()
-        click.echo(f"Principal ID:    {principal.principal_id}")
-        click.echo(f"Name:        {principal.name}")
-        click.echo(f"Type:        {getattr(principal, 'principal_type', 'agent')}")
-        
-        click.echo(f"Owner:       {principal.owner}")
-        click.echo(f"Created:     {principal.created_at}")
-        
-        if principal.metadata:
+        click.echo(f"Principal ID:    {principal['principal_id']}")
+        click.echo(f"Name:        {principal['name']}")
+        click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
+
+        click.echo(f"Owner:       {principal['owner']}")
+        click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
+
+        if principal.get('metadata'):
             # Filter out keys for display (don't show private keys)
             display_metadata = {
-                k: v for k, v in principal.metadata.items()
+                k: v for k, v in principal['metadata'].items()
                 if k not in ['private_key_pem', 'public_key_pem', 'delegation_tokens']
             }
             if display_metadata:
@@ -147,9 +232,9 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
 @click.option(
     "--type",
     "principal_type",
-    type=click.Choice(["user", "agent", "service"]),
-    default="agent",
-    help="Type of principal (user, agent, service)",
+    type=click.Choice(["all", "user", "agent", "service"]),
+    default="all",
+    help="Filter by principal type (default: all)",
 )
 @click.option(
     '--format',
@@ -175,31 +260,34 @@ def list_principals(ctx, principal_type: str, format: str):
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create principal registry
-        registry = get_principal_registry(cli_ctx.config)
-        
-        # Get all principals
-        principals = registry.list_principals()
+        try:
+            principals = _load_principals_from_db(cli_ctx.config, principal_type=principal_type)
+        except Exception:
+            # Legacy fallback for file-based registry setups.
+            registry = get_principal_registry(cli_ctx.config)
+            principals = [_principal_to_dict(p) for p in registry.list_principals()]
+            if principal_type != "all":
+                principals = [
+                    p for p in principals
+                    if p.get("principal_type", "agent") == principal_type
+                ]
         
         if not principals:
             click.echo("No principals registered.")
             return
         
         if format.lower() == 'json':
-            # JSON output
-            import json
-            output = [principal.to_dict() for principal in principals]
-            click.echo(json.dumps(output, indent=2))
+            click.echo(json.dumps(principals, indent=2, default=str))
         else:
             # Table output
             click.echo(f"Total principals: {len(principals)}")
             click.echo()
             
             # Calculate column widths
-            max_id_len = max(len(principal.principal_id) for principal in principals)
-            max_name_len = max(len(principal.name) for principal in principals)
-            max_owner_len = max(len(principal.owner) for principal in principals)
-            max_type_len = max(len(getattr(principal, "principal_type", "agent")) for principal in principals)
+            max_id_len = max(len(str(principal["principal_id"])) for principal in principals)
+            max_name_len = max(len(str(principal["name"])) for principal in principals)
+            max_owner_len = max(len(str(principal["owner"])) for principal in principals)
+            max_type_len = max(len(str(principal.get("principal_type", "agent"))) for principal in principals)
             
             # Ensure minimum widths for headers
             id_width = max(max_id_len, len("Principal ID"))
@@ -215,12 +303,12 @@ def list_principals(ctx, principal_type: str, format: str):
             # Print principals
             for principal in principals:
                 # Format created_at to be more readable
-                created = principal.created_at.replace('T', ' ').replace('Z', '')
+                created = _format_created(principal.get("created_at"))
                 click.echo(
-                    f"{principal.principal_id:<{id_width}}  "
-                    f"{getattr(principal, 'principal_type', 'agent'):<{type_width}}  "
-                    f"{principal.name:<{name_width}}  "
-                    f"{principal.owner:<{owner_width}}  "
+                    f"{str(principal['principal_id']):<{id_width}}  "
+                    f"{str(principal.get('principal_type', 'agent')):<{type_width}}  "
+                    f"{str(principal['name']):<{name_width}}  "
+                    f"{str(principal['owner']):<{owner_width}}  "
                     f"{created}"
                 )
         
@@ -270,35 +358,38 @@ def get(ctx, principal_id: str, principal_type: str, format: str):
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create principal registry
-        registry = get_principal_registry(cli_ctx.config)
-        
-        # Get principal
-        principal = registry.get_principal(principal_id)
+        try:
+            principal = _get_principal_from_db(cli_ctx.config, principal_id)
+        except Exception:
+            principal = None
+
+        if not principal:
+            # Legacy fallback for file-based registry setups.
+            registry = get_principal_registry(cli_ctx.config)
+            principal_obj = registry.get_principal(principal_id)
+            principal = _principal_to_dict(principal_obj) if principal_obj else None
         
         if not principal:
             click.echo(f"Error: Principal not found: {principal_id}", err=True)
             sys.exit(1)
         
         if format.lower() == 'json':
-            # JSON output
-            import json
-            click.echo(json.dumps(principal.to_dict(), indent=2))
+            click.echo(json.dumps(principal, indent=2, default=str))
         else:
             # Table output
             click.echo("Principal Details")
             click.echo("=" * 50)
-            click.echo(f"Principal ID:    {principal.principal_id}")
-            click.echo(f"Name:        {principal.name}")
-            click.echo(f"Type:        {getattr(principal, 'principal_type', 'agent')}")
-        
-            click.echo(f"Owner:       {principal.owner}")
-            click.echo(f"Created:     {principal.created_at}")
-            
-            if principal.metadata:
+            click.echo(f"Principal ID:    {principal['principal_id']}")
+            click.echo(f"Name:        {principal['name']}")
+            click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
+
+            click.echo(f"Owner:       {principal['owner']}")
+            click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
+
+            if principal.get('metadata'):
                 click.echo()
                 click.echo("Metadata:")
-                for key, value in principal.metadata.items():
+                for key, value in principal['metadata'].items():
                     click.echo(f"  {key}: {value}")
         
     except CaracalError as e:

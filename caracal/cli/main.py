@@ -41,6 +41,25 @@ def get_active_workspace() -> str:
         return "default"
 
 
+def get_workspace_config_path(workspace_name: Optional[str]) -> Optional[Path]:
+    """Resolve a workspace's config.yaml path from the global workspace registry."""
+    if not workspace_name:
+        return None
+
+    try:
+        from caracal.flow.workspace import WorkspaceManager
+
+        for workspace in WorkspaceManager.list_workspaces():
+            if workspace.get("name") == workspace_name:
+                config_path = Path(workspace["path"]).expanduser() / "config.yaml"
+                if config_path.exists():
+                    return config_path
+    except Exception:
+        return None
+
+    return None
+
+
 def workspace_context_callback(ctx, param, value):
     """Callback to set workspace context."""
     if value:
@@ -168,8 +187,15 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
     # Initialize context
     ctx.ensure_object(CLIContext)
     ctx.obj.verbose = verbose
-    ctx.obj.config_path = str(config) if config else None
     ctx.obj.workspace = workspace or get_active_workspace()
+
+    # Prefer an explicit --config, otherwise resolve workspace-scoped config.yaml.
+    if config:
+        resolved_config_path = config
+    else:
+        resolved_config_path = get_workspace_config_path(ctx.obj.workspace) or get_default_config_path()
+
+    ctx.obj.config_path = str(resolved_config_path)
     
     # Keep --help/--version output clean
     is_help_or_version = any(arg in {"--help", "-h", "--version"} for arg in sys.argv[1:])

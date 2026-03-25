@@ -53,6 +53,27 @@ def format_output(data, format_type: str = "table"):
         return data
 
 
+def _resolve_workspace_name(config_manager: ConfigManager, workspace: Optional[str]) -> Optional[str]:
+    """Resolve workspace name from explicit option, ConfigManager, or Flow registry."""
+    if workspace:
+        return workspace
+
+    config_workspaces = config_manager.list_workspaces()
+    if config_workspaces:
+        return config_workspaces[0]
+
+    try:
+        from caracal.flow.workspace import WorkspaceManager
+
+        flow_workspaces = WorkspaceManager.list_workspaces()
+        if flow_workspaces:
+            return flow_workspaces[0].get("name")
+    except Exception:
+        pass
+
+    return None
+
+
 # Config command group
 @click.group(name="config")
 def config_group():
@@ -88,7 +109,7 @@ def config_mode(mode_value: Optional[str], format: str):
                 
     except Exception as e:
         logger.error("config_mode_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -107,7 +128,7 @@ def config_edition(edition_value: Optional[str], gateway_url: Optional[str], gat
             edition = Edition(edition_value.lower())
             
             if edition == Edition.ENTERPRISE and not gateway_url:
-                console.print("[red]Error:[/red] --gateway-url is required for enterprise edition", err=True)
+                console.print("[red]Error:[/red] --gateway-url is required for enterprise edition")
                 sys.exit(1)
             
             edition_manager.set_edition(edition, gateway_url, gateway_token)
@@ -141,7 +162,7 @@ def config_edition(edition_value: Optional[str], gateway_url: Optional[str], gat
                         
     except Exception as e:
         logger.error("config_edition_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -154,20 +175,18 @@ def config_set(key: str, value: str, workspace: Optional[str]):
     try:
         config_manager = ConfigManager()
         
-        # For now, store as secret (can be extended for other config types)
+        # For now, store as secret (can be extended for other config types).
+        workspace = _resolve_workspace_name(config_manager, workspace)
         if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.", err=True)
-                sys.exit(1)
-            workspace = workspaces[0]
+            console.print("[red]Error:[/red] No workspaces found. Create one first.")
+            sys.exit(1)
         
         config_manager.store_secret(key, value, workspace)
         console.print(f"[green]✓[/green] Configuration set: {key}")
         
     except Exception as e:
         logger.error("config_set_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -180,12 +199,10 @@ def config_get(key: str, workspace: Optional[str], format: str):
     try:
         config_manager = ConfigManager()
         
+        workspace = _resolve_workspace_name(config_manager, workspace)
         if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.", err=True)
-                sys.exit(1)
-            workspace = workspaces[0]
+            console.print("[red]Error:[/red] No workspaces found. Create one first.")
+            sys.exit(1)
         
         value = config_manager.get_secret(key, workspace)
         
@@ -196,7 +213,7 @@ def config_get(key: str, workspace: Optional[str], format: str):
             
     except Exception as e:
         logger.error("config_get_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -208,12 +225,10 @@ def config_list(workspace: Optional[str], format: str):
     try:
         config_manager = ConfigManager()
         
+        workspace = _resolve_workspace_name(config_manager, workspace)
         if not workspace:
-            workspaces = config_manager.list_workspaces()
-            if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.", err=True)
-                sys.exit(1)
-            workspace = workspaces[0]
+            console.print("[red]Error:[/red] No workspaces found. Create one first.")
+            sys.exit(1)
         
         # Load vault to get keys
         vault = config_manager._load_vault(workspace)
@@ -228,7 +243,7 @@ def config_list(workspace: Optional[str], format: str):
                 
     except Exception as e:
         logger.error("config_list_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -257,11 +272,11 @@ def workspace_create(name: str, template: Optional[str], format: str):
                 console.print(f"  Template: {template}")
                 
     except WorkspaceAlreadyExistsError as e:
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
         logger.error("workspace_create_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -274,7 +289,7 @@ def workspace_switch(name: str):
         
         # Verify workspace exists
         if name not in config_manager.list_workspaces():
-            console.print(f"[red]Error:[/red] Workspace not found: {name}", err=True)
+            console.print(f"[red]Error:[/red] Workspace not found: {name}")
             sys.exit(1)
         
         # Set as default workspace
@@ -296,7 +311,7 @@ def workspace_switch(name: str):
         
     except Exception as e:
         logger.error("workspace_switch_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -343,7 +358,7 @@ def workspace_list(format: str):
             
     except Exception as e:
         logger.error("workspace_list_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -367,11 +382,11 @@ def workspace_delete(name: str, backup: bool, force: bool):
             console.print("  Backup created in ~/.caracal/backups/")
             
     except WorkspaceNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
         logger.error("workspace_delete_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -391,11 +406,11 @@ def workspace_export(name: str, path: Path, include_secrets: bool):
             console.print("  [yellow]Warning:[/yellow] Secrets included in export")
             
     except WorkspaceNotFoundError as e:
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
         logger.error("workspace_export_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -414,11 +429,11 @@ def workspace_import(path: Path, name: Optional[str]):
             console.print(f"  Workspace name: {name}")
             
     except WorkspaceAlreadyExistsError as e:
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
         logger.error("workspace_import_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -443,7 +458,7 @@ def sync_connect(url: str, token: str, workspace: Optional[str]):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.", err=True)
+                console.print("[red]Error:[/red] No workspaces found. Create one first.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -456,7 +471,7 @@ def sync_connect(url: str, token: str, workspace: Optional[str]):
         
     except Exception as e:
         logger.error("sync_connect_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -472,7 +487,7 @@ def sync_disconnect(workspace: Optional[str]):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -484,7 +499,7 @@ def sync_disconnect(workspace: Optional[str]):
         
     except Exception as e:
         logger.error("sync_disconnect_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -502,7 +517,7 @@ def sync_now(workspace: Optional[str], direction: str, format: str):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -552,7 +567,7 @@ def sync_now(workspace: Optional[str], direction: str, format: str):
         
     except Exception as e:
         logger.error("sync_now_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -569,7 +584,7 @@ def sync_status(workspace: Optional[str], format: str):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -604,7 +619,7 @@ def sync_status(workspace: Optional[str], format: str):
         
     except Exception as e:
         logger.error("sync_status_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -621,7 +636,7 @@ def sync_conflicts(workspace: Optional[str], format: str):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -665,7 +680,7 @@ def sync_conflicts(workspace: Optional[str], format: str):
         
     except Exception as e:
         logger.error("sync_conflicts_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -682,7 +697,7 @@ def sync_auto_enable(workspace: Optional[str], interval: int):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -695,7 +710,7 @@ def sync_auto_enable(workspace: Optional[str], interval: int):
         
     except Exception as e:
         logger.error("sync_auto_enable_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -711,7 +726,7 @@ def sync_auto_disable(workspace: Optional[str]):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -723,7 +738,7 @@ def sync_auto_disable(workspace: Optional[str]):
         
     except Exception as e:
         logger.error("sync_auto_disable_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -746,7 +761,7 @@ def provider_add(name: str, api_key: str, workspace: Optional[str]):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found. Create one first.", err=True)
+                console.print("[red]Error:[/red] No workspaces found. Create one first.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -759,7 +774,7 @@ def provider_add(name: str, api_key: str, workspace: Optional[str]):
         
     except Exception as e:
         logger.error("provider_add_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -775,7 +790,7 @@ def provider_list(workspace: Optional[str], format: str):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -815,7 +830,7 @@ def provider_list(workspace: Optional[str], format: str):
         
     except Exception as e:
         logger.error("provider_list_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -847,7 +862,7 @@ def provider_test(name: str, workspace: Optional[str]):
         
     except Exception as e:
         logger.error("provider_test_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -863,7 +878,7 @@ def provider_remove(name: str, workspace: Optional[str], force: bool):
         if not workspace:
             workspaces = config_manager.list_workspaces()
             if not workspaces:
-                console.print("[red]Error:[/red] No workspaces found.", err=True)
+                console.print("[red]Error:[/red] No workspaces found.")
                 sys.exit(1)
             workspace = workspaces[0]
         
@@ -883,7 +898,7 @@ def provider_remove(name: str, workspace: Optional[str], force: bool):
         
     except Exception as e:
         logger.error("provider_remove_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -927,7 +942,7 @@ def migrate_command(from_type: str, backup: bool, force: bool):
         
     except Exception as e:
         logger.error("migrate_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -1075,7 +1090,7 @@ def doctor_command(format: str):
         
     except Exception as e:
         logger.error("doctor_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -1111,7 +1126,7 @@ def version_command(check_updates: bool, format: str):
         
     except Exception as e:
         logger.error("version_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -1160,23 +1175,23 @@ end
 complete --no-files --command caracal --arguments '(__fish_caracal_complete)'
 """
         else:
-            console.print(f"[red]Error:[/red] Unsupported shell: {shell}", err=True)
+            console.print(f"[red]Error:[/red] Unsupported shell: {shell}")
             sys.exit(1)
         
         click.echo(script)
         
         # Print installation instructions
-        console.print(f"\n[green]To enable completion, add this to your {shell} config:[/green]", err=True)
+        console.print(f"\n[green]To enable completion, add this to your {shell} config:[/green]")
         if shell == "bash":
-            console.print("  eval \"$(caracal completion bash)\"", err=True)
-            console.print("  # Or add to ~/.bashrc", err=True)
+            console.print("  eval \"$(caracal completion bash)\"")
+            console.print("  # Or add to ~/.bashrc")
         elif shell == "zsh":
-            console.print("  eval \"$(caracal completion zsh)\"", err=True)
-            console.print("  # Or add to ~/.zshrc", err=True)
+            console.print("  eval \"$(caracal completion zsh)\"")
+            console.print("  # Or add to ~/.zshrc")
         elif shell == "fish":
-            console.print("  caracal completion fish > ~/.config/fish/completions/caracal.fish", err=True)
+            console.print("  caracal completion fish > ~/.config/fish/completions/caracal.fish")
         
     except Exception as e:
         logger.error("completion_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}", err=True)
+        console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
