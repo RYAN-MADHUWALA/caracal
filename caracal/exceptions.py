@@ -19,12 +19,12 @@ class IdentityError(CaracalError):
     pass
 
 
-class AgentNotFoundError(IdentityError):
+class PrincipalNotFoundError(IdentityError):
     """Raised when an agent ID is not found in the registry."""
     pass
 
 
-class DuplicateAgentNameError(IdentityError):
+class DuplicatePrincipalNameError(IdentityError):
     """Raised when attempting to register an agent with a duplicate name."""
     pass
 

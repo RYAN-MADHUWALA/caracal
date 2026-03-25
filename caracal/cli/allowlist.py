@@ -56,7 +56,7 @@ def get_allowlist_manager(config) -> AllowlistManager:
     help='Pattern type (regex or glob)',
 )
 @click.pass_context
-def create(ctx, agent_id: str, pattern: str, pattern_type: str):
+def create(ctx, principal_id: str, pattern: str, pattern_type: str):
     """
     Create a new resource allowlist entry.
     
@@ -88,21 +88,21 @@ def create(ctx, agent_id: str, pattern: str, pattern_type: str):
         
         # Parse agent ID
         try:
-            agent_uuid = UUID(agent_id)
+            agent_uuid = UUID(principal_id)
         except ValueError:
-            click.echo(f"Error: Invalid agent ID format: {agent_id}", err=True)
+            click.echo(f"Error: Invalid agent ID format: {principal_id}", err=True)
             sys.exit(1)
         
         # Create allowlist
         allowlist = allowlist_manager.create_allowlist(
-            agent_id=agent_uuid,
+            principal_id=agent_uuid,
             resource_pattern=pattern,
             pattern_type=pattern_type.lower()
         )
         
         click.echo(f"✓ Created allowlist entry:")
         click.echo(f"  Allowlist ID: {allowlist.allowlist_id}")
-        click.echo(f"  Agent ID:     {allowlist.agent_id}")
+        click.echo(f"  Agent ID:     {allowlist.principal_id}")
         click.echo(f"  Pattern:      {allowlist.resource_pattern}")
         click.echo(f"  Type:         {allowlist.pattern_type}")
         click.echo(f"  Created:      {allowlist.created_at}")
@@ -133,7 +133,7 @@ def create(ctx, agent_id: str, pattern: str, pattern_type: str):
     help='Output format (default: table)',
 )
 @click.pass_context
-def list_allowlists(ctx, agent_id: str, format: str):
+def list_allowlists(ctx, principal_id: str, format: str):
     """
     List all active allowlist entries for an agent.
     
@@ -153,16 +153,16 @@ def list_allowlists(ctx, agent_id: str, format: str):
         
         # Parse agent ID
         try:
-            agent_uuid = UUID(agent_id)
+            agent_uuid = UUID(principal_id)
         except ValueError:
-            click.echo(f"Error: Invalid agent ID format: {agent_id}", err=True)
+            click.echo(f"Error: Invalid agent ID format: {principal_id}", err=True)
             sys.exit(1)
         
         # List allowlists
         allowlists = allowlist_manager.list_allowlists(agent_uuid)
         
         if not allowlists:
-            click.echo(f"No allowlists configured for agent {agent_id}")
+            click.echo(f"No allowlists configured for agent {principal_id}")
             click.echo("(All resources are allowed by default)")
             return
         
@@ -171,7 +171,7 @@ def list_allowlists(ctx, agent_id: str, format: str):
             data = [
                 {
                     'allowlist_id': str(a.allowlist_id),
-                    'agent_id': str(a.agent_id),
+                    'principal_id': str(a.principal_id),
                     'pattern': a.resource_pattern,
                     'type': a.pattern_type,
                     'created_at': a.created_at.isoformat(),
@@ -182,7 +182,7 @@ def list_allowlists(ctx, agent_id: str, format: str):
             click.echo(json.dumps(data, indent=2))
         else:
             # Table format
-            click.echo(f"\nAllowlists for agent {agent_id}:")
+            click.echo(f"\nAllowlists for agent {principal_id}:")
             click.echo(f"{'ID':<38} {'Type':<8} {'Pattern':<60}")
             click.echo("-" * 110)
             
@@ -283,7 +283,7 @@ def delete(ctx, allowlist_id: str, yes: bool):
     help='Resource URL to test',
 )
 @click.pass_context
-def test(ctx, agent_id: str, resource: str):
+def test(ctx, principal_id: str, resource: str):
     """
     Test if a resource would be allowed for an agent.
     
@@ -306,15 +306,15 @@ def test(ctx, agent_id: str, resource: str):
         
         # Parse agent ID
         try:
-            agent_uuid = UUID(agent_id)
+            agent_uuid = UUID(principal_id)
         except ValueError:
-            click.echo(f"Error: Invalid agent ID format: {agent_id}", err=True)
+            click.echo(f"Error: Invalid agent ID format: {principal_id}", err=True)
             sys.exit(1)
         
         # Check resource
         decision = allowlist_manager.check_resource(agent_uuid, resource)
         
-        click.echo(f"\nAllowlist check for agent {agent_id}:")
+        click.echo(f"\nAllowlist check for agent {principal_id}:")
         click.echo(f"  Resource: {resource}")
         click.echo(f"  Result:   {'✓ ALLOWED' if decision.allowed else '✗ DENIED'}")
         click.echo(f"  Reason:   {decision.reason}")

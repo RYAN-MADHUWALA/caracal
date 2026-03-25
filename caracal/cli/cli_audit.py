@@ -142,7 +142,7 @@ def _run_help_smoke(root_command: click.Group) -> Dict[str, object]:
     }
 
 
-def _extract_agent_id(output: str) -> str:
+def _extract_principal_id(output: str) -> str:
     """Extract agent ID line from `agent register` output."""
     for line in output.splitlines():
         if "Agent ID:" in line:
@@ -191,13 +191,13 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
             },
         ]
 
-        agent_id = ""
+        principal_id = ""
 
         for step in command_steps:
             result = runner.invoke(root_command, step["args"])
             ok = result.exit_code == 0
             if step["name"] == "agent-register" and ok:
-                agent_id = _extract_agent_id(result.output)
+                principal_id = _extract_principal_id(result.output)
 
             steps.append(
                 {
@@ -210,7 +210,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
                 }
             )
 
-        if not agent_id:
+        if not principal_id:
             return {
                 "all_passed": False,
                 "steps": steps,
@@ -226,7 +226,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
                     "policy",
                     "create",
                     "--principal-id",
-                    agent_id,
+                    principal_id,
                     "--max-validity-seconds",
                     "3600",
                     "--resource-pattern",
