@@ -83,7 +83,7 @@ class TestDelegationOperations:
     async def test_create(self, scoped_setup):
         ctx, adapter, _ = scoped_setup
         result = await ctx.delegation.create(
-            source_mandate_id="m1",
+            parent_mandate_id="m1",
             child_subject_id="child_1",
             resource_scope=["data.*"],
             action_scope=["read"],
@@ -91,7 +91,7 @@ class TestDelegationOperations:
         )
         assert result["id"] == "d1"
         sent = adapter.sent_requests[0]
-        assert sent.body["source_mandate_id"] == "m1"
+        assert sent.body["parent_mandate_id"] == "m1"
         assert sent.body["resource_scope"] == ["data.*"]
 
     @pytest.mark.asyncio

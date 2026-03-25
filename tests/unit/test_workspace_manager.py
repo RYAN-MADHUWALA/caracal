@@ -152,5 +152,49 @@ class TestRegistry:
         assert workspaces[0]["name"] == "WS 1"
         assert workspaces[1]["name"] == "WS 2"
 
+    def test_delete_all_workspaces_empty_registry(self, tmp_path):
+        """Deleting all workspaces returns 0 when registry is empty."""
+        registry_path = tmp_path / "workspaces.json"
+        deleted = WorkspaceManager.delete_all_workspaces(registry_path=registry_path)
+        assert deleted == 0
+
+    def test_delete_all_workspaces_registry_only(self, tmp_path):
+        """Deleting all workspaces clears registry entries without deleting directories by default."""
+        registry_path = tmp_path / "workspaces.json"
+        ws1 = tmp_path / "ws1"
+        ws2 = tmp_path / "ws2"
+        ws1.mkdir()
+        ws2.mkdir()
+
+        WorkspaceManager.register_workspace("WS 1", ws1, registry_path)
+        WorkspaceManager.register_workspace("WS 2", ws2, registry_path)
+
+        deleted = WorkspaceManager.delete_all_workspaces(registry_path=registry_path)
+
+        assert deleted == 2
+        assert WorkspaceManager.list_workspaces(registry_path) == []
+        assert ws1.exists()
+        assert ws2.exists()
+
+    def test_delete_all_workspaces_with_registry_parent_workspace(self, tmp_path):
+        """Bulk delete succeeds even when the registry parent directory is itself a workspace."""
+        root_ws = tmp_path / ".caracal"
+        child_ws = root_ws / "my-workspace"
+        root_ws.mkdir()
+        child_ws.mkdir()
+
+        registry_path = root_ws / "workspaces.json"
+        WorkspaceManager.register_workspace("root", root_ws, registry_path)
+        WorkspaceManager.register_workspace("child", child_ws, registry_path)
+
+        deleted = WorkspaceManager.delete_all_workspaces(
+            registry_path=registry_path,
+            delete_directories=True,
+        )
+
+        assert deleted == 2
+        assert not root_ws.exists()
+        assert not child_ws.exists()
+
 if __name__ == "__main__":
     pytest.main(["-v", "-s", __file__])

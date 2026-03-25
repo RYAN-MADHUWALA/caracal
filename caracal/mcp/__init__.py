@@ -13,8 +13,6 @@ from caracal.mcp.service import (
     MCPAdapterService,
     MCPServiceConfig,
     MCPServerConfig,
-    load_config_from_yaml,
-    load_config_from_env,
 )
 
 __all__ = [
@@ -24,7 +22,5 @@ __all__ = [
     "MCPAdapterService",
     "MCPServiceConfig",
     "MCPServerConfig",
-    "load_config_from_yaml",
-    "load_config_from_env",
 ]
 

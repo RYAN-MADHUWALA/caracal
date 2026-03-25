@@ -4,7 +4,7 @@ Caracal, a product of Garudex Labs
 
 Unit tests for SDK client.
 
-Tests the CaracalClient class for configuration loading, component initialization,
+Tests the CaracalClient class for initialization, context management,
 event emission, and fail-closed semantics.
 """
 
@@ -15,59 +15,6 @@ import pytest
 
 from caracal.exceptions import ConnectionError
 from caracal.sdk.client import CaracalClient
-
-
-class TestCaracalClient:
-    """Test CaracalClient class."""
-
-    def test_client_initialization_with_config(self, temp_dir, make_config_yaml):
-        """Test initializing client with configuration file."""
-        # Create config file using helper that includes merkle settings
-        config_path = temp_dir / "config.yaml"
-        config_content = make_config_yaml()
-        config_path.write_text(config_content)
-        
-        # Initialize client
-        client = CaracalClient(config_path=str(config_path))
-        
-        # Verify components are initialized
-        assert client.agent_registry is not None
-        assert client.policy_store is not None
-        assert client.ledger_writer is not None
-        assert client.ledger_query is not None
-        assert client.policy_evaluator is not None
-        assert client.metering_collector is not None
-
-    def test_client_initialization_with_default_config(self, temp_dir, monkeypatch):
-        """Test initializing client with default configuration."""
-        # Mock the default config path to use temp directory
-        def mock_get_default_config():
-            from caracal.config.settings import CaracalConfig, StorageConfig, DefaultsConfig, LoggingConfig, PerformanceConfig
-            return CaracalConfig(
-                storage=StorageConfig(
-                    agent_registry=str(temp_dir / "agents.json"),
-                    policy_store=str(temp_dir / "policies.json"),
-                    ledger=str(temp_dir / "ledger.jsonl"),
-                    backup_dir=str(temp_dir / "backups"),
-                    backup_count=3,
-                ),
-                defaults=DefaultsConfig(),
-                logging=LoggingConfig(file=str(temp_dir / "caracal.log")),
-                performance=PerformanceConfig(),
-            )
-        
-        monkeypatch.setattr("caracal.sdk.client.load_config", lambda x: mock_get_default_config())
-        
-        # Initialize client without config path
-        client = CaracalClient()
-        
-        # Verify components are initialized
-        assert client.agent_registry is not None
-        assert client.policy_store is not None
-
-
-
-
 
 
 # ===========================================================================
@@ -84,7 +31,6 @@ class TestCaracalClientV2:
         from caracal.sdk.adapters.http import HttpAdapter
 
         client = CaracalClient(api_key="sk_test_123")
-        assert not client._is_legacy
         assert isinstance(client._adapter, HttpAdapter)
         assert client._adapter._api_key == "sk_test_123"
         client.close()
@@ -106,7 +52,6 @@ class TestCaracalClientV2:
 
         mock = MockAdapter(responses={})
         client = CaracalClient(adapter=mock)
-        assert not client._is_legacy
         assert client._adapter is mock
         client.close()
 
@@ -199,7 +144,6 @@ class TestCaracalBuilderV2:
 
         client = CaracalBuilder().set_api_key("sk_build_1").build()
         assert isinstance(client, CaracalClient)
-        assert not client._is_legacy
         client.close()
 
     def test_builder_custom_base_url(self):
