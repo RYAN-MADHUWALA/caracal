@@ -286,7 +286,7 @@ def _step_workspace(wizard: Wizard) -> Any:
         )
         
         # Generate path from name
-        default_base = Path.home() / ".caracal"
+        default_base = Path.home() / ".caracal" / "workspaces"
         workspace_path = default_base / workspace_name.lower().replace(" ", "-")
         
         custom_path = prompt.confirm(

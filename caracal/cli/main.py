@@ -69,13 +69,16 @@ class WorkspaceAwareGroup(click.Group):
         formatter.write_text(f"Active Workspace: {click.style(active_ws, fg='cyan', bold=True)}")
         formatter.write_paragraph()
         
-        # Continue with normal help formatting
+        # Format usage
         self.format_usage(ctx, formatter)
-        self.format_help_text(ctx, formatter)
-        self.format_options(ctx, formatter)
-        self.format_epilog(ctx, formatter)
         
-        # Add command groups
+        # Format description
+        self.format_help_text(ctx, formatter)
+        
+        # Format options
+        self.format_options(ctx, formatter)
+        
+        # Add command groups (custom formatting) - skip default commands section
         commands = self.list_commands(ctx)
         if commands:
             # Group commands by category
@@ -84,40 +87,47 @@ class WorkspaceAwareGroup(click.Group):
             system_commands = ['config', 'provider', 'doctor', 'version', 'completion']
             
             # Core Commands
-            with formatter.section('Core Commands'):
-                for cmd_name in core_commands:
-                    if cmd_name in commands:
-                        cmd = self.get_command(ctx, cmd_name)
-                        if cmd:
-                            help_text = cmd.get_short_help_str(limit=60)
-                            formatter.write_text(f"  {cmd_name:<12}  {help_text}")
+            formatter.write_paragraph()
+            formatter.write_text(click.style('Core Commands:', bold=True))
+            for cmd_name in core_commands:
+                if cmd_name in commands:
+                    cmd = self.get_command(ctx, cmd_name)
+                    if cmd:
+                        help_text = cmd.get_short_help_str(limit=60)
+                        formatter.write_text(f"  {cmd_name:<12}  {help_text}")
             
             # Enterprise Commands
-            with formatter.section('Enterprise Commands'):
-                for cmd_name in enterprise_commands:
-                    if cmd_name in commands:
-                        cmd = self.get_command(ctx, cmd_name)
-                        if cmd:
-                            help_text = cmd.get_short_help_str(limit=60)
-                            formatter.write_text(f"  {cmd_name:<12}  {help_text}")
+            formatter.write_paragraph()
+            formatter.write_text(click.style('Enterprise Commands:', bold=True))
+            for cmd_name in enterprise_commands:
+                if cmd_name in commands:
+                    cmd = self.get_command(ctx, cmd_name)
+                    if cmd:
+                        help_text = cmd.get_short_help_str(limit=60)
+                        formatter.write_text(f"  {cmd_name:<12}  {help_text}")
             
             # System Commands
-            with formatter.section('System Commands'):
-                for cmd_name in system_commands:
-                    if cmd_name in commands:
-                        cmd = self.get_command(ctx, cmd_name)
-                        if cmd:
-                            help_text = cmd.get_short_help_str(limit=60)
-                            formatter.write_text(f"  {cmd_name:<12}  {help_text}")
+            formatter.write_paragraph()
+            formatter.write_text(click.style('System Commands:', bold=True))
+            for cmd_name in system_commands:
+                if cmd_name in commands:
+                    cmd = self.get_command(ctx, cmd_name)
+                    if cmd:
+                        help_text = cmd.get_short_help_str(limit=60)
+                        formatter.write_text(f"  {cmd_name:<12}  {help_text}")
         
         # Add usage examples
         formatter.write_paragraph()
-        with formatter.section('Examples'):
-            formatter.write_text("  caracal workspace list              # List all workspaces")
-            formatter.write_text("  caracal workspace use prod          # Switch to 'prod' workspace")
-            formatter.write_text("  caracal principal list              # List principals in active workspace")
-            formatter.write_text("  caracal principal list prod         # List principals in 'prod' workspace")
-            formatter.write_text("  caracal --workspace prod policy list  # Alternative syntax")
+        formatter.write_text(click.style('Examples:', bold=True))
+        formatter.write_text("  caracal workspace list                    # List all workspaces")
+        formatter.write_text("  caracal workspace use prod                # Switch to 'prod' workspace")
+        formatter.write_text("  caracal principal list                    # List principals in active workspace")
+        formatter.write_text("  caracal --workspace prod principal list   # Use specific workspace")
+    
+    def format_commands(self, ctx: Context, formatter: click.HelpFormatter) -> None:
+        """Override to prevent default command listing."""
+        # Do nothing - we handle command listing in format_help
+        pass
 
 
 @click.group(invoke_without_command=True, cls=WorkspaceAwareGroup)
