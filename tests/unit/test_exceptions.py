@@ -9,7 +9,7 @@ import pytest
 from caracal.exceptions import (
     CaracalError,
     IdentityError,
-    AgentNotFoundError,
+    PrincipalNotFoundError,
     DuplicateAgentNameError,
     PolicyError,
     LedgerError,
@@ -32,7 +32,7 @@ class TestExceptionHierarchy:
     def test_identity_errors_inherit_from_base(self):
         """Test that identity errors inherit from CaracalError."""
         assert issubclass(IdentityError, CaracalError)
-        assert issubclass(AgentNotFoundError, IdentityError)
+        assert issubclass(PrincipalNotFoundError, IdentityError)
         assert issubclass(DuplicateAgentNameError, IdentityError)
     
     def test_policy_errors_inherit_from_base(self):
