@@ -388,7 +388,10 @@ def get_default_config() -> CaracalConfig:
     )
 
 
-def load_config(config_path: Optional[str] = None) -> CaracalConfig:
+def load_config(
+    config_path: Optional[str] = None,
+    suppress_missing_file_log: bool = False,
+) -> CaracalConfig:
     """
     Load configuration from YAML file with validation.
     
@@ -397,6 +400,8 @@ def load_config(config_path: Optional[str] = None) -> CaracalConfig:
     
     Args:
         config_path: Path to configuration file. If None, uses default path.
+        suppress_missing_file_log: If True, do not emit info logs when config
+            file is missing and defaults are used.
     
     Returns:
         CaracalConfig: Loaded and validated configuration
@@ -412,7 +417,8 @@ def load_config(config_path: Optional[str] = None) -> CaracalConfig:
     
     # If config file doesn't exist, return defaults
     if not os.path.exists(config_path):
-        logger.info(f"Configuration file not found at {config_path}, using defaults")
+        if not suppress_missing_file_log:
+            logger.info(f"Configuration file not found at {config_path}, using defaults")
         return get_default_config()
     
     # Load YAML file
