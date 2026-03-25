@@ -447,9 +447,9 @@ def principal(ctx):
     
     \b
     Examples:
-      caracal principal register          # Register new agent
-      caracal principal list              # List all agents
-      caracal principal get <id>          # Get agent details
+            caracal principal register             # Register new principal
+            caracal principal list                 # List all principals
+            caracal principal get -a <principal-id>  # Get principal details
     """
     pass
 
@@ -474,9 +474,9 @@ def policy(ctx):
     
     \b
     Examples:
-      caracal policy create               # Create new policy
-      caracal policy list                 # List all policies
-      caracal policy show <id>            # Show policy details
+            caracal policy create -p <principal-id> -v 3600 -r "api:*" -a "api_call"  # Create policy
+            caracal policy list                    # List all policies
+            caracal policy list -p <principal-id>  # Filter by principal
     """
     pass
 
@@ -634,7 +634,7 @@ def provider(ctx):
     \b
     Examples:
       caracal provider list               # List providers
-      caracal provider add <name>         # Add provider
+            caracal provider add <name> --api-key <key>  # Add provider
       caracal provider test <name>        # Test connection
       caracal provider remove <name>      # Remove provider
     """
@@ -724,7 +724,7 @@ def audit(ctx):
     
     \b
     Examples:
-      caracal audit query                 # Query events
+            caracal audit commands              # Audit CLI command surface
       caracal audit export                # Export audit log
       caracal audit workflow              # Validate workflow
     """
