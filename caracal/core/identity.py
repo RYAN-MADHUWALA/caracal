@@ -4,7 +4,7 @@ Caracal, a product of Garudex Labs
 
 Principal identity management for Caracal Core.
 
-This module provides the AgentRegistry (to be renamed to PrincipalRegistry) 
+This module provides the PrincipalRegistry (to be renamed to PrincipalRegistry) 
 for managing principal identities, including registration and persistence.
 """
 
@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from caracal.exceptions import (
-    AgentNotFoundError,
-    DuplicateAgentNameError,
+    PrincipalNotFoundError,
+    DuplicatePrincipalNameError,
     FileReadError,
     FileWriteError,
 )
@@ -44,7 +44,7 @@ class VerificationStatus(Enum):
 
 
 @dataclass
-class AgentIdentity:
+class PrincipalIdentity:
     """
     Enhanced agent identity with verification and trust management.
     
@@ -56,7 +56,7 @@ class AgentIdentity:
     - Extensible metadata for additional attributes
     
     Attributes:
-        agent_id: Globally unique identifier (UUID v4)
+        principal_id: Globally unique identifier (UUID v4)
         name: Human-readable agent name
         owner: Owner identifier (email or username)
         created_at: Timestamp when agent was registered (ISO 8601 format)
@@ -69,11 +69,12 @@ class AgentIdentity:
         capabilities: List of declared capabilities
         last_verified_at: Optional timestamp of last verification
     """
-    agent_id: str
+    principal_id: str
     name: str
     owner: str
     created_at: str  # ISO 8601 format
     metadata: Dict[str, Any]
+    principal_type: str = "agent"
     public_key: Optional[str] = None
     org_id: Optional[str] = None
     role: Optional[str] = None
@@ -84,8 +85,8 @@ class AgentIdentity:
 
     def __post_init__(self):
         """Validate fields after initialization."""
-        if not self.agent_id or not isinstance(self.agent_id, str):
-            raise ValueError("agent_id must be non-empty string")
+        if not self.principal_id or not isinstance(self.principal_id, str):
+            raise ValueError("principal_id must be non-empty string")
         
         if not 0 <= self.trust_level <= 100:
             raise ValueError("trust_level must be between 0 and 100")
@@ -123,7 +124,7 @@ class AgentIdentity:
             Dictionary representation with all fields
         """
         return {
-            "agent_id": self.agent_id,
+            "principal_id": self.principal_id,
             "name": self.name,
             "owner": self.owner,
             "created_at": self.created_at,
@@ -138,15 +139,15 @@ class AgentIdentity:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AgentIdentity":
+    def from_dict(cls, data: Dict[str, Any]) -> "PrincipalIdentity":
         """
-        Create AgentIdentity from dictionary.
+        Create PrincipalIdentity from dictionary.
         
         Args:
             data: Dictionary containing identity data
             
         Returns:
-            AgentIdentity instance
+            PrincipalIdentity instance
         """
         # Handle verification_status conversion
         verification_status = data.get("verification_status", "unverified")
@@ -154,7 +155,7 @@ class AgentIdentity:
             verification_status = VerificationStatus(verification_status)
         
         return cls(
-            agent_id=data["agent_id"],
+            principal_id=data["principal_id"],
             name=data["name"],
             owner=data["owner"],
             created_at=data["created_at"],
@@ -169,7 +170,7 @@ class AgentIdentity:
         )
 
 
-class AgentRegistry:
+class PrincipalRegistry:
     """
     Manages principal identity lifecycle with JSON persistence.
     
@@ -179,7 +180,7 @@ class AgentRegistry:
 
     def __init__(self, registry_path: str, backup_count: int = 3, delegation_token_manager=None):
         """
-        Initialize AgentRegistry.
+        Initialize PrincipalRegistry.
         
         Args:
             registry_path: Path to the agent registry JSON file
@@ -189,8 +190,8 @@ class AgentRegistry:
         self.registry_path = Path(registry_path)
         self.backup_count = backup_count
         self.delegation_token_manager = delegation_token_manager
-        self._agents: Dict[str, AgentIdentity] = {}
-        self._names: Dict[str, str] = {}  # name -> agent_id mapping for uniqueness
+        self._agents: Dict[str, PrincipalIdentity] = {}
+        self._names: Dict[str, str] = {}  # name -> principal_id mapping for uniqueness
         
         # Ensure parent directory exists
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,13 +203,14 @@ class AgentRegistry:
         else:
             logger.info(f"Initialized new agent registry at {self.registry_path}")
 
-    def register_agent(
+    def register_principal(
         self, 
-        name: str, 
-        owner: str, 
+        name: str,
+        owner: str,
+        principal_type: str = "agent", 
         metadata: Optional[Dict[str, Any]] = None,
         generate_keys: bool = True
-    ) -> AgentIdentity:
+    ) -> PrincipalIdentity:
         """
         Register a new agent with unique identity.
         
@@ -219,20 +221,20 @@ class AgentRegistry:
             generate_keys: Whether to generate ECDSA key pair for delegation tokens (default: True)
             
         Returns:
-            AgentIdentity: The newly created agent identity
+            PrincipalIdentity: The newly created agent identity
             
         Raises:
-            DuplicateAgentNameError: If agent name already exists
+            DuplicatePrincipalNameError: If agent name already exists
         """
         # Validate unique name
         if name in self._names:
             logger.warning(f"Attempted to register duplicate agent name: {name}")
-            raise DuplicateAgentNameError(
+            raise DuplicatePrincipalNameError(
                 f"Agent with name '{name}' already exists"
             )
         
         # Generate UUID v4 for agent ID
-        agent_id = str(uuid.uuid4())
+        principal_id = str(uuid.uuid4())
         
         # Initialize metadata
         if metadata is None:
@@ -244,23 +246,24 @@ class AgentRegistry:
                 private_key_pem, public_key_pem = self.delegation_token_manager.generate_key_pair()
                 metadata["private_key_pem"] = private_key_pem.decode('utf-8')
                 metadata["public_key_pem"] = public_key_pem.decode('utf-8')
-                logger.debug(f"Generated ECDSA key pair for agent {agent_id}")
+                logger.debug(f"Generated ECDSA key pair for agent {principal_id}")
             except Exception as e:
-                logger.warning(f"Failed to generate key pair for agent {agent_id}: {e}")
+                logger.warning(f"Failed to generate key pair for agent {principal_id}: {e}")
                 # Continue without keys - not critical for agent registration
         
         # Create agent identity
-        agent = AgentIdentity(
-            agent_id=agent_id,
+        agent = PrincipalIdentity(
+            principal_id=principal_id,
             name=name,
+            principal_type=principal_type,
             owner=owner,
             created_at=datetime.utcnow().isoformat() + "Z",
             metadata=metadata,
         )
         
         # Add to registry
-        self._agents[agent_id] = agent
-        self._names[name] = agent_id
+        self._agents[principal_id] = agent
+        self._names[name] = principal_id
         
         # Persist to disk
         try:
@@ -271,35 +274,35 @@ class AgentRegistry:
                 f"Failed to persist agent registry to {self.registry_path}: {e}"
             ) from e
         
-        logger.info(f"Registered agent: id={agent_id}, name={name}, owner={owner}")
+        logger.info(f"Registered agent: id={principal_id}, name={name}, owner={owner}")
         
         return agent
 
-    def create_agent(self, *args, **kwargs) -> AgentIdentity:
-        """Alias for register_agent for backward compatibility."""
-        return self.register_agent(*args, **kwargs)
+    def create_agent(self, *args, **kwargs) -> PrincipalIdentity:
+        """Alias for register_principal for backward compatibility."""
+        return self.register_principal(*args, **kwargs)
 
     def update_agent(
         self,
-        agent_id: str,
+        principal_id: str,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> AgentIdentity:
+    ) -> PrincipalIdentity:
         """
         Update an existing agent's metadata.
         
         Args:
-            agent_id: ID of agent to update
+            principal_id: ID of agent to update
             metadata: Metadata fields to merge into existing metadata
             
         Returns:
-            Updated AgentIdentity
+            Updated PrincipalIdentity
             
         Raises:
-            AgentNotFoundError: If agent doesn't exist
+            PrincipalNotFoundError: If agent doesn't exist
         """
-        agent = self.get_agent(agent_id)
+        agent = self.get_principal(principal_id)
         if not agent:
-             raise AgentNotFoundError(f"Agent {agent_id} not found")
+             raise PrincipalNotFoundError(f"Agent {principal_id} not found")
              
         # Update metadata
         if metadata:
@@ -308,39 +311,39 @@ class AgentRegistry:
         # Persist
         self._persist()
         
-        logger.info(f"Updated agent {agent_id}")
+        logger.info(f"Updated agent {principal_id}")
         return agent
 
-    def get_agent(self, agent_id: str) -> Optional[AgentIdentity]:
+    def get_principal(self, principal_id: str) -> Optional[PrincipalIdentity]:
         """
         Retrieve agent by ID.
         
         Args:
-            agent_id: The agent's unique identifier
+            principal_id: The agent's unique identifier
             
         Returns:
-            AgentIdentity if found, None otherwise
+            PrincipalIdentity if found, None otherwise
         """
-        agent = self._agents.get(agent_id)
+        agent = self._agents.get(principal_id)
         if agent:
-            logger.debug(f"Retrieved agent: id={agent_id}, name={agent.name}")
+            logger.debug(f"Retrieved agent: id={principal_id}, name={agent.name}")
         else:
-            logger.debug(f"Agent not found: id={agent_id}")
+            logger.debug(f"Agent not found: id={principal_id}")
         return agent
 
-    def list_agents(self) -> List[AgentIdentity]:
+    def list_principals(self) -> List[PrincipalIdentity]:
         """
         List all registered agents.
         
         Returns:
-            List of all AgentIdentity objects
+            List of all PrincipalIdentity objects
         """
         return list(self._agents.values())
 
     def generate_delegation_token(
         self,
-        source_agent_id: str,
-        target_agent_id: str,
+        source_principal_id: str,
+        target_principal_id: str,
         expiration_seconds: int = 86400,
         allowed_operations: Optional[List[str]] = None,
         delegation_type: str = "hierarchical",
@@ -352,8 +355,8 @@ class AgentRegistry:
         Generate a delegation token from source to target agent.
         
         Args:
-            source_agent_id: Source agent ID (issuer/delegator)
-            target_agent_id: Target agent ID (subject/delegate)
+            source_principal_id: Source agent ID (issuer/delegator)
+            target_principal_id: Target agent ID (subject/delegate)
             expiration_seconds: Token validity duration (default: 86400 = 24 hours)
             allowed_operations: List of allowed operations (default: ["api_call", "mcp_tool"])
             delegation_type: Type of delegation (hierarchical/peer)
@@ -365,27 +368,27 @@ class AgentRegistry:
             JWT token string, or None if delegation_token_manager not available
             
         Raises:
-            AgentNotFoundError: If source or target agent does not exist
+            PrincipalNotFoundError: If source or target agent does not exist
         """
         if self.delegation_token_manager is None:
             logger.warning("Cannot generate delegation token: DelegationTokenManager not available")
             return None
         
         # Validate agents exist
-        source = self.get_agent(source_agent_id)
+        source = self.get_principal(source_principal_id)
         if source is None:
-            raise AgentNotFoundError(f"Source agent with ID '{source_agent_id}' does not exist")
+            raise PrincipalNotFoundError(f"Source agent with ID '{source_principal_id}' does not exist")
         
-        target = self.get_agent(target_agent_id)
+        target = self.get_principal(target_principal_id)
         if target is None:
-            raise AgentNotFoundError(f"Target agent with ID '{target_agent_id}' does not exist")
+            raise PrincipalNotFoundError(f"Target agent with ID '{target_principal_id}' does not exist")
         
         # Generate token
         from uuid import UUID
         
         token = self.delegation_token_manager.generate_token(
-            source_agent_id=UUID(source_agent_id),
-            target_agent_id=UUID(target_agent_id),
+            source_principal_id=UUID(source_principal_id),
+            target_principal_id=UUID(target_principal_id),
             expiration_seconds=expiration_seconds,
             allowed_operations=allowed_operations,
             delegation_type=delegation_type,
@@ -400,7 +403,7 @@ class AgentRegistry:
         
         target.metadata["delegation_tokens"].append({
             "token_id": token[:20] + "...",  # Store truncated token for reference
-            "source_agent_id": source_agent_id,
+            "source_principal_id": source_principal_id,
             "delegation_type": delegation_type,
             "created_at": datetime.utcnow().isoformat() + "Z",
             "expires_in_seconds": expiration_seconds
@@ -414,7 +417,7 @@ class AgentRegistry:
             # Don't fail - token is still valid even if metadata not persisted
         
         logger.info(
-            f"Generated delegation token: source={source_agent_id}, target={target_agent_id}, "
+            f"Generated delegation token: source={source_principal_id}, target={target_principal_id}, "
             f"type={delegation_type}"
         )
         
@@ -514,9 +517,9 @@ class AgentRegistry:
             self._names = {}
             
             for agent_data in data:
-                agent = AgentIdentity.from_dict(agent_data)
-                self._agents[agent.agent_id] = agent
-                self._names[agent.name] = agent.agent_id
+                agent = PrincipalIdentity.from_dict(agent_data)
+                self._agents[agent.principal_id] = agent
+                self._names[agent.name] = agent.principal_id
             
             logger.debug(f"Loaded {len(self._agents)} agents from {self.registry_path}")
                 

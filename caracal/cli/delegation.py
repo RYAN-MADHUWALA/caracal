@@ -117,8 +117,8 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
         
         # Generate token
         token = registry.generate_delegation_token(
-            source_agent_id=parent_id,
-            target_agent_id=child_id,
+            source_principal_id=parent_id,
+            target_principal_id=child_id,
             expiration_seconds=expiration,
             allowed_operations=allowed_operations
         )
@@ -390,8 +390,8 @@ def revoke(ctx, policy_id: str, confirm: bool):
             sys.exit(1)
         
         # Get agent details for display
-        agent = registry.get_agent(policy.agent_id)
-        parent = registry.get_agent(policy.delegated_from_agent_id)
+        agent = registry.get_principal(policy.agent_id)
+        parent = registry.get_principal(policy.delegated_from_agent_id)
         
         # Confirm revocation
         if not confirm:

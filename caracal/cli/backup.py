@@ -43,10 +43,10 @@ def get_backup_dir(config) -> Path:
 def get_data_files(config) -> dict:
     """Get paths to all data files that should be backed up."""
     return {
-        "agents.json": Path(config.storage.agent_registry).expanduser(),
+        "agents.json": Path(config.storage.principal_registry).expanduser(),
         "policies.json": Path(config.storage.policy_store).expanduser(),
         "ledger.jsonl": Path(config.storage.ledger).expanduser(),
-        "config.yaml": Path(config.storage.agent_registry).expanduser().parent / "config.yaml",
+        "config.yaml": Path(config.storage.principal_registry).expanduser().parent / "config.yaml",
     }
 
 
