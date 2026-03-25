@@ -26,7 +26,7 @@ import structlog
 import toml
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from caracal.deployment.exceptions import (
     ConfigurationCorruptedError,
@@ -249,7 +249,7 @@ class ConfigManager:
         salt = hashlib.sha256(salt_data.encode()).digest()
         
         # Derive key using PBKDF2
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
