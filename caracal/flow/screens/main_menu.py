@@ -57,6 +57,12 @@ MAIN_MENU_ITEMS = [
         icon=Icons.LEDGER,
     ),
     MenuItem(
+        key="deployment",
+        label="Deployment",
+        description="Manage workspaces, sync, providers, and configuration",
+        icon=Icons.WORKSPACE,
+    ),
+    MenuItem(
         key="enterprise",
         label="Enterprise",
         description="Enterprise features and license management",
@@ -110,11 +116,22 @@ def show_main_menu(
 
 
 def _show_status_header(console: Console) -> None:
-    """Show system status in header with real service checks."""
+    """Show system status in header with real service checks and active workspace."""
     import socket
     from caracal.flow.theme import Icons
 
     status_items = []
+    
+    # Show active workspace prominently
+    try:
+        from caracal.deployment.config_manager import ConfigManager
+        config_mgr = ConfigManager()
+        workspaces = config_mgr.list_workspaces()
+        default_ws = next((ws for ws in workspaces if ws.is_default), None)
+        if default_ws:
+            status_items.append((Icons.WORKSPACE, f"Workspace: {default_ws.name}", Colors.PRIMARY))
+    except Exception:
+        pass
 
     try:
         from caracal.config import load_config
@@ -206,6 +223,24 @@ def get_submenu_items(category: str) -> list[MenuItem]:
             MenuItem(key="back", label="Back to Main Menu", 
                     description="", icon=Icons.ARROW_LEFT),
         ],
+        "deployment": [
+            MenuItem(key="dashboard", label="Dashboard", 
+                    description="System overview and status", icon=Icons.INFO),
+            MenuItem(key="workspaces", label="Workspace Manager", 
+                    description="Create, switch, and manage workspaces", icon=Icons.WORKSPACE),
+            MenuItem(key="sync", label="Sync Monitor", 
+                    description="Manage enterprise synchronization", icon=Icons.SYNC),
+            MenuItem(key="config", label="Configuration Editor", 
+                    description="Edit mode, edition, and system settings", icon=Icons.SETTINGS),
+            MenuItem(key="providers", label="Provider Manager", 
+                    description="Configure AI provider connections", icon=Icons.PROVIDER),
+            MenuItem(key="logs", label="Logs Viewer", 
+                    description="View application and sync logs", icon=Icons.FILE),
+            MenuItem(key="help", label="Deployment Help", 
+                    description="Command reference and guides", icon=Icons.HELP),
+            MenuItem(key="back", label="Back to Main Menu", 
+                    description="", icon=Icons.ARROW_LEFT),
+        ],
         "enterprise": [
             MenuItem(key="status", label="Enterprise Status", 
                     description="View enterprise license status", icon=""),
@@ -270,6 +305,7 @@ def show_submenu(category: str, console: Optional[Console] = None) -> Optional[s
         "ledger": "Authority Ledger",
         "mandates": "Mandate Manager",
         "delegation": "Delegation Center",
+        "deployment": "Deployment",
         "enterprise": "Enterprise",
         "settings": "Settings & Config",
         "help": "Help & Tutorials",
