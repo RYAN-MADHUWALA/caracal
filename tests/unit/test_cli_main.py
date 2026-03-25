@@ -141,6 +141,37 @@ storage:
             # Check that files were created in the provided workspace.
             caracal_dir = Path(tmpdir)
             assert caracal_dir.exists()
+
+        def test_doctor_detects_workspace_database_config(self, tmp_path, monkeypatch):
+                """Doctor reports PostgreSQL as configured when active YAML has a database section."""
+                runner = CliRunner()
+                monkeypatch.setenv("HOME", str(tmp_path))
+
+                config_path = tmp_path / "config.yaml"
+                config_path.write_text(
+                        """
+storage:
+    principal_registry: /tmp/agents.json
+    policy_store: /tmp/policies.json
+    ledger: /tmp/ledger.jsonl
+    backup_dir: /tmp/backups
+    backup_count: 3
+database:
+    host: db.example
+    port: 5432
+    database: caracal_test
+    user: caracal
+    password: secret
+""".strip()
+                        + "\n",
+                        encoding="utf-8",
+                )
+
+                result = runner.invoke(cli, ["--config", str(config_path), "doctor"])
+
+                assert result.exit_code == 0
+                assert "✓ PostgreSQL Configuration" in result.output
+                assert "Configured (workspace): db.example:5432/caracal_test" in result.output
             
 
 

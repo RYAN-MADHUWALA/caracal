@@ -8,12 +8,14 @@ Provides command-line interface for mode, edition, workspace, sync, and provider
 """
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import click
+import yaml
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -70,6 +72,59 @@ def _resolve_workspace_name(config_manager: ConfigManager, workspace: Optional[s
             return flow_workspaces[0].get("name")
     except Exception:
         pass
+
+    return None
+
+
+def _get_active_workspace_db_message() -> Optional[str]:
+    """Return a PostgreSQL configuration message from active workspace config, if present."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        root_ctx = ctx.find_root() if ctx else None
+        ctx_obj = getattr(root_ctx, "obj", None)
+
+        if not ctx_obj:
+            return None
+
+        runtime_config = ctx_obj.get("config") if hasattr(ctx_obj, "get") else None
+        runtime_db = getattr(runtime_config, "database", None)
+        if not runtime_db:
+            return None
+
+        config_path = ctx_obj.get("config_path") if hasattr(ctx_obj, "get") else None
+        has_database_section = False
+        if config_path:
+            workspace_config_path = Path(str(config_path)).expanduser()
+            if workspace_config_path.exists():
+                try:
+                    with open(workspace_config_path, "r", encoding="utf-8") as handle:
+                        raw_config = yaml.safe_load(handle) or {}
+                    has_database_section = isinstance(raw_config, dict) and isinstance(raw_config.get("database"), dict)
+                except Exception:
+                    logger.debug("doctor_workspace_config_parse_failed", config_path=str(workspace_config_path))
+
+        env_keys = (
+            "CARACAL_DATABASE_URL",
+            "CARACAL_DB_HOST",
+            "CARACAL_DB_PORT",
+            "CARACAL_DB_NAME",
+            "CARACAL_DB_USER",
+            "CARACAL_DB_PASSWORD",
+            "DB_HOST",
+            "DB_PORT",
+            "DB_NAME",
+            "DB_USER",
+            "DB_PASSWORD",
+        )
+        has_db_env = any(bool(os.getenv(key)) for key in env_keys)
+
+        if has_database_section or has_db_env:
+            return (
+                "Configured (workspace): "
+                f"{runtime_db.host}:{runtime_db.port}/{runtime_db.database}"
+            )
+    except Exception:
+        logger.debug("doctor_workspace_db_detection_failed", exc_info=True)
 
     return None
 
@@ -1042,11 +1097,19 @@ def doctor_command(format: str):
                     "message": f"Configured: {postgres_config.host}:{postgres_config.port}"
                 })
             else:
-                checks.append({
-                    "name": "PostgreSQL Configuration",
-                    "status": "warn",
-                    "message": "Not configured"
-                })
+                workspace_db_message = _get_active_workspace_db_message()
+                if workspace_db_message:
+                    checks.append({
+                        "name": "PostgreSQL Configuration",
+                        "status": "pass",
+                        "message": workspace_db_message,
+                    })
+                else:
+                    checks.append({
+                        "name": "PostgreSQL Configuration",
+                        "status": "warn",
+                        "message": "Not configured"
+                    })
         except Exception as e:
             checks.append({
                 "name": "PostgreSQL Configuration",
