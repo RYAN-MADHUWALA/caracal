@@ -121,14 +121,6 @@ class WorkspaceAwareGroup(click.Group):
                     if cmd:
                         help_text = cmd.get_short_help_str(limit=60)
                         formatter.write_text(f"  {cmd_name:<12}  {help_text}")
-        
-        # Add usage examples
-        formatter.write_paragraph()
-        formatter.write_text(click.style('Examples:', bold=True))
-        formatter.write_text("  caracal workspace list                    # List all workspaces")
-        formatter.write_text("  caracal workspace use prod                # Switch to 'prod' workspace")
-        formatter.write_text("  caracal principal list                    # List principals in active workspace")
-        formatter.write_text("  caracal --workspace prod principal list   # Use specific workspace")
     
     def format_commands(self, ctx: Context, formatter: click.HelpFormatter) -> None:
         """Override to prevent default command listing."""

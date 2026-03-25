@@ -489,18 +489,8 @@ logging:
 """
         config_path.write_text(default_config)
     
-    # Create empty data files if needed
-    agents_path = path / "agents.json"
-    if not agents_path.exists():
-        agents_path.write_text("[]")
-    
-    policies_path = path / "policies.json"
-    if not policies_path.exists():
-        policies_path.write_text("[]")
-    
-    ledger_path = path / "ledger.jsonl"
-    if not ledger_path.exists():
-        ledger_path.write_text("")
+    # We no longer create empty legacy JSON files (agents.json, policies.json, ledger.jsonl).
+    # All data is managed by PostgreSQL.
     
     # Note: SQLite no longer supported — PostgreSQL only.
     # Legacy .db files are left in place (harmless) for manual cleanup.
