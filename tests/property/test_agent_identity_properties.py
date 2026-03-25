@@ -19,7 +19,7 @@ from caracal.core.identity import PrincipalIdentity, VerificationStatus
 
 # Strategies for generating test data
 @st.composite
-def valid_agent_ids(draw):
+def valid_principal_ids(draw):
     """Generate valid non-empty agent IDs."""
     return draw(st.text(min_size=1, max_size=100).filter(lambda x: x.strip()))
 
@@ -78,10 +78,10 @@ def valid_verification_statuses(draw):
 
 
 @st.composite
-def valid_agent_identities(draw):
+def valid_principal_identities(draw):
     """Generate valid PrincipalIdentity instances."""
     return PrincipalIdentity(
-        agent_id=draw(valid_agent_ids()),
+        principal_id=draw(valid_principal_ids()),
         name=draw(valid_names()),
         owner=draw(valid_owners()),
         created_at=datetime.utcnow().isoformat() + "Z",
@@ -99,7 +99,7 @@ def valid_agent_identities(draw):
 class TestPrincipalIdentityProperties:
     """Property-based tests for PrincipalIdentity."""
     
-    @given(valid_agent_identities())
+    @given(valid_principal_identities())
     def test_property_6_serialization_round_trip(self, identity):
         """
         Property 6: PrincipalIdentity Serialization Round-Trip (with new fields)
@@ -142,7 +142,7 @@ class TestPrincipalIdentityProperties:
         """
         with pytest.raises(ValueError, match="trust_level must be between 0 and 100"):
             PrincipalIdentity(
-                agent_id="test-agent",
+                principal_id="test-agent",
                 name="Test Agent",
                 owner="test-owner",
                 created_at=datetime.utcnow().isoformat() + "Z",
@@ -151,12 +151,12 @@ class TestPrincipalIdentityProperties:
             )
     
     @given(
-        valid_agent_ids(),
+        valid_principal_ids(),
         valid_names(),
         valid_owners(),
         valid_capabilities()
     )
-    def test_property_8_capability_checking(self, agent_id, name, owner, capabilities):
+    def test_property_8_capability_checking(self, principal_id, name, owner, capabilities):
         """
         Property 8: Capability Checking
         
@@ -167,7 +167,7 @@ class TestPrincipalIdentityProperties:
         **Validates: Requirements 4.14**
         """
         identity = PrincipalIdentity(
-            agent_id=agent_id,
+            principal_id=principal_id,
             name=name,
             owner=owner,
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -185,12 +185,12 @@ class TestPrincipalIdentityProperties:
             assert not identity.has_capability(non_existent_capability)
     
     @given(
-        valid_agent_ids(),
+        valid_principal_ids(),
         valid_names(),
         valid_owners(),
         valid_verification_statuses()
     )
-    def test_property_verification_status_checking(self, agent_id, name, owner, verification_status):
+    def test_property_verification_status_checking(self, principal_id, name, owner, verification_status):
         """
         Property: Verification Status Checking
         
@@ -198,7 +198,7 @@ class TestPrincipalIdentityProperties:
         if verification_status is VERIFIED or TRUSTED, and False if UNVERIFIED.
         """
         identity = PrincipalIdentity(
-            agent_id=agent_id,
+            principal_id=principal_id,
             name=name,
             owner=owner,
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -212,11 +212,11 @@ class TestPrincipalIdentityProperties:
             assert not identity.is_verified()
     
     @given(
-        valid_agent_ids(),
+        valid_principal_ids(),
         valid_names(),
         valid_owners()
     )
-    def test_property_default_values(self, agent_id, name, owner):
+    def test_property_default_values(self, principal_id, name, owner):
         """
         Property: Default values should be set correctly
         
@@ -224,7 +224,7 @@ class TestPrincipalIdentityProperties:
         optional fields should have appropriate defaults.
         """
         identity = PrincipalIdentity(
-            agent_id=agent_id,
+            principal_id=principal_id,
             name=name,
             owner=owner,
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -241,16 +241,16 @@ class TestPrincipalIdentityProperties:
         assert identity.last_verified_at is None
     
     @given(st.one_of(st.just(""), st.text(max_size=0)))
-    def test_property_empty_agent_id_validation(self, empty_agent_id):
+    def test_property_empty_principal_id_validation(self, empty_principal_id):
         """
-        Property: Empty agent_id should be rejected
+        Property: Empty principal_id should be rejected
         
-        For any PrincipalIdentity instance, when agent_id is set to an empty string,
+        For any PrincipalIdentity instance, when principal_id is set to an empty string,
         the validation should reject it with ValueError.
         """
-        with pytest.raises(ValueError, match="agent_id must be non-empty string"):
+        with pytest.raises(ValueError, match="principal_id must be non-empty string"):
             PrincipalIdentity(
-                agent_id=empty_agent_id,
+                principal_id=empty_principal_id,
                 name="Test Agent",
                 owner="test-owner",
                 created_at=datetime.utcnow().isoformat() + "Z",
@@ -258,12 +258,12 @@ class TestPrincipalIdentityProperties:
             )
     
     @given(
-        valid_agent_ids(),
+        valid_principal_ids(),
         valid_names(),
         valid_owners(),
         st.sampled_from(["unverified", "verified", "trusted"])
     )
-    def test_property_verification_status_string_conversion(self, agent_id, name, owner, status_string):
+    def test_property_verification_status_string_conversion(self, principal_id, name, owner, status_string):
         """
         Property: Verification status strings should be converted to enums
         
@@ -271,7 +271,7 @@ class TestPrincipalIdentityProperties:
         it should be automatically converted to the appropriate enum value.
         """
         identity = PrincipalIdentity(
-            agent_id=agent_id,
+            principal_id=principal_id,
             name=name,
             owner=owner,
             created_at=datetime.utcnow().isoformat() + "Z",

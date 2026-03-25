@@ -117,7 +117,7 @@ class TestEnterpriseGatewayMetering:
                 ledger_event = json.loads(line)
             
             # Verify event structure
-            assert ledger_event["agent_id"] == "test-agent-123"
+            assert ledger_event["principal_id"] == "test-agent-123"
             assert ledger_event["resource_type"] == "api_call"
             assert ledger_event["quantity"] == "1"
             
@@ -177,7 +177,7 @@ class TestEnterpriseGatewayMetering:
         for i, resource_type in enumerate(resource_types):
             ledger_event = json.loads(lines[i])
             assert ledger_event["resource_type"] == resource_type
-            assert ledger_event["agent_id"] == f"agent-{resource_type}"
+            assert ledger_event["principal_id"] == f"agent-{resource_type}"
     
     @pytest.mark.asyncio
     async def test_gateway_metering_metadata_collection(
@@ -376,7 +376,7 @@ class TestEnterpriseGatewayMetering:
         
         # Verify we can create an instance
         event = MeteringEvent(
-            agent_id="test-agent",
+            principal_id="test-agent",
             resource_type="test.resource",
             quantity=Decimal("1")
         )

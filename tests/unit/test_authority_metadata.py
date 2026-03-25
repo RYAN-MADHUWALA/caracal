@@ -27,8 +27,8 @@ class TestAuthorityMetadata:
         **Validates: Requirements 19.1**
         """
         # Create agent identity
-        agent_identity = PrincipalIdentity(
-            agent_id="agent-123",
+        principal_identity = PrincipalIdentity(
+            principal_id="agent-123",
             name="Test Agent",
             owner="test-owner",
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -47,7 +47,7 @@ class TestAuthorityMetadata:
         # Create authority metadata
         metadata = AuthorityMetadata(
             version="1.0.0",
-            agent_identity=agent_identity,
+            principal_identity=principal_identity,
             mandate_id="mandate-789",
             audit_reference=audit_reference,
             delegation_token="jwt.token.here",
@@ -58,7 +58,7 @@ class TestAuthorityMetadata:
         
         # Verify all fields
         assert metadata.version == "1.0.0"
-        assert metadata.principal_identity == agent_identity
+        assert metadata.principal_identity == principal_identity
         assert metadata.mandate_id == "mandate-789"
         assert metadata.audit_reference == audit_reference
         assert metadata.delegation_token == "jwt.token.here"
@@ -105,8 +105,8 @@ class TestAuthorityMetadata:
         **Validates: Requirements 19.2**
         """
         # Create agent identity
-        agent_identity = PrincipalIdentity(
-            agent_id="agent-123",
+        principal_identity = PrincipalIdentity(
+            principal_id="agent-123",
             name="Test Agent",
             owner="test-owner",
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -127,7 +127,7 @@ class TestAuthorityMetadata:
         # Create authority metadata
         original = AuthorityMetadata(
             version="1.0.0",
-            agent_identity=agent_identity,
+            principal_identity=principal_identity,
             mandate_id="mandate-789",
             audit_reference=audit_reference,
             delegation_token="jwt.token.here",
@@ -140,8 +140,8 @@ class TestAuthorityMetadata:
         
         # Verify dict structure
         assert metadata_dict["version"] == "1.0.0"
-        assert metadata_dict["agent_identity"] is not None
-        assert metadata_dict["agent_identity"]["agent_id"] == "agent-123"
+        assert metadata_dict["principal_identity"] is not None
+        assert metadata_dict["principal_identity"]["principal_id"] == "agent-123"
         assert metadata_dict["mandate_id"] == "mandate-789"
         assert metadata_dict["audit_reference"] is not None
         assert metadata_dict["audit_reference"]["audit_id"] == "audit-456"
@@ -172,7 +172,7 @@ class TestAuthorityMetadata:
         """
         metadata = AuthorityMetadata(
             version="1.0.0",
-            agent_identity=None,
+            principal_identity=None,
             audit_reference=None
         )
         
@@ -180,7 +180,7 @@ class TestAuthorityMetadata:
         metadata_dict = metadata.to_dict()
         
         # Verify None fields are preserved
-        assert metadata_dict["agent_identity"] is None
+        assert metadata_dict["principal_identity"] is None
         assert metadata_dict["audit_reference"] is None
         
         # Deserialize back
@@ -190,15 +190,15 @@ class TestAuthorityMetadata:
         assert restored.principal_identity is None
         assert restored.audit_reference is None
     
-    def test_integration_with_agent_identity(self):
+    def test_integration_with_principal_identity(self):
         """
         Test integration with PrincipalIdentity.
         
         **Validates: Requirements 19.3**
         """
         # Create agent identity with enhanced fields
-        agent_identity = PrincipalIdentity(
-            agent_id="agent-123",
+        principal_identity = PrincipalIdentity(
+            principal_id="agent-123",
             name="Test Agent",
             owner="test-owner",
             created_at=datetime.utcnow().isoformat() + "Z",
@@ -214,12 +214,12 @@ class TestAuthorityMetadata:
         
         # Create authority metadata with agent identity
         metadata = AuthorityMetadata(
-            agent_identity=agent_identity,
+            principal_identity=principal_identity,
             mandate_id="mandate-789"
         )
         
         # Verify integration
-        assert metadata.principal_identity == agent_identity
+        assert metadata.principal_identity == principal_identity
         assert metadata.principal_identity.principal_id == "agent-123"
         assert metadata.principal_identity.verification_status == VerificationStatus.VERIFIED
         assert metadata.principal_identity.trust_level == 80
@@ -231,10 +231,10 @@ class TestAuthorityMetadata:
         restored = AuthorityMetadata.from_dict(metadata_dict)
         
         # Verify agent identity is preserved
-        assert restored.principal_identity.principal_id == agent_identity.principal_id
-        assert restored.principal_identity.verification_status == agent_identity.verification_status
-        assert restored.principal_identity.trust_level == agent_identity.trust_level
-        assert restored.principal_identity.capabilities == agent_identity.capabilities
+        assert restored.principal_identity.principal_id == principal_identity.principal_id
+        assert restored.principal_identity.verification_status == principal_identity.verification_status
+        assert restored.principal_identity.trust_level == principal_identity.trust_level
+        assert restored.principal_identity.capabilities == principal_identity.capabilities
     
     def test_integration_with_audit_reference(self):
         """
