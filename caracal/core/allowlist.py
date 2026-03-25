@@ -164,7 +164,7 @@ class AllowlistManager:
     
     def create_allowlist(
         self,
-        agent_id: UUID,
+        principal_id: UUID,
         resource_pattern: str,
         pattern_type: str
     ) -> ResourceAllowlist:
@@ -176,7 +176,7 @@ class AllowlistManager:
         basic validation.
         
         Args:
-            agent_id: UUID of the agent
+            principal_id: UUID of the agent
             resource_pattern: Pattern to match resources against
             pattern_type: Type of pattern ("regex" or "glob")
         
@@ -198,7 +198,7 @@ class AllowlistManager:
         
         # Create allowlist entry
         allowlist = ResourceAllowlist(
-            agent_id=agent_id,
+            principal_id=principal_id,
             resource_pattern=resource_pattern,
             pattern_type=pattern_type,
             created_at=datetime.utcnow(),
@@ -210,16 +210,16 @@ class AllowlistManager:
         self.db_session.refresh(allowlist)
         
         # Invalidate cache for this agent
-        self.invalidate_cache(agent_id)
+        self.invalidate_cache(principal_id)
         
         logger.info(
-            f"Created allowlist {allowlist.allowlist_id} for agent {agent_id}: "
+            f"Created allowlist {allowlist.allowlist_id} for agent {principal_id}: "
             f"{pattern_type} pattern '{resource_pattern[:50]}...'"
         )
         
         return allowlist
     
-    def check_resource(self, agent_id: UUID, resource_url: str) -> AllowlistDecision:
+    def check_resource(self, principal_id: UUID, resource_url: str) -> AllowlistDecision:
         """
         Check if a resource is allowed for an agent.
         
@@ -232,19 +232,19 @@ class AllowlistManager:
         6. If no patterns match, return denied
         
         Args:
-            agent_id: UUID of the agent
+            principal_id: UUID of the agent
             resource_url: URL of the resource to check
         
         Returns:
             AllowlistDecision with the result
         """
         # Check cache first
-        cached_entry = self._get_cached_allowlists(agent_id)
+        cached_entry = self._get_cached_allowlists(principal_id)
         
         if cached_entry is None:
             # Cache miss - query database
             self._cache_misses += 1
-            allowlists = self.list_allowlists(agent_id)
+            allowlists = self.list_allowlists(principal_id)
             
             # Compile regex patterns and cache
             compiled_patterns = {}
@@ -261,9 +261,9 @@ class AllowlistManager:
                 compiled_patterns=compiled_patterns,
                 cached_at=time.time()
             )
-            self._allowlist_cache[agent_id] = cached_entry
+            self._allowlist_cache[principal_id] = cached_entry
             
-            logger.debug(f"Cached {len(allowlists)} allowlist(s) for agent {agent_id}")
+            logger.debug(f"Cached {len(allowlists)} allowlist(s) for agent {principal_id}")
         else:
             self._cache_hits += 1
             allowlists = cached_entry.allowlists
@@ -271,7 +271,7 @@ class AllowlistManager:
         # Default allow if no allowlists configured
         if not allowlists:
             logger.debug(
-                f"No allowlists configured for agent {agent_id}, allowing resource: {resource_url}"
+                f"No allowlists configured for agent {principal_id}, allowing resource: {resource_url}"
             )
             return AllowlistDecision(
                 allowed=True,
@@ -286,7 +286,7 @@ class AllowlistManager:
                 compiled_pattern = cached_entry.compiled_patterns.get(allowlist.resource_pattern)
                 if compiled_pattern and compiled_pattern.match(resource_url):
                     logger.info(
-                        f"Resource {resource_url} allowed for agent {agent_id}: "
+                        f"Resource {resource_url} allowed for agent {principal_id}: "
                         f"matched regex pattern '{allowlist.resource_pattern[:50]}...'"
                     )
                     return AllowlistDecision(
@@ -298,7 +298,7 @@ class AllowlistManager:
                 # Use fnmatch for glob patterns
                 if fnmatch.fnmatch(resource_url, allowlist.resource_pattern):
                     logger.info(
-                        f"Resource {resource_url} allowed for agent {agent_id}: "
+                        f"Resource {resource_url} allowed for agent {principal_id}: "
                         f"matched glob pattern '{allowlist.resource_pattern[:50]}...'"
                     )
                     return AllowlistDecision(
@@ -309,7 +309,7 @@ class AllowlistManager:
         
         # No patterns matched, deny
         logger.warning(
-            f"Resource {resource_url} denied for agent {agent_id}: "
+            f"Resource {resource_url} denied for agent {principal_id}: "
             f"no matching patterns in {len(allowlists)} allowlist(s)"
         )
         return AllowlistDecision(
@@ -346,19 +346,19 @@ class AllowlistManager:
             logger.error(f"Invalid pattern_type: {pattern_type}")
             return False
     
-    def list_allowlists(self, agent_id: UUID) -> List[ResourceAllowlist]:
+    def list_allowlists(self, principal_id: UUID) -> List[ResourceAllowlist]:
         """
         List all active allowlists for an agent.
         
         Args:
-            agent_id: UUID of the agent
+            principal_id: UUID of the agent
         
         Returns:
             List of active ResourceAllowlist objects
         
         """
         stmt = select(ResourceAllowlist).where(
-            ResourceAllowlist.agent_id == agent_id,
+            ResourceAllowlist.principal_id == principal_id,
             ResourceAllowlist.active == True
         )
         result = self.db_session.execute(stmt)
@@ -388,24 +388,24 @@ class AllowlistManager:
         self.db_session.commit()
         
         # Invalidate cache for this agent
-        self.invalidate_cache(allowlist.agent_id)
+        self.invalidate_cache(allowlist.principal_id)
         
-        logger.info(f"Deactivated allowlist {allowlist_id} for agent {allowlist.agent_id}")
+        logger.info(f"Deactivated allowlist {allowlist_id} for agent {allowlist.principal_id}")
     
-    def invalidate_cache(self, agent_id: UUID) -> None:
+    def invalidate_cache(self, principal_id: UUID) -> None:
         """
         Invalidate cached allowlists for an agent.
         
         Should be called when allowlists are created, modified, or deleted.
         
         Args:
-            agent_id: UUID of the agent
+            principal_id: UUID of the agent
         
         """
-        if agent_id in self._allowlist_cache:
-            del self._allowlist_cache[agent_id]
+        if principal_id in self._allowlist_cache:
+            del self._allowlist_cache[principal_id]
             self._cache_invalidations += 1
-            logger.debug(f"Invalidated allowlist cache for agent {agent_id}")
+            logger.debug(f"Invalidated allowlist cache for agent {principal_id}")
     
     def get_cache_stats(self) -> Dict[str, int]:
         """
@@ -425,26 +425,26 @@ class AllowlistManager:
             "hit_rate": hit_rate
         }
     
-    def _get_cached_allowlists(self, agent_id: UUID) -> Optional[CachedAllowlistEntry]:
+    def _get_cached_allowlists(self, principal_id: UUID) -> Optional[CachedAllowlistEntry]:
         """
         Get cached allowlists for an agent if not expired.
         
         Args:
-            agent_id: UUID of the agent
+            principal_id: UUID of the agent
         
         Returns:
             CachedAllowlistEntry if found and not expired, None otherwise
         """
-        if agent_id not in self._allowlist_cache:
+        if principal_id not in self._allowlist_cache:
             return None
         
-        cached_entry = self._allowlist_cache[agent_id]
+        cached_entry = self._allowlist_cache[principal_id]
         age_seconds = time.time() - cached_entry.cached_at
         
         if age_seconds > self.cache_ttl_seconds:
             # Cache expired
-            del self._allowlist_cache[agent_id]
-            logger.debug(f"Allowlist cache expired for agent {agent_id} (age={age_seconds:.1f}s)")
+            del self._allowlist_cache[principal_id]
+            logger.debug(f"Allowlist cache expired for agent {principal_id} (age={age_seconds:.1f}s)")
             return None
         
         return cached_entry

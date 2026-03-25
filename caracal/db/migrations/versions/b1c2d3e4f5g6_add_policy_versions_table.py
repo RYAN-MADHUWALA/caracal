@@ -36,13 +36,13 @@ def upgrade() -> None:
         sa.Column('version_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('policy_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('version_number', sa.BigInteger(), nullable=False),
-        sa.Column('agent_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('principal_id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('limit_amount', sa.Numeric(precision=20, scale=6), nullable=False),
         sa.Column('time_window', sa.String(length=50), nullable=False),
         sa.Column('window_type', sa.String(length=50), nullable=True),
         sa.Column('currency', sa.String(length=3), nullable=False),
         sa.Column('active', sa.Boolean(), nullable=False),
-        sa.Column('delegated_from_agent_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('delegated_from_principal_id', postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column('change_type', sa.String(length=50), nullable=False),
         sa.Column('changed_by', sa.String(length=255), nullable=False),
         sa.Column('changed_at', sa.DateTime(), nullable=False),
@@ -53,10 +53,10 @@ def upgrade() -> None:
     
     # Create indexes
     op.create_index(op.f('ix_policy_versions_policy_id'), 'policy_versions', ['policy_id'], unique=False)
-    op.create_index(op.f('ix_policy_versions_agent_id'), 'policy_versions', ['agent_id'], unique=False)
+    op.create_index(op.f('ix_policy_versions_principal_id'), 'policy_versions', ['principal_id'], unique=False)
     op.create_index(op.f('ix_policy_versions_changed_at'), 'policy_versions', ['changed_at'], unique=False)
     op.create_index('ix_policy_versions_policy_version', 'policy_versions', ['policy_id', 'version_number'], unique=True)
-    op.create_index('ix_policy_versions_agent_changed', 'policy_versions', ['agent_id', 'changed_at'], unique=False)
+    op.create_index('ix_policy_versions_agent_changed', 'policy_versions', ['principal_id', 'changed_at'], unique=False)
     op.create_index('ix_policy_versions_type_changed', 'policy_versions', ['change_type', 'changed_at'], unique=False)
 
 
@@ -68,7 +68,7 @@ def downgrade() -> None:
     op.drop_index('ix_policy_versions_agent_changed', table_name='policy_versions')
     op.drop_index('ix_policy_versions_policy_version', table_name='policy_versions')
     op.drop_index(op.f('ix_policy_versions_changed_at'), table_name='policy_versions')
-    op.drop_index(op.f('ix_policy_versions_agent_id'), table_name='policy_versions')
+    op.drop_index(op.f('ix_policy_versions_principal_id'), table_name='policy_versions')
     op.drop_index(op.f('ix_policy_versions_policy_id'), table_name='policy_versions')
     
     # Drop table

@@ -175,7 +175,7 @@ class AuditLogManager:
     
     def query_audit_logs(
         self,
-        agent_id: Optional[UUID] = None,
+        principal_id: Optional[UUID] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         event_type: Optional[str] = None,
@@ -187,7 +187,7 @@ class AuditLogManager:
         Query audit logs with filters.
         
         Args:
-            agent_id: Filter by agent ID
+            principal_id: Filter by agent ID
             start_time: Filter by start time (inclusive)
             end_time: Filter by end time (inclusive)
             event_type: Filter by event type
@@ -205,8 +205,8 @@ class AuditLogManager:
             # Apply filters
             filters = []
             
-            if agent_id:
-                filters.append(AuditLog.agent_id == agent_id)
+            if principal_id:
+                filters.append(AuditLog.principal_id == principal_id)
             
             if start_time:
                 filters.append(AuditLog.event_timestamp >= start_time)
@@ -233,7 +233,7 @@ class AuditLogManager:
             results = query.all()
             
             logger.info(
-                f"Audit log query executed: agent_id={agent_id}, "
+                f"Audit log query executed: principal_id={principal_id}, "
                 f"start_time={start_time}, end_time={end_time}, "
                 f"event_type={event_type}, correlation_id={correlation_id}, "
                 f"results={len(results)}"
@@ -243,7 +243,7 @@ class AuditLogManager:
     
     def export_json(
         self,
-        agent_id: Optional[UUID] = None,
+        principal_id: Optional[UUID] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         event_type: Optional[str] = None,
@@ -254,7 +254,7 @@ class AuditLogManager:
         Export audit logs as JSON.
         
         Args:
-            agent_id: Filter by agent ID
+            principal_id: Filter by agent ID
             start_time: Filter by start time (inclusive)
             end_time: Filter by end time (inclusive)
             event_type: Filter by event type
@@ -266,7 +266,7 @@ class AuditLogManager:
             
         """
         logs = self.query_audit_logs(
-            agent_id=agent_id,
+            principal_id=principal_id,
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
@@ -286,7 +286,7 @@ class AuditLogManager:
                 "offset": log.offset,
                 "event_timestamp": log.event_timestamp.isoformat(),
                 "logged_at": log.logged_at.isoformat(),
-                "agent_id": str(log.agent_id) if log.agent_id else None,
+                "principal_id": str(log.principal_id) if log.principal_id else None,
                 "correlation_id": log.correlation_id,
                 "event_data": log.event_data,
             }
@@ -298,7 +298,7 @@ class AuditLogManager:
     
     def export_csv(
         self,
-        agent_id: Optional[UUID] = None,
+        principal_id: Optional[UUID] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         event_type: Optional[str] = None,
@@ -309,7 +309,7 @@ class AuditLogManager:
         Export audit logs as CSV.
         
         Args:
-            agent_id: Filter by agent ID
+            principal_id: Filter by agent ID
             start_time: Filter by start time (inclusive)
             end_time: Filter by end time (inclusive)
             event_type: Filter by event type
@@ -321,7 +321,7 @@ class AuditLogManager:
             
         """
         logs = self.query_audit_logs(
-            agent_id=agent_id,
+            principal_id=principal_id,
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
@@ -343,7 +343,7 @@ class AuditLogManager:
             "offset",
             "event_timestamp",
             "logged_at",
-            "agent_id",
+            "principal_id",
             "correlation_id",
             "event_data_json",
         ])
@@ -359,7 +359,7 @@ class AuditLogManager:
                 log.offset,
                 log.event_timestamp.isoformat(),
                 log.logged_at.isoformat(),
-                str(log.agent_id) if log.agent_id else "",
+                str(log.principal_id) if log.principal_id else "",
                 log.correlation_id or "",
                 json.dumps(log.event_data),
             ])
@@ -373,7 +373,7 @@ class AuditLogManager:
     
     def export_syslog(
         self,
-        agent_id: Optional[UUID] = None,
+        principal_id: Optional[UUID] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         event_type: Optional[str] = None,
@@ -386,7 +386,7 @@ class AuditLogManager:
         Export audit logs in SYSLOG format (RFC 5424).
         
         Args:
-            agent_id: Filter by agent ID
+            principal_id: Filter by agent ID
             start_time: Filter by start time (inclusive)
             end_time: Filter by end time (inclusive)
             event_type: Filter by event type
@@ -400,7 +400,7 @@ class AuditLogManager:
             
         """
         logs = self.query_audit_logs(
-            agent_id=agent_id,
+            principal_id=principal_id,
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
@@ -429,8 +429,8 @@ class AuditLogManager:
                 f'offset="{log.offset}"'
             )
             
-            if log.agent_id:
-                structured_data += f' agent_id="{log.agent_id}"'
+            if log.principal_id:
+                structured_data += f' principal_id="{log.principal_id}"'
             
             if log.correlation_id:
                 structured_data += f' correlation_id="{log.correlation_id}"'

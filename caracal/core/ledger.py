@@ -39,7 +39,7 @@ class LedgerEvent:
     Represents an immutable record of agent resource usage.
     """
     event_id: int
-    agent_id: str
+    principal_id: str
     timestamp: str  # ISO 8601 format
     resource_type: str
     quantity: str  # Decimal as string
@@ -106,7 +106,7 @@ class LedgerWriter:
 
     def append_event(
         self,
-        agent_id: str,
+        principal_id: str,
         resource_type: str,
         quantity: Decimal,
         metadata: Optional[Dict[str, Any]] = None,
@@ -119,7 +119,7 @@ class LedgerWriter:
         Writes are flushed immediately to ensure durability.
         
         Args:
-            agent_id: Agent identifier
+            principal_id: Agent identifier
             resource_type: Type of resource consumed
             quantity: Amount of resource consumed
             metadata: Optional additional context
@@ -133,9 +133,9 @@ class LedgerWriter:
             InvalidLedgerEventError: If event data is invalid
         """
         # Validate inputs
-        if not agent_id:
-            logger.warning("Ledger write validation failed: agent_id cannot be empty")
-            raise InvalidLedgerEventError("agent_id cannot be empty")
+        if not principal_id:
+            logger.warning("Ledger write validation failed: principal_id cannot be empty")
+            raise InvalidLedgerEventError("principal_id cannot be empty")
         if not resource_type:
             logger.warning("Ledger write validation failed: resource_type cannot be empty")
             raise InvalidLedgerEventError("resource_type cannot be empty")
@@ -155,7 +155,7 @@ class LedgerWriter:
         # Create ledger event
         event = LedgerEvent(
             event_id=self._get_next_event_id(),
-            agent_id=agent_id,
+            principal_id=principal_id,
             timestamp=timestamp.isoformat() + "Z",
             resource_type=resource_type,
             quantity=str(quantity),
@@ -167,7 +167,7 @@ class LedgerWriter:
             self._atomic_append(event)
             
             logger.info(
-                f"Ledger write: event_id={event.event_id}, agent_id={agent_id}, "
+                f"Ledger write: event_id={event.event_id}, principal_id={principal_id}, "
                 f"resource={resource_type}"
             )
             return event
@@ -356,7 +356,7 @@ class LedgerQuery:
 
     def get_events(
         self,
-        agent_id: Optional[str] = None,
+        principal_id: Optional[str] = None,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         resource_type: Optional[str] = None,
@@ -368,7 +368,7 @@ class LedgerQuery:
         All filters are optional and can be combined.
         
         Args:
-            agent_id: Filter by agent ID (optional)
+            principal_id: Filter by agent ID (optional)
             start_time: Filter events on or after this time (optional)
             end_time: Filter events before or at this time (optional)
             resource_type: Filter by resource type (optional)
@@ -395,7 +395,7 @@ class LedgerQuery:
                         event = LedgerEvent.from_dict(event_data)
                         
                         # Apply filters
-                        if agent_id is not None and event.agent_id != agent_id:
+                        if principal_id is not None and event.principal_id != principal_id:
                             continue
                         
                         if resource_type is not None and event.resource_type != resource_type:
@@ -442,7 +442,7 @@ class LedgerQuery:
             
             logger.debug(
                 f"Query returned {len(events)} events "
-                f"(agent_id={agent_id}, start_time={start_time}, "
+                f"(principal_id={principal_id}, start_time={start_time}, "
                 f"end_time={end_time}, resource_type={resource_type})"
             )
             
