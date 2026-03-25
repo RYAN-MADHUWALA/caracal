@@ -27,8 +27,8 @@ class TestMaterializedViewManager:
         
         assert manager.db_session == session
     
-    def test_refresh_spending_by_agent_success(self):
-        """Test successful refresh of spending_by_agent_mv."""
+    def test_refresh_usage_by_agent_success(self):
+        """Test successful refresh of usage_by_agent_mv."""
         session = Mock(spec=Session)
         manager = MaterializedViewManager(session)
         
@@ -37,14 +37,14 @@ class TestMaterializedViewManager:
         session.commit.return_value = None
         
         # Should not raise exception
-        manager.refresh_spending_by_agent(concurrent=True)
+        manager.refresh_usage_by_agent(concurrent=True)
         
         # Verify SQL was executed
         session.execute.assert_called_once()
         session.commit.assert_called_once()
     
-    def test_refresh_spending_by_agent_failure(self):
-        """Test failed refresh of spending_by_agent_mv."""
+    def test_refresh_usage_by_agent_failure(self):
+        """Test failed refresh of usage_by_agent_mv."""
         session = Mock(spec=Session)
         manager = MaterializedViewManager(session)
         
@@ -53,13 +53,13 @@ class TestMaterializedViewManager:
         
         # Should raise DatabaseError
         with pytest.raises(DatabaseError):
-            manager.refresh_spending_by_agent(concurrent=True)
+            manager.refresh_usage_by_agent(concurrent=True)
         
         # Verify rollback was called
         session.rollback.assert_called_once()
     
-    def test_refresh_spending_by_time_window_success(self):
-        """Test successful refresh of spending_by_time_window_mv."""
+    def test_refresh_usage_by_time_window_success(self):
+        """Test successful refresh of usage_by_time_window_mv."""
         session = Mock(spec=Session)
         manager = MaterializedViewManager(session)
         
@@ -68,7 +68,7 @@ class TestMaterializedViewManager:
         session.commit.return_value = None
         
         # Should not raise exception
-        manager.refresh_spending_by_time_window(concurrent=False)
+        manager.refresh_usage_by_time_window(concurrent=False)
         
         # Verify SQL was executed
         session.execute.assert_called_once()

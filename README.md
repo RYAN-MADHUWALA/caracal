@@ -104,6 +104,24 @@ Interactive terminal interface for monitoring authority ledgers, managing princi
 caracal-flow
 ```
 
+### Local Bootstrap (uv + Infra)
+
+Use the included `Makefile` to install Python dependencies with `uv` and start local infrastructure (`postgres` + `redis`) before running the CLI/TUI.
+
+```bash
+# From Caracal/
+make bootstrap
+
+# Launch the onboarding flow
+make flow
+```
+
+If `uv` is not installed yet:
+
+```bash
+make install-uv
+```
+
 ---
 
 ## Technical Architecture
