@@ -163,10 +163,10 @@ def create(
                 principal_type = "agent"
 
                 try:
-                    registry_path = Path(cli_ctx.config.storage.agent_registry).expanduser()
+                    registry_path = Path(cli_ctx.config.storage.principal_registry).expanduser()
                     backup_count = cli_ctx.config.storage.backup_count
                     registry = AgentRegistry(str(registry_path), backup_count=backup_count)
-                    agent = registry.get_agent(str(principal_uuid))
+                    agent = registry.get_principal(str(principal_uuid))
                     if agent:
                         principal_name = agent.name
                         principal_owner = agent.owner

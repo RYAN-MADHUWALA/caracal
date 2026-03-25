@@ -166,7 +166,7 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
 def log_authentication_failure(
     logger: structlog.stdlib.BoundLogger,
     auth_method: str,
-    agent_id: Optional[str] = None,
+    principal_id: Optional[str] = None,
     reason: str = "unknown",
     **kwargs: Any,
 ) -> None:
@@ -176,7 +176,7 @@ def log_authentication_failure(
     Args:
         logger: Logger instance
         auth_method: Authentication method used ("mtls", "jwt", "api_key")
-        agent_id: Agent ID if available
+        principal_id: Agent ID if available
         reason: Reason for failure
         **kwargs: Additional context to log
     """
@@ -186,8 +186,8 @@ def log_authentication_failure(
         "reason": reason,
     }
     
-    if agent_id is not None:
-        log_data["agent_id"] = agent_id
+    if principal_id is not None:
+        log_data["principal_id"] = principal_id
     
     log_data.update(kwargs)
     
@@ -225,8 +225,8 @@ def log_database_query(
 
 def log_delegation_token_validation(
     logger: structlog.stdlib.BoundLogger,
-    source_agent_id: str,
-    target_agent_id: str,
+    source_principal_id: str,
+    target_principal_id: str,
     success: bool,
     reason: Optional[str] = None,
     **kwargs: Any,
@@ -236,16 +236,16 @@ def log_delegation_token_validation(
     
     Args:
         logger: Logger instance
-        source_agent_id: Source (delegating) agent ID
-        target_agent_id: Target (delegated-to) agent ID
+        source_principal_id: Source (delegating) agent ID
+        target_principal_id: Target (delegated-to) agent ID
         success: Whether validation succeeded
         reason: Reason for failure if not successful
         **kwargs: Additional context to log
     """
     log_data: Dict[str, Any] = {
         "event_type": "delegation_token_validation",
-        "source_agent_id": source_agent_id,
-        "target_agent_id": target_agent_id,
+        "source_principal_id": source_principal_id,
+        "target_principal_id": target_principal_id,
         "success": success,
     }
     
@@ -369,7 +369,7 @@ def log_merkle_verification(
 def log_policy_version_change(
     logger: structlog.stdlib.BoundLogger,
     policy_id: str,
-    agent_id: str,
+    principal_id: str,
     change_type: str,
     version_number: int,
     changed_by: str,
@@ -384,7 +384,7 @@ def log_policy_version_change(
     Args:
         logger: Logger instance
         policy_id: Policy ID
-        agent_id: Agent ID
+        principal_id: Agent ID
         change_type: Type of change (created, modified, deactivated)
         version_number: New version number
         changed_by: Identity of who made the change
@@ -396,7 +396,7 @@ def log_policy_version_change(
     log_data: Dict[str, Any] = {
         "event_type": "policy_version_change",
         "policy_id": policy_id,
-        "agent_id": agent_id,
+        "principal_id": principal_id,
         "change_type": change_type,
         "version_number": version_number,
         "changed_by": changed_by,
@@ -415,7 +415,7 @@ def log_policy_version_change(
 
 def log_allowlist_check(
     logger: structlog.stdlib.BoundLogger,
-    agent_id: str,
+    principal_id: str,
     resource: str,
     result: str,
     matched_pattern: Optional[str] = None,
@@ -428,7 +428,7 @@ def log_allowlist_check(
     
     Args:
         logger: Logger instance
-        agent_id: Agent ID
+        principal_id: Agent ID
         resource: Resource being checked
         result: Check result (allowed, denied, no_allowlist)
         matched_pattern: Pattern that matched (if allowed)
@@ -438,7 +438,7 @@ def log_allowlist_check(
     """
     log_data: Dict[str, Any] = {
         "event_type": "allowlist_check",
-        "agent_id": agent_id,
+        "principal_id": principal_id,
         "resource": resource,
         "result": result,
     }
