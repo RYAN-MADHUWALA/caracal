@@ -29,7 +29,7 @@ class DuplicatePrincipalNameError(IdentityError):
     pass
 
 
-class InvalidAgentIDError(IdentityError):
+class InvalidPrincipalIDError(IdentityError):
     """Raised when an agent ID is invalid or malformed."""
     pass
 

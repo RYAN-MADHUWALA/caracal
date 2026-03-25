@@ -125,6 +125,7 @@ class PrincipalIdentity:
         """
         return {
             "principal_id": self.principal_id,
+            "principal_type": self.principal_type,
             "name": self.name,
             "owner": self.owner,
             "created_at": self.created_at,
@@ -156,6 +157,7 @@ class PrincipalIdentity:
         
         return cls(
             principal_id=data["principal_id"],
+            principal_type=data.get("principal_type", "agent"),
             name=data["name"],
             owner=data["owner"],
             created_at=data["created_at"],
