@@ -197,8 +197,9 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
 
     ctx.obj.config_path = str(resolved_config_path)
     
-    # Keep --help/--version output clean
+    # Detect global flags used to keep setup output clean.
     is_help_or_version = any(arg in {"--help", "-h", "--version"} for arg in sys.argv[1:])
+    is_version = any(arg == "--version" for arg in sys.argv[1:])
     
     # Load configuration
     try:
@@ -215,6 +216,12 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
             click.echo(f"Error: Failed to load configuration: {e}", err=True)
             sys.exit(1)
     
+    # Show active workspace context for any subcommand invocation, including
+    # subcommand help. Root help already renders this via WorkspaceAwareGroup.
+    if ctx.invoked_subcommand is not None and not is_version:
+        active_ws = ctx.obj['workspace']
+        click.echo(f"Active Workspace: {click.style(active_ws, fg='cyan', bold=True)}")
+
     if is_help_or_version:
         return
     
@@ -241,7 +248,7 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
     if ctx.invoked_subcommand is None:
         active_ws = ctx.obj['workspace']
         click.echo(f"Caracal v{__version__}")
-        click.echo(f"Active workspace: {click.style(active_ws, fg='cyan', bold=True)}")
+        click.echo(f"Active Workspace: {click.style(active_ws, fg='cyan', bold=True)}")
         click.echo()
         click.echo("Run 'caracal --help' for available commands")
         click.echo("Run 'caracal workspace list' to see all workspaces")
