@@ -474,7 +474,7 @@ def _initialize_caracal_dir(path: Path, wipe: bool = False) -> None:
         default_config = f"""# Caracal Core Configuration
 
 storage:
-  agent_registry: {path}/agents.json
+  principal_registry: {path}/agents.json
   policy_store: {path}/policies.json
   ledger: {path}/ledger.jsonl
   backup_dir: {path}/backups

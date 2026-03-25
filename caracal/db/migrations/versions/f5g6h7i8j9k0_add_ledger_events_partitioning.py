@@ -49,7 +49,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE TABLE ledger_events (
             event_id BIGSERIAL,
-            agent_id UUID NOT NULL,
+            principal_id UUID NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             resource_type VARCHAR(255) NOT NULL,
             quantity NUMERIC(20, 6) NOT NULL,
@@ -58,7 +58,7 @@ def upgrade() -> None:
             metadata JSONB,
             provisional_charge_id UUID,
             PRIMARY KEY (event_id, timestamp),
-            FOREIGN KEY (agent_id) REFERENCES agent_identities(agent_id)
+            FOREIGN KEY (principal_id) REFERENCES principal_identities(principal_id)
         ) PARTITION BY RANGE (timestamp);
     """)
     
@@ -96,9 +96,9 @@ def upgrade() -> None:
     # Step 5: Recreate indexes on partitioned table
     # Note: Indexes are created on parent table and inherited by partitions
     op.create_index(
-        'ix_ledger_events_agent_id', 
+        'ix_ledger_events_principal_id', 
         'ledger_events', 
-        ['agent_id'], 
+        ['principal_id'], 
         unique=False
     )
     op.create_index(
@@ -110,7 +110,7 @@ def upgrade() -> None:
     op.create_index(
         'ix_ledger_events_agent_timestamp', 
         'ledger_events', 
-        ['agent_id', 'timestamp'], 
+        ['principal_id', 'timestamp'], 
         unique=False
     )
     op.create_index(
@@ -128,7 +128,7 @@ def upgrade() -> None:
     op.create_index(
         'ix_ledger_events_agent_resource_timestamp',
         'ledger_events',
-        ['agent_id', 'resource_type', 'timestamp'],
+        ['principal_id', 'resource_type', 'timestamp'],
         unique=False
     )
     
@@ -149,7 +149,7 @@ def downgrade() -> None:
     op.execute("""
         CREATE TABLE ledger_events_new (
             event_id BIGSERIAL PRIMARY KEY,
-            agent_id UUID NOT NULL,
+            principal_id UUID NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             resource_type VARCHAR(255) NOT NULL,
             quantity NUMERIC(20, 6) NOT NULL,
@@ -157,7 +157,7 @@ def downgrade() -> None:
             currency VARCHAR(3) NOT NULL DEFAULT 'USD',
             metadata JSONB,
             provisional_charge_id UUID,
-            FOREIGN KEY (agent_id) REFERENCES agent_identities(agent_id)
+            FOREIGN KEY (principal_id) REFERENCES principal_identities(principal_id)
         );
     """)
     
@@ -175,9 +175,9 @@ def downgrade() -> None:
     
     # Step 5: Recreate indexes
     op.create_index(
-        'ix_ledger_events_agent_id', 
+        'ix_ledger_events_principal_id', 
         'ledger_events', 
-        ['agent_id'], 
+        ['principal_id'], 
         unique=False
     )
     op.create_index(
@@ -189,7 +189,7 @@ def downgrade() -> None:
     op.create_index(
         'ix_ledger_events_agent_timestamp', 
         'ledger_events', 
-        ['agent_id', 'timestamp'], 
+        ['principal_id', 'timestamp'], 
         unique=False
     )
     op.create_index(
@@ -207,7 +207,7 @@ def downgrade() -> None:
     op.create_index(
         'ix_ledger_events_agent_resource_timestamp',
         'ledger_events',
-        ['agent_id', 'resource_type', 'timestamp'],
+        ['principal_id', 'resource_type', 'timestamp'],
         unique=False
     )
     

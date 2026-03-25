@@ -36,7 +36,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE MATERIALIZED VIEW spending_by_agent_mv AS
         SELECT 
-            agent_id,
+            principal_id,
             currency,
             SUM(cost) as total_spending,
   
@@ -45,14 +45,14 @@ def upgrade() -> None:
             MAX(timestamp) as last_event_at,
             NOW() as refreshed_at
         FROM ledger_events
-        GROUP BY agent_id, currency
+        GROUP BY principal_id, currency
         WITH DATA;
     """)
     
     # Create unique index on materialized view for concurrent refresh
     op.execute("""
         CREATE UNIQUE INDEX ix_spending_by_agent_mv_agent_currency 
-        ON spending_by_agent_mv (agent_id, currency);
+        ON spending_by_agent_mv (principal_id, currency);
     """)
     
     # Create materialized view for spending by time windows
@@ -60,7 +60,7 @@ def upgrade() -> None:
     op.execute("""
         CREATE MATERIALIZED VIEW spending_by_time_window_mv AS
         SELECT 
-            agent_id,
+            principal_id,
             currency,
             -- Hourly aggregations (last 24 hours)
             SUM(CASE 
@@ -100,19 +100,19 @@ def upgrade() -> None:
             COUNT(*) as total_events,
             NOW() as refreshed_at
         FROM ledger_events
-        GROUP BY agent_id, currency
+        GROUP BY principal_id, currency
         WITH DATA;
     """)
     
     # Create unique index on time window materialized view for concurrent refresh
     op.execute("""
         CREATE UNIQUE INDEX ix_spending_by_time_window_mv_agent_currency 
-        ON spending_by_time_window_mv (agent_id, currency);
+        ON spending_by_time_window_mv (principal_id, currency);
     """)
     
-    # Add composite index on (agent_id, timestamp) for time-range queries
+    # Add composite index on (principal_id, timestamp) for time-range queries
     # This index is already created in the initial schema, but we ensure it exists
-    # op.create_index('ix_ledger_events_agent_timestamp', 'ledger_events', ['agent_id', 'timestamp'], unique=False)
+    # op.create_index('ix_ledger_events_agent_timestamp', 'ledger_events', ['principal_id', 'timestamp'], unique=False)
     
     # Add index on resource_type for filtering by resource
     op.create_index(
@@ -130,11 +130,11 @@ def upgrade() -> None:
         unique=False
     )
     
-    # Add composite index on (agent_id, resource_type, timestamp) for filtered queries
+    # Add composite index on (principal_id, resource_type, timestamp) for filtered queries
     op.create_index(
         'ix_ledger_events_agent_resource_timestamp',
         'ledger_events',
-        ['agent_id', 'resource_type', 'timestamp'],
+        ['principal_id', 'resource_type', 'timestamp'],
         unique=False
     )
 
