@@ -112,10 +112,10 @@ def _get_principal_from_db(config, principal_id: str) -> Optional[dict]:
     help='Human-readable principal name (must be unique)',
 )
 @click.option(
-    '--owner',
-    '-o',
+    '--email',
+    '-e',
     required=True,
-    help='Owner identifier (email or username)',
+    help='Principal email address',
 )
 @click.option(
     '--metadata',
@@ -124,7 +124,7 @@ def _get_principal_from_db(config, principal_id: str) -> Optional[dict]:
     help='Metadata key=value pairs (can be specified multiple times)',
 )
 @click.pass_context
-def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
+def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
     """
     Register a new AI principal with a unique identity.
     
@@ -132,9 +132,9 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
     
     Examples:
     
-        caracal principal register --name my-principal --owner user@example.com
+        caracal principal register --name my-principal --email user@example.com
         
-        caracal principal register -n research-bot -o researcher@university.edu \
+        caracal principal register -n research-bot -e researcher@university.edu \
             -m department=AI -m project=LLM
     """
     try:
@@ -168,7 +168,7 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
                     principal = Principal(
                         name=name,
                         principal_type=principal_type,
-                        owner=owner,
+                        owner=email,
                         created_at=datetime.utcnow(),
                         principal_metadata=metadata_dict or None,
                     )
@@ -191,7 +191,7 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
             principal_obj = registry.register_principal(
                 name=name,
                 principal_type=principal_type,
-                owner=owner,
+                owner=email,
                 metadata=metadata_dict,
             )
             principal = _principal_to_dict(principal_obj)
@@ -203,7 +203,7 @@ def register(ctx, name: str, principal_type: str, owner: str, metadata: tuple):
         click.echo(f"Name:        {principal['name']}")
         click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
 
-        click.echo(f"Owner:       {principal['owner']}")
+        click.echo(f"Email:       {principal['owner']}")
         click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
 
         if principal.get('metadata'):
@@ -248,7 +248,7 @@ def list_principals(ctx, principal_type: str, format: str):
     """
     List all registered principals.
     
-    Displays all principals in the registry with their IDs, names, and owners.
+    Displays all principals in the registry with their IDs, names, and emails.
     
     Examples:
     
@@ -286,17 +286,17 @@ def list_principals(ctx, principal_type: str, format: str):
             # Calculate column widths
             max_id_len = max(len(str(principal["principal_id"])) for principal in principals)
             max_name_len = max(len(str(principal["name"])) for principal in principals)
-            max_owner_len = max(len(str(principal["owner"])) for principal in principals)
+            max_email_len = max(len(str(principal["owner"])) for principal in principals)
             max_type_len = max(len(str(principal.get("principal_type", "agent"))) for principal in principals)
             
             # Ensure minimum widths for headers
             id_width = max(max_id_len, len("Principal ID"))
             name_width = max(max_name_len, len("Name"))
-            owner_width = max(max_owner_len, len("Owner"))
+            email_width = max(max_email_len, len("Email"))
             type_width = max(max_type_len, len("Type"))
             
             # Print header
-            header = f"{'Principal ID':<{id_width}}  {'Type':<{type_width}}  {'Name':<{name_width}}  {'Owner':<{owner_width}}  Created"
+            header = f"{'Principal ID':<{id_width}}  {'Type':<{type_width}}  {'Name':<{name_width}}  {'Email':<{email_width}}  Created"
             click.echo(header)
             click.echo("-" * len(header))
             
@@ -308,7 +308,7 @@ def list_principals(ctx, principal_type: str, format: str):
                     f"{str(principal['principal_id']):<{id_width}}  "
                     f"{str(principal.get('principal_type', 'agent')):<{type_width}}  "
                     f"{str(principal['name']):<{name_width}}  "
-                    f"{str(principal['owner']):<{owner_width}}  "
+                    f"{str(principal['owner']):<{email_width}}  "
                     f"{created}"
                 )
         
@@ -383,7 +383,7 @@ def get(ctx, principal_id: str, principal_type: str, format: str):
             click.echo(f"Name:        {principal['name']}")
             click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
 
-            click.echo(f"Owner:       {principal['owner']}")
+            click.echo(f"Email:       {principal['owner']}")
             click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
 
             if principal.get('metadata'):

@@ -179,7 +179,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
                     "register",
                     "--name",
                     "workflow-agent",
-                    "--owner",
+                    "--email",
                     "ops@example.com",
                 ],
                 "expected_success": True,
@@ -416,7 +416,7 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
     workflow_steps = [
         "caracal setup init",
         "caracal system db init-db",
-        "caracal agent register --name ops-agent --owner ops@example.com",
+        "caracal agent register --name ops-agent --email ops@example.com",
         "caracal policy create --principal-id <principal-uuid> --max-validity-seconds 3600 --resource-pattern 'api:*' --action 'api_call'",
         "caracal delegation generate --source-id <parent-uuid> --target-id <child-uuid> --authority-scope 100",
         "caracal authority issue --issuer-id <issuer-uuid> --subject-id <subject-uuid> --resource-scope 'api:*' --action-scope 'api_call' --validity-seconds 3600",

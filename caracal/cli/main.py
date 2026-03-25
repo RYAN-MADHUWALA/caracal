@@ -447,7 +447,7 @@ def principal(ctx):
     
     \b
     Examples:
-        caracal principal register             # Register new principal
+        caracal principal register --type user --name alice --email alice@example.com
         caracal principal list                 # List all principals
         caracal principal get -a <principal-id>  # Get principal details
     """
