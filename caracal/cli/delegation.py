@@ -49,16 +49,16 @@ def get_principal_registry_with_delegation(config) -> tuple:
 
 @click.command('generate')
 @click.option(
-    '--parent-id',
+    '--source-id',
     '-p',
     required=True,
-    help='Source agent ID (issuer)',
+    help='Source principal ID (issuer)',
 )
 @click.option(
-    '--child-id',
+    '--target-id',
     '-c',
     required=True,
-    help='Target agent ID (subject)',
+    help='Target principal ID (subject)',
 )
 @click.option(
     '--authority-scope',
@@ -67,11 +67,7 @@ def get_principal_registry_with_delegation(config) -> tuple:
     type=float,
     help='Maximum authority scope allowed',
 )
-@click.option(
-    '--currency',
-    default='USD',
-    help='Currency code (default: USD)',
-)
+
 @click.option(
     '--expiration',
     '-e',
@@ -85,24 +81,50 @@ def get_principal_registry_with_delegation(config) -> tuple:
     multiple=True,
     help='Allowed operations (can be specified multiple times, default: api_call, mcp_tool)',
 )
+@click.option(
+    '--delegation-type',
+    default='hierarchical',
+    type=click.Choice(['hierarchical', 'chained', 'peer']),
+    help='Type of delegation: hierarchical, chained, or peer (default: hierarchical)',
+)
+@click.option(
+    '--source-type',
+    default='agent',
+    type=click.Choice(['user', 'agent', 'service']),
+    help='Type of the source principal (default: agent)',
+)
+@click.option(
+    '--target-type',
+    default='agent',
+    type=click.Choice(['user', 'agent', 'service']),
+    help='Type of the target principal (default: agent)',
+)
+@click.option(
+    '--context-tags',
+    '-t',
+    multiple=True,
+    help='Context tags for the delegation token',
+)
 @click.pass_context
-def generate(ctx, parent_id: str, child_id: str, authority_scope: float, 
-             currency: str, expiration: int, operations: tuple):
+def generate(ctx, source_id: str, target_id: str, authority_scope: float, 
+             expiration: int, operations: tuple,
+             delegation_type: str, source_type: str, target_type: str, context_tags: tuple):
     """
-    Generate a delegation token for a target agent.
+    Generate a delegation token for a target principal.
     
-    Creates a JWT token signed by the source agent that authorizes the target
-    agent to operate within the specified authority scope.
+    Creates a JWT token signed by the source principal that authorizes the target
+    principal to operate within the specified authority scope.
     
     Examples:
     
-        caracal delegation generate \\
-            --parent-id 550e8400-e29b-41d4-a716-446655440000 \\
-            --child-id 660e8400-e29b-41d4-a716-446655440001 \\
+        caracal delegation generate \
+            --source-id 550e8400-e29b-41d4-a716-446655440000 \
+            --target-id 660e8400-e29b-41d4-a716-446655440001 \
             --authority-scope 100.00
         
-        caracal delegation generate -p parent-uuid -c child-uuid \\
-            -l 50.00 --currency EUR --expiration 3600 \\
+        caracal delegation generate -p source-uuid -c target-uuid \
+            -l 50.00 --expiration 3600 \
+            --delegation-type chained --source-type user --target-type agent \
             -o api_call -o mcp_tool
     """
     try:
@@ -115,12 +137,19 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
         # Parse allowed operations
         allowed_operations = list(operations) if operations else None
         
+        # Parse context tags
+        tags_list = list(context_tags) if context_tags else None
+        
         # Generate token
         token = registry.generate_delegation_token(
-            source_principal_id=parent_id,
-            target_principal_id=child_id,
+            source_principal_id=source_id,
+            target_principal_id=target_id,
             expiration_seconds=expiration,
-            allowed_operations=allowed_operations
+            allowed_operations=allowed_operations,
+            delegation_type=delegation_type,
+            source_principal_type=source_type,
+            target_principal_type=target_type,
+            context_tags=tags_list
         )
         
         if token is None:
@@ -130,9 +159,9 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
         # Display success message
         click.echo("✓ Delegation token generated successfully!")
         click.echo()
-        click.echo(f"Source Agent:    {parent_id}")
-        click.echo(f"Target Agent:    {child_id}")
-        click.echo(f"Authority Scope: {authority_scope} {currency}")
+        click.echo(f"Source Agent:    {source_id}")
+        click.echo(f"Target Agent:    {target_id}")
+        click.echo(f"Authority Scope: {authority_scope}")
         click.echo(f"Expires In:      {expiration} seconds")
         click.echo()
         click.echo("Token:")
@@ -150,9 +179,9 @@ def generate(ctx, parent_id: str, child_id: str, authority_scope: float,
 
 @click.command('list')
 @click.option(
-    '--agent-id',
-    '-a',
-    help='Agent ID to list delegations for (shows both delegated to and from)',
+    '--principal-id',
+    '-p',
+    help='Principal ID to list delegations for (shows both delegated to and from)',
 )
 @click.option(
     '--format',
@@ -173,7 +202,7 @@ def list_delegations(ctx, principal_id: str, format: str):
     
         caracal delegation list
         
-        caracal delegation list --agent-id 550e8400-e29b-41d4-a716-446655440000
+        caracal delegation list --principal-id 550e8400-e29b-41d4-a716-446655440000
         
         caracal delegation list --format json
     """
@@ -195,9 +224,9 @@ def list_delegations(ctx, principal_id: str, format: str):
             )
             
             if principal_id:
-                # Filter edges involving this agent (as source or target principal)
+                # Filter edges involving this principal (as source or target principal)
                 from caracal.db.models import ExecutionMandate
-                # Get mandates for this agent
+                # Get mandates for this principal
                 mandates = session.query(ExecutionMandate.mandate_id).filter(
                     ExecutionMandate.subject_id == principal_id
                 ).all()
@@ -343,7 +372,7 @@ def revoke(ctx, policy_id: str, confirm: bool):
     """
     Revoke a delegation policy.
     
-    Deactivates the delegation policy for a target agent, effectively revoking
+    Deactivates the delegation policy for a target principal, effectively revoking
     their designated authority.
     
     Examples:
@@ -417,7 +446,7 @@ def revoke(ctx, policy_id: str, confirm: bool):
         click.echo(f"Target Agent:  {agent.name if agent else 'Unknown'}")
         click.echo(f"Status:        Inactive")
         click.echo()
-        click.echo("⚠ The target agent remains registered but can no longer spend.")
+        click.echo("⚠ The target principal remains registered but its delegated authority is now revoked.")
         
     except CaracalError as e:
         click.echo(f"Error: {e}", err=True)

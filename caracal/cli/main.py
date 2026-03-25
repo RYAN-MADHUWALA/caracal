@@ -454,31 +454,7 @@ def validate_time_window(ctx, param, value):
     return value
 
 
-def validate_currency(ctx, param, value):
-    """
-    Validate that a currency code is valid.
-    
-    Args:
-        ctx: Click context
-        param: Click parameter
-        value: Value to validate
-        
-    Returns:
-        Validated value
-        
-    Raises:
-        click.BadParameter: If currency is invalid
-    """
-    if value is None:
-        return value
-    
-    # v0.1 only supports USD
-    valid_currencies = ["USD"]
-    if value.upper() not in valid_currencies:
-        raise click.BadParameter(
-            f"must be one of {valid_currencies}, got '{value}'"
-        )
-    return value.upper()
+
 
 
 def validate_resource_type(ctx, param, value):

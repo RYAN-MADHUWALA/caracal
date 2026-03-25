@@ -31,7 +31,7 @@ class TestMockAdapter:
         expected = SDKResponse(status_code=200, body={"ok": True}, elapsed_ms=0.5)
         adapter = MockAdapter(responses={("POST", "/mandates"): expected})
 
-        req = SDKRequest(method="POST", path="/mandates", headers={}, body={"agent_id": "a1"})
+        req = SDKRequest(method="POST", path="/mandates", headers={}, body={"principal_id": "a1"})
         result = await adapter.send(req)
         assert result.status_code == 200
         assert result.body == {"ok": True}
