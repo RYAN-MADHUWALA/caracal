@@ -27,6 +27,14 @@ from caracal.flow.components.menu import Menu, MenuItem
 from caracal.flow.components.prompt import FlowPrompt, FlowValidator
 from caracal.flow.state import FlowState, RecentAction
 from caracal.flow.theme import Colors, Icons
+from caracal.provider.catalog import (
+    AUTH_SCHEME_GUIDANCE as SHARED_AUTH_SCHEME_GUIDANCE,
+    GATEWAY_ONLY_AUTH as SHARED_GATEWAY_ONLY_AUTH,
+    PROVIDER_PATTERNS as SHARED_PROVIDER_PATTERNS,
+    SERVICE_TYPE_GUIDANCE as SHARED_SERVICE_TYPE_GUIDANCE,
+    build_provider_record,
+    build_resources_from_pattern as shared_build_resources_from_pattern,
+)
 from caracal.provider.definitions import build_action_scope, build_resource_scope
 from caracal.provider.workspace import (
     load_workspace_provider_registry,
@@ -593,6 +601,14 @@ _PROVIDER_PATTERNS = {
     ),
 }
 
+# Shared provider contract source of truth. The local literals above remain for
+# backward-compatible tests/imports, but all runtime flows use the shared
+# catalog so CLI, TUI, and enterprise APIs stay aligned.
+_SERVICE_TYPE_GUIDANCE = SHARED_SERVICE_TYPE_GUIDANCE
+_AUTH_SCHEME_GUIDANCE = SHARED_AUTH_SCHEME_GUIDANCE
+_PROVIDER_PATTERNS = SHARED_PROVIDER_PATTERNS
+_GATEWAY_ONLY_AUTH = SHARED_GATEWAY_ONLY_AUTH
+
 
 def show_provider_manager(console: Console, state: FlowState) -> None:
     """Display provider manager interface."""
@@ -747,19 +763,6 @@ def _add_provider(console: Console, state: FlowState) -> None:
     if auth_scheme != "none":
         secret_ref = credential_ref or f"provider_{name}_credential"
 
-    definition_payload = {
-        "definition_id": definition_choice,
-        "service_type": service_type,
-        "display_name": name,
-        "auth_scheme": auth_scheme,
-        "default_base_url": base_url or None,
-        "resources": resources,
-    }
-    resource_ids = sorted(resources.keys())
-    action_ids = sorted(
-        {action_id for payload in resources.values() for action_id in payload["actions"].keys()}
-    )
-
     _render_summary(
         console=console,
         workspace=workspace,
@@ -785,31 +788,25 @@ def _add_provider(console: Console, state: FlowState) -> None:
     if auth_scheme != "none" and credential_mode == "store-new" and credential_value is not None and secret_ref:
         config_manager.store_secret(secret_ref, credential_value, workspace)
 
-    providers[name] = {
-        "name": name,
-        "service_type": service_type,
-        "provider_definition": definition_choice,
-        "definition": definition_payload,
-        "base_url": base_url or None,
-        "auth_scheme": auth_scheme,
-        "credential_ref": secret_ref,
-        "healthcheck_path": advanced["healthcheck_path"],
-        "timeout_seconds": advanced["timeout_seconds"],
-        "max_retries": advanced["max_retries"],
-        "rate_limit_rpm": advanced["rate_limit_rpm"],
-        "version": advanced["version"],
-        "tags": [],
-        "capabilities": [],
-        "access_policy": {"scopes": []},
-        "auth_metadata": {"header_name": auth_header_name} if auth_header_name else {},
-        "default_headers": {},
-        "metadata": {"starter_pattern": pattern.key} if pattern else {},
-        "resources": resource_ids,
-        "actions": action_ids,
-        "enforce_scoped_requests": True,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
+    providers[name] = build_provider_record(
+        name=name,
+        service_type=service_type,
+        definition_id=definition_choice,
+        auth_scheme=auth_scheme,
+        base_url=base_url or None,
+        resources=resources,
+        healthcheck_path=str(advanced["healthcheck_path"]),
+        timeout_seconds=int(advanced["timeout_seconds"]),
+        max_retries=int(advanced["max_retries"]),
+        rate_limit_rpm=advanced["rate_limit_rpm"],
+        version=advanced["version"],
+        tags=[],
+        metadata={"starter_pattern": pattern.key} if pattern else {},
+        auth_header_name=auth_header_name,
+        credential_ref=secret_ref,
+        existing=providers.get(name),
+        created_at=datetime.utcnow().isoformat(),
+    )
     save_workspace_provider_registry(config_manager, workspace, providers)
 
     console.print()
@@ -1539,10 +1536,7 @@ def _validate_catalog(resources: dict[str, dict]) -> Optional[str]:
 
 
 def _build_resources_from_pattern(pattern: ProviderStarterPattern) -> dict[str, dict]:
-    return {
-        resource.resource_id: _resource_payload_from_starter(resource)
-        for resource in pattern.resources
-    }
+    return shared_build_resources_from_pattern(pattern)
 
 
 def _resource_payload_from_starter(resource: ResourceStarter) -> dict:
