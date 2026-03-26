@@ -85,9 +85,9 @@ class LedgerOperations:
         req = self._build_request("GET", f"/ledger/entries/{entry_id}")
         return await self._execute(req)
 
-    async def get_chain(self, mandate_id: str) -> List[Dict[str, Any]]:
-        """Get the full event chain for a mandate."""
-        req = self._build_request("GET", f"/ledger/chain/{mandate_id}")
+    async def get_path(self, mandate_id: str) -> List[Dict[str, Any]]:
+        """Get the full event path for a mandate."""
+        req = self._build_request("GET", f"/ledger/path/{mandate_id}")
         return await self._execute(req)
 
     async def verify_integrity(self, entry_id: str) -> Dict[str, Any]:

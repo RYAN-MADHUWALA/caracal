@@ -220,9 +220,9 @@ class MandateFlow:
 
                 policy_depth = 0
                 if issuer_policy and issuer_policy.allow_delegation:
-                    policy_depth = int(issuer_policy.max_delegation_depth)
+                    policy_depth = int(issuer_policy.max_network_distance)
 
-                delegation_depth = self.prompt.number(
+                network_distance = self.prompt.number(
                     f"Delegation depth (0-{policy_depth})",
                     default=policy_depth,
                     min_value=0,
@@ -237,7 +237,7 @@ class MandateFlow:
                 self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(resource_scope)} resources[/]")
                 self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(action_scope)} actions[/]")
                 self.console.print(f"    Validity: [{Colors.NEUTRAL}]{int(validity_seconds)}s[/]")
-                self.console.print(f"    Delegation Depth: [{Colors.NEUTRAL}]{int(delegation_depth)}[/]")
+                self.console.print(f"    Delegation Depth: [{Colors.NEUTRAL}]{int(network_distance)}[/]")
                 self.console.print()
                 
                 if not self.prompt.confirm("Issue this mandate?", default=True):
@@ -256,13 +256,13 @@ class MandateFlow:
                     resource_scope=resource_scope,
                     action_scope=action_scope,
                     validity_seconds=int(validity_seconds),
-                    delegation_depth=int(delegation_depth),
+                    network_distance=int(network_distance),
                 )
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Mandate issued![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Mandate ID: [{Colors.PRIMARY}]{mandate.mandate_id}[/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Valid Until: [{Colors.PRIMARY}]{mandate.valid_until}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{mandate.delegation_depth}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{mandate.network_distance}[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
@@ -319,7 +319,7 @@ class MandateFlow:
                 self.console.print(f"    Valid From: [{Colors.NEUTRAL}]{mandate.valid_from}[/]")
                 self.console.print(f"    Valid Until: [{Colors.NEUTRAL}]{mandate.valid_until}[/]")
                 self.console.print(f"    Created: [{Colors.DIM}]{mandate.created_at}[/]")
-                self.console.print(f"    Delegation Depth: [{Colors.NEUTRAL}]{mandate.delegation_depth}[/]")
+                self.console.print(f"    Delegation Depth: [{Colors.NEUTRAL}]{mandate.network_distance}[/]")
                 
                 # Status
                 status_style = Colors.SUCCESS if not mandate.revoked else Colors.ERROR
