@@ -352,12 +352,6 @@ class MandateFlow:
                 self.console.print(f"  [{Colors.INFO}]Action Scope:[/]")
                 for action in mandate.action_scope:
                     self.console.print(f"    • {action}")
-                
-                # Parent mandate if delegated
-                if mandate.parent_mandate_id:
-                    self.console.print()
-                    self.console.print(f"  [{Colors.INFO}]Delegation:[/]")
-                    self.console.print(f"    Parent Mandate: [{Colors.DIM}]{mandate.parent_mandate_id}[/]")
             
             db_manager.close()
             
@@ -475,16 +469,16 @@ class MandateFlow:
                 from caracal.core.delegation_graph import DelegationGraph
                 graph = DelegationGraph(db_session)
                 topology = graph.get_topology(root_mandate_id=mandate_id, active_only=True)
-                child_count = max(0, int(topology.stats.get("total_nodes", 0)) - 1)
+                downstream_count = max(0, int(topology.stats.get("total_nodes", 0)) - 1)
                 
                 cascade = False
-                if child_count > 0:
+                if downstream_count > 0:
                     self.console.print()
                     self.console.print(f"  [{Colors.WARNING}]Cascade Impact Preview:[/]")
-                    self.console.print(f"    This mandate has {child_count} active child mandate(s).[/]")
-                    self.console.print(f"    Revoking with cascade will also revoke all children.[/]")
+                    self.console.print(f"    This mandate has {downstream_count} active downstream delegated mandate(s).[/]")
+                    self.console.print(f"    Revoking with cascade will also revoke all downstream delegated mandates.[/]")
                     self.console.print()
-                    cascade = self.prompt.confirm("Revoke all child mandates (cascade)?", default=True)
+                    cascade = self.prompt.confirm("Revoke all downstream delegated mandates (cascade)?", default=True)
                 
                 # Revocation reason
                 reason = self.prompt.text("Revocation reason", default="Manual revocation via TUI")
@@ -492,8 +486,8 @@ class MandateFlow:
                 # Confirmation
                 self.console.print()
                 self.console.print(f"  [{Colors.WARNING}]Warning: This action cannot be undone.[/]")
-                if cascade and child_count > 0:
-                    self.console.print(f"  [{Colors.WARNING}]All {child_count} child mandate(s) will also be revoked.[/]")
+                if cascade and downstream_count > 0:
+                    self.console.print(f"  [{Colors.WARNING}]All {downstream_count} downstream delegated mandate(s) will also be revoked.[/]")
                 self.console.print()
                 
                 if not self.prompt.confirm("Revoke this mandate?", default=False):
@@ -515,8 +509,8 @@ class MandateFlow:
                 )
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Mandate revoked![/]")
-                if cascade and child_count > 0:
-                    self.console.print(f"  [{Colors.INFO}]Revoked {child_count} child mandate(s).[/]")
+                if cascade and downstream_count > 0:
+                    self.console.print(f"  [{Colors.INFO}]Revoked {downstream_count} downstream delegated mandate(s).[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
