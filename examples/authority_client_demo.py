@@ -8,7 +8,7 @@ This script demonstrates how to use the AuthorityClient SDK to interact
 with the Caracal Authority Enforcement system.
 """
 
-from caracal.sdk import AuthorityClient
+from caracal_sdk import AuthorityClient
 from datetime import datetime, timedelta
 
 
@@ -117,7 +117,7 @@ def demo_context_manager():
 
 async def demo_async_client():
     """Demonstrate AsyncAuthorityClient usage."""
-    from caracal.sdk import AsyncAuthorityClient
+    from caracal_sdk import AsyncAuthorityClient
     
     print("\n=== Async AuthorityClient Demo ===\n")
     
