@@ -9,10 +9,16 @@ The primary build configuration is in pyproject.toml.
 """
 
 from pathlib import Path
+import shutil
 from setuptools import setup
 
 # Read version from VERSION file
 version_file = Path(__file__).parent / "VERSION"
 version = version_file.read_text().strip()
+
+# Guard against stale checked-in build artifacts being reused by setuptools.
+build_lib_dir = Path(__file__).parent / "build" / "lib"
+if build_lib_dir.exists():
+    shutil.rmtree(build_lib_dir)
 
 setup(version=version)
