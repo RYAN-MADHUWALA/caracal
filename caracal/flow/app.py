@@ -203,8 +203,6 @@ class FlowApp:
                 self._show_current_config()
             elif action == "edit":
                 self._run_edit_config()
-            elif action == "configure-services":
-                self._configure_services()
             elif action == "service-health":
                 self._show_service_health()
             elif action == "backup":
@@ -279,21 +277,8 @@ class FlowApp:
             svc_table.add_column("Service", style=Colors.DIM)
             svc_table.add_column("Status")
             
-            # Read raw config.yaml to get what the user actually set,
-            # not the post-validation state (which may auto-disable merkle)
-            _raw_merkle_on = False
-            try:
-                import yaml as _yaml
-                from caracal.config.settings import get_default_config_path
-                with open(P(get_default_config_path()), 'r') as _cf:
-                    _raw = _yaml.safe_load(_cf) or {}
-                _raw_merkle_on = _raw.get('compatibility', {}).get('enable_merkle', False)
-            except Exception:
-                pass
-
-            redis_on = getattr(config.compatibility, 'enable_redis', False)
-            merkle_on = _raw_merkle_on and getattr(config.compatibility, 'enable_merkle', False)
-            merkle_pending = _raw_merkle_on and not merkle_on
+            redis_on = True
+            merkle_on = True
             gateway_on = getattr(config.gateway, 'enabled', False)
             mcp_on = getattr(config.mcp_adapter, 'enabled', False)
             
@@ -303,11 +288,8 @@ class FlowApp:
                 return f"[{Colors.DIM}]{Icons.ERROR} Disabled[/]{f' ({label})' if label else ''}"
             
             svc_table.add_row("    PostgreSQL", f"[{Colors.SUCCESS}]{Icons.SUCCESS} Always On[/] (core database — required)")
-            svc_table.add_row("    Redis", _status(redis_on, "optional — caching (recommended)"))
-            if merkle_pending:
-                svc_table.add_row("    Merkle", f"[{Colors.WARNING}]{Icons.WARNING} Pending[/] (enabled — key not configured)")
-            else:
-                svc_table.add_row("    Merkle", _status(merkle_on, "optional — cryptographic audit"))
+            svc_table.add_row("    Redis", _status(redis_on, "required — low-latency caching"))
+            svc_table.add_row("    Merkle", _status(merkle_on, "required — immutable proof integrity"))
             svc_table.add_row("    Gateway", _status(gateway_on, "deployment — network enforcement proxy"))
             svc_table.add_row("    MCP Adapter", _status(mcp_on, "deployment — MCP protocol bridge"))
             
@@ -322,7 +304,7 @@ class FlowApp:
             # Architecture context
             self.console.print(f"  [{Colors.INFO}]Architecture:[/]")
             self.console.print(f"    [{Colors.DIM}]Core: PostgreSQL (always enabled, cannot be disabled)[/]")
-            self.console.print(f"    [{Colors.DIM}]Optional: Redis (caching), Merkle (audit) - toggle in 'Configure Services'[/]")
+            self.console.print(f"    [{Colors.DIM}]Core services: Redis + Merkle are mandatory and always on[/]")
             self.console.print(f"    [{Colors.DIM}]Deploy: Gateway & MCP Adapter are optional services for network[/]")
             self.console.print(f"    [{Colors.DIM}]  or MCP protocol enforcement. They can run on different hosts.[/]")
             self.console.print()
@@ -384,45 +366,23 @@ class FlowApp:
         table.add_row("PostgreSQL", "Core", _enabled_str(True), _status_str(db_ok),
                      f"{config.database.host}:{config.database.port}")
         
-        # Redis (optional — mandate caching and rate limiting, falls back to PostgreSQL)
-        redis_on = getattr(config.compatibility, 'enable_redis', True)
-        if redis_on:
-            redis_host = getattr(config.redis, 'host', 'localhost')
-            redis_port = getattr(config.redis, 'port', 6379)
-            redis_ok = _check_tcp(redis_host, redis_port)
-            table.add_row("Redis", "Optional", _enabled_str(True), _status_str(redis_ok),
-                         f"{redis_host}:{redis_port}")
-        else:
-            table.add_row("Redis", "Optional", _enabled_str(False), f"[{Colors.DIM}]Skipped[/]", "—")
+        # Redis (required)
+        redis_host = getattr(config.redis, 'host', 'localhost')
+        redis_port = getattr(config.redis, 'port', 6379)
+        redis_ok = _check_tcp(redis_host, redis_port)
+        table.add_row("Redis", "Core", _enabled_str(True), _status_str(redis_ok),
+                     f"{redis_host}:{redis_port}")
         
-        # Merkle (optional — cryptographic audit trails)
-        # Read raw config to see if user intended merkle to be on
-        import yaml as _yaml_health
-        _raw_merkle_on = False
-        try:
-            from caracal.config.settings import get_default_config_path
-            with open(get_default_config_path(), 'r') as _cf:
-                _raw_cfg = _yaml_health.safe_load(_cf) or {}
-            _raw_merkle_on = _raw_cfg.get('compatibility', {}).get('enable_merkle', False)
-        except Exception:
-            pass
-        
-        merkle_on = getattr(config.compatibility, 'enable_merkle', False)
-        if merkle_on:
-            key_path = getattr(config.merkle, 'private_key_path', '')
-            from pathlib import Path as _P
-            key_exists = bool(key_path) and _P(key_path).exists()
-            if key_exists:
-                merkle_status = f"[{Colors.SUCCESS}]{Icons.SUCCESS} Ready[/]"
-            else:
-                merkle_status = f"[{Colors.WARNING}]{Icons.WARNING} Key missing[/]"
-            table.add_row("Merkle", "Optional", _enabled_str(True), merkle_status,
-                         key_path or "—")
-        elif _raw_merkle_on:
-            table.add_row("Merkle", "Optional", f"[{Colors.WARNING}]Pending[/]",
-                         f"[{Colors.WARNING}]{Icons.WARNING} Key not configured[/]", "—")
+        # Merkle (required)
+        key_path = getattr(config.merkle, 'private_key_path', '')
+        from pathlib import Path as _P
+        key_exists = bool(key_path) and _P(key_path).exists()
+        if key_exists:
+            merkle_status = f"[{Colors.SUCCESS}]{Icons.SUCCESS} Ready[/]"
         else:
-            table.add_row("Merkle", "Optional", _enabled_str(False), f"[{Colors.DIM}]Skipped[/]", "—")
+            merkle_status = f"[{Colors.ERROR}]{Icons.ERROR} Key missing[/]"
+        table.add_row("Merkle", "Core", _enabled_str(True), merkle_status,
+                     key_path or "—")
         
         # Gateway (deployment artifact — separate network enforcement proxy, can run on different host)
         gateway_on = getattr(config.gateway, 'enabled', False)
@@ -454,11 +414,10 @@ class FlowApp:
         # Architecture note
         self.console.print(f"  [{Colors.INFO}]Architecture Notes:[/]")
         self.console.print(f"  [{Colors.DIM}]  • PostgreSQL is required (core database)[/]")
-        self.console.print(f"  [{Colors.DIM}]  • Redis (optional) — caching for performance[/]")
-        self.console.print(f"  [{Colors.DIM}]  • Merkle (optional) — cryptographic audit trails[/]")
+        self.console.print(f"  [{Colors.DIM}]  • Redis is required for cache and rate enforcement[/]")
+        self.console.print(f"  [{Colors.DIM}]  • Merkle is required for immutable proof integrity[/]")
         self.console.print(f"  [{Colors.DIM}]  • Gateway & MCP Adapter — deployment services[/]")
         self.console.print()
-        self.console.print(f"  [{Colors.HINT}]Toggle services in Settings → Configure Services[/]")
         self.console.print()
         self.console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
         input()
@@ -579,172 +538,6 @@ ledger capabilities.[/]
         self.console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
         input()
 
-    def _configure_services(self) -> None:
-        """Interactive menu to enable/disable optional services."""
-        from caracal.flow.components.menu import Menu, MenuItem
-        from caracal.config.settings import get_default_config_path
-        import yaml
-        from pathlib import Path
-        
-        config_path = Path(get_default_config_path())
-        
-        while True:
-            self.console.clear()
-            self.console.print(f"[{Colors.INFO}]Configure Optional Services[/]")
-            self.console.print()
-            self.console.print(f"  [{Colors.DIM}]PostgreSQL is always required and cannot be disabled.[/]")
-            self.console.print(f"  [{Colors.DIM}]Toggle optional services below:[/]")
-            self.console.print()
-            
-            # Load current config
-            try:
-                with open(config_path, 'r') as f:
-                    config_data = yaml.safe_load(f) or {}
-            except FileNotFoundError:
-                config_data = {}
-            
-            # Get current service states
-            compatibility = config_data.get('compatibility', {})
-            redis_enabled = compatibility.get('enable_redis', False)
-            merkle_enabled = compatibility.get('enable_merkle', False)
-            
-            # Check if merkle key exists
-            merkle_cfg = config_data.get('merkle', {})
-            merkle_key_path = merkle_cfg.get('private_key_path', '')
-            merkle_has_key = bool(merkle_key_path) and Path(merkle_key_path).exists()
-            
-            # Merkle label
-            if merkle_enabled and merkle_has_key:
-                merkle_label = "[green]Enabled[/]"
-            elif merkle_enabled and not merkle_has_key:
-                merkle_label = f"[{Colors.WARNING}]Pending (key missing)[/]"
-            else:
-                merkle_label = "[dim]Disabled[/]"
-            
-            # Build menu
-            items = [
-                MenuItem(
-                    "redis", 
-                    f"Redis: {'[green]Enabled[/]' if redis_enabled else '[dim]Disabled[/]'}", 
-                    "Toggle Redis (caching & rate limiting)", 
-                    ""
-                ),
-                MenuItem(
-                    "merkle", 
-                    f"Merkle Tree: {merkle_label}", 
-                    "Toggle Merkle cryptographic audit", 
-                    ""
-                ),
-                MenuItem("back", "Back to Settings", "", Icons.ARROW_LEFT),
-            ]
-            
-            menu = Menu("Optional Services", items=items)
-            result = menu.run()
-            
-            if not result or result.key == "back":
-                break
-            
-            # Toggle the selected service
-            if result.key == "redis":
-                compatibility['enable_redis'] = not redis_enabled
-                status = "enabled" if not redis_enabled else "disabled"
-                self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Redis {status}[/]")
-            elif result.key == "merkle":
-                new_merkle = not merkle_enabled
-                compatibility['enable_merkle'] = new_merkle
-                
-                if new_merkle:
-                    # Auto-generate signing key if not present
-                    key_ok = self._ensure_merkle_key(config_data, config_path)
-                    if key_ok:
-                        self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Merkle Tree enabled[/]")
-                    else:
-                        self.console.print(f"[{Colors.WARNING}]{Icons.WARNING} Merkle enabled but key generation failed[/]")
-                else:
-                    self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Merkle Tree disabled[/]")
-            
-            # Save updated config
-            config_data['compatibility'] = compatibility
-            try:
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(config_path, 'w') as f:
-                    yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
-                self.console.print(f"[{Colors.SUCCESS}]Configuration saved to {config_path}[/]")
-            except Exception as e:
-                self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} Failed to save config: {e}[/]")
-            
-            self.console.print()
-            self.console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-            input()
-
-    def _ensure_merkle_key(self, config_data: dict, config_path) -> bool:
-        """Generate an EC P-256 signing key for Merkle if one doesn't exist."""
-        from pathlib import Path
-        
-        merkle_cfg = config_data.setdefault('merkle', {})
-        key_path_str = merkle_cfg.get('private_key_path', '')
-        
-        if key_path_str and Path(key_path_str).exists():
-            return True  # Key already exists
-        
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ec
-            from cryptography.hazmat.primitives import serialization
-        except ImportError:
-            # Fallback: use openssl CLI
-            return self._ensure_merkle_key_openssl(merkle_cfg, config_path)
-        
-        # Determine key storage path
-        keys_dir = config_path.parent / "keys"
-        keys_dir.mkdir(parents=True, exist_ok=True)
-        key_file = keys_dir / "merkle_signing_key.pem"
-        
-        try:
-            private_key = ec.generate_private_key(ec.SECP256R1())
-            pem = private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-            key_file.write_bytes(pem)
-            key_file.chmod(0o600)
-            
-            merkle_cfg['private_key_path'] = str(key_file)
-            merkle_cfg.setdefault('signing_backend', 'software')
-            merkle_cfg.setdefault('signing_algorithm', 'ES256')
-            
-            self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Generated signing key: {key_file}[/]")
-            return True
-        except Exception as e:
-            self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} Key generation failed: {e}[/]")
-            return False
-
-    def _ensure_merkle_key_openssl(self, merkle_cfg: dict, config_path) -> bool:
-        """Fallback: generate merkle key using openssl CLI."""
-        import subprocess
-        from pathlib import Path
-        
-        keys_dir = config_path.parent / "keys"
-        keys_dir.mkdir(parents=True, exist_ok=True)
-        key_file = keys_dir / "merkle_signing_key.pem"
-        
-        try:
-            subprocess.run(
-                ["openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", str(key_file)],
-                check=True, capture_output=True, timeout=10,
-            )
-            key_file.chmod(0o600)
-            
-            merkle_cfg['private_key_path'] = str(key_file)
-            merkle_cfg.setdefault('signing_backend', 'software')
-            merkle_cfg.setdefault('signing_algorithm', 'ES256')
-            
-            self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Generated signing key (openssl): {key_file}[/]")
-            return True
-        except Exception as e:
-            self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} openssl key generation failed: {e}[/]")
-            return False
-
     def _save_state(self) -> None:
         """Save application state."""
         try:
@@ -771,7 +564,7 @@ ledger capabilities.[/]
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = backup_dir / f"caracal_backup_{timestamp}.sql"
+        backup_file = backup_dir / f"caracal_backup_{timestamp}.dump"
         
         # Build pg_dump command
         env = {
@@ -784,7 +577,8 @@ ledger capabilities.[/]
             "-U", config.database.user or "caracal",
             "-d", config.database.database or "caracal",
             "-f", str(backup_file),
-            "--format=plain",
+            "--format=custom",
+            "--compress=9",
         ]
         # If a schema is set, only dump that schema
         schema = getattr(config.database, 'schema', None)
@@ -798,6 +592,10 @@ ledger capabilities.[/]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=full_env)
             if result.returncode == 0:
+                try:
+                    backup_file.chmod(0o600)
+                except Exception:
+                    pass
                 self.console.print(f"[{Colors.SUCCESS}]{Icons.SUCCESS} Backup created successfully![/]")
                 self.console.print(f"[{Colors.DIM}]Location: {backup_file}[/]")
             else:
@@ -814,7 +612,7 @@ ledger capabilities.[/]
         input()
 
     def _run_restore_flow(self) -> None:
-        """Run data restore flow using psql."""
+        """Run data restore flow using pg_restore/psql depending on dump type."""
         import subprocess
         from pathlib import Path
         from caracal.config import load_config
@@ -829,7 +627,10 @@ ledger capabilities.[/]
              input()
              return
              
-        backups = sorted(list(backup_dir.glob("*.sql")), reverse=True)
+        backups = sorted(
+            list(backup_dir.glob("*.dump")) + list(backup_dir.glob("*.sql")),
+            reverse=True,
+        )
         if not backups:
              self.console.print(f"[{Colors.WARNING}]No backup files found.[/]")
              input()
@@ -856,14 +657,28 @@ ledger capabilities.[/]
             if confirm == "restore":
                 import os
                 env = {**os.environ, "PGPASSWORD": config.database.password or ""}
-                cmd = [
-                    "psql",
-                    "-h", config.database.host or "localhost",
-                    "-p", str(config.database.port or 5432),
-                    "-U", config.database.user or "caracal",
-                    "-d", config.database.database or "caracal",
-                    "-f", str(backup_file),
-                ]
+                if backup_file.suffix == ".dump":
+                    cmd = [
+                        "pg_restore",
+                        "-h", config.database.host or "localhost",
+                        "-p", str(config.database.port or 5432),
+                        "-U", config.database.user or "caracal",
+                        "-d", config.database.database or "caracal",
+                        "--clean",
+                        "--if-exists",
+                        "--no-owner",
+                        "--no-privileges",
+                        str(backup_file),
+                    ]
+                else:
+                    cmd = [
+                        "psql",
+                        "-h", config.database.host or "localhost",
+                        "-p", str(config.database.port or 5432),
+                        "-U", config.database.user or "caracal",
+                        "-d", config.database.database or "caracal",
+                        "-f", str(backup_file),
+                    ]
                 try:
                     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
                     if proc.returncode == 0:
@@ -871,7 +686,7 @@ ledger capabilities.[/]
                     else:
                         self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} Restore failed: {proc.stderr.strip()}[/]")
                 except FileNotFoundError:
-                    self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} psql not found. Install PostgreSQL client tools.[/]")
+                    self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} PostgreSQL restore tool not found. Install PostgreSQL client tools.[/]")
                 except subprocess.TimeoutExpired:
                     self.console.print(f"[{Colors.ERROR}]{Icons.ERROR} psql timed out after 120s.[/]")
                 except Exception as e:
