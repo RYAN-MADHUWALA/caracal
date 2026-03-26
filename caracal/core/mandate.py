@@ -104,24 +104,24 @@ class MandateManager:
     
     def _validate_scope_subset(
         self,
-        child_scope: List[str],
-        parent_scope: List[str]
+        target_scope: List[str],
+        source_scope: List[str]
     ) -> bool:
         """
-        Validate that child scope is a subset of parent scope.
+        Validate that target scope is a subset of source scope.
         
         Args:
-            child_scope: The child scope to validate
-            parent_scope: The parent scope to validate against
+            target_scope: The target scope to validate
+            source_scope: The source scope to validate against
         
         Returns:
-            True if child is subset of parent, False otherwise
+            True if target is subset of source, False otherwise
         """
-        # Every item in child_scope must match at least one pattern in parent_scope
-        for child_item in child_scope:
+        # Every item in target_scope must match at least one pattern in source_scope
+        for target_item in target_scope:
             match_found = False
-            for parent_item in parent_scope:
-                if self._match_pattern(child_item, parent_item):
+            for source_item in source_scope:
+                if self._match_pattern(target_item, source_item):
                     match_found = True
                     break
             
@@ -210,8 +210,8 @@ class MandateManager:
         action_scope: List[str],
         validity_seconds: int,
         intent: Optional[Intent] = None,
-        delegation_type: str = "hierarchical",
-        delegation_depth: Optional[int] = None,
+        delegation_type: str = "directed",
+        network_distance: Optional[int] = None,
         enforce_issuer_policy: bool = True,
         context_tags: Optional[List[str]] = None,
     ) -> ExecutionMandate:
@@ -230,8 +230,8 @@ class MandateManager:
             action_scope: List of actions the mandate allows
             validity_seconds: How long the mandate is valid (in seconds)
             intent: Optional intent to bind the mandate to
-            delegation_type: Type of delegation (hierarchical/peer)
-            delegation_depth: How many additional delegation hops are allowed
+            delegation_type: Type of delegation (directed/peer)
+            network_distance: How many additional delegation hops are allowed
             enforce_issuer_policy: Whether to validate against issuer authority policy
             context_tags: Context tags for dynamic authority filtering
         
@@ -319,26 +319,26 @@ class MandateManager:
 
         # Resolve delegation depth for this mandate.
         # If not explicitly provided, inherit issuer policy maximum when delegation is allowed.
-        if delegation_depth is None:
+        if network_distance is None:
             if enforce_issuer_policy and issuer_policy and issuer_policy.allow_delegation:
-                resolved_delegation_depth = int(issuer_policy.max_delegation_depth)
+                resolved_network_distance = int(issuer_policy.max_network_distance)
             else:
-                resolved_delegation_depth = 0
+                resolved_network_distance = 0
         else:
-            resolved_delegation_depth = int(delegation_depth)
+            resolved_network_distance = int(network_distance)
 
-        if resolved_delegation_depth < 0:
+        if resolved_network_distance < 0:
             raise ValueError("Delegation depth cannot be negative")
 
         if enforce_issuer_policy and issuer_policy:
-            policy_max_depth = int(issuer_policy.max_delegation_depth)
-            if resolved_delegation_depth > policy_max_depth:
+            policy_max_distance = int(issuer_policy.max_network_distance)
+            if resolved_network_distance > policy_max_distance:
                 raise ValueError(
-                    f"Requested delegation depth {resolved_delegation_depth} exceeds policy maximum "
-                    f"{policy_max_depth}"
+                    f"Requested delegation depth {resolved_network_distance} exceeds policy maximum "
+                    f"{policy_max_distance}"
                 )
 
-            if not issuer_policy.allow_delegation and resolved_delegation_depth > 0:
+            if not issuer_policy.allow_delegation and resolved_network_distance > 0:
                 raise ValueError(
                     f"Issuer {issuer_id} is not allowed to issue delegable mandates "
                     f"according to their authority policy"
@@ -408,7 +408,7 @@ class MandateManager:
             delegation_type=delegation_type,
             context_tags=context_tags,
             intent_hash=intent_hash,
-            delegation_depth=resolved_delegation_depth,
+            network_distance=resolved_network_distance,
         )
         
         # Store mandate in database
@@ -431,13 +431,13 @@ class MandateManager:
                 "issuer_id": str(issuer_id),
                 "validity_seconds": validity_seconds,
                 "delegation_type": delegation_type,
-                "delegation_depth": resolved_delegation_depth,
+                "network_distance": resolved_network_distance,
             }
         )
         
         logger.info(
             f"Successfully issued mandate {mandate_id} to subject {subject_id} "
-            f"(valid for {validity_seconds}s, type={delegation_type}, delegation_depth={resolved_delegation_depth})"
+            f"(valid for {validity_seconds}s, type={delegation_type}, network_distance={resolved_network_distance})"
         )
         
         # Record rate limit usage if rate limiter is configured
@@ -612,7 +612,7 @@ class MandateManager:
         if current_time < source_mandate.valid_from:
             raise ValueError(f"Source mandate {source_mandate_id} is not yet valid")
         
-        # Validate child scope is subset of source scope
+        # Validate target scope is subset of source scope
         if not self._validate_scope_subset(resource_scope, source_mandate.resource_scope):
             raise ValueError("Delegated resource scope must be subset of source scope")
         if not self._validate_scope_subset(action_scope, source_mandate.action_scope):
@@ -643,7 +643,7 @@ class MandateManager:
             target_principal.principal_type
         )
 
-        source_depth = int(source_mandate.delegation_depth or 0)
+        source_depth = int(source_mandate.network_distance or 0)
         if source_depth <= 0:
             raise ValueError(
                 f"Source mandate {source_mandate_id} has no remaining delegation depth"
@@ -667,7 +667,7 @@ class MandateManager:
                 validity_seconds=validity_seconds,
                 intent=None,
                 delegation_type=delegation_type,
-                delegation_depth=delegated_depth,
+                network_distance=delegated_depth,
                 enforce_issuer_policy=False,
                 context_tags=context_tags,
             )
@@ -706,7 +706,7 @@ class MandateManager:
         context_tags: Optional[List[str]] = None,
     ) -> ExecutionMandate:
         """
-        Create a peer delegation — non-hierarchical authority sharing.
+        Create a peer delegation — non-directed authority sharing.
         
         Unlike delegate_mandate, peer delegation:
         - Only works between same principal types (user↔user, agent↔agent)

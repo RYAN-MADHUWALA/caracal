@@ -172,7 +172,7 @@ class PrincipalRegistry:
         target_principal_id: str,
         expiration_seconds: int = 86400,
         allowed_operations: Optional[List[str]] = None,
-        delegation_type: str = "hierarchical",
+        delegation_type: str = "directed",
         source_principal_type: str = "agent",
         target_principal_type: str = "agent",
         context_tags: Optional[List[str]] = None,
