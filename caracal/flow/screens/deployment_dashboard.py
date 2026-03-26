@@ -12,6 +12,8 @@ Provides overview of:
 - System health
 """
 
+import os
+import re
 from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
@@ -114,11 +116,11 @@ def _build_system_info() -> Table:
             table.add_row("Workspace:", f"[{Colors.WARNING}]None configured[/]")
         
         # PostgreSQL status
-        postgres_config = config_mgr.get_postgres_config()
-        if postgres_config is None:
-            table.add_row("Database:", f"[{Colors.WARNING}]Not configured[/]")
+        db_status = _resolve_database_status(config_mgr)
+        if db_status:
+            table.add_row("Database:", f"[{Colors.SUCCESS}]{db_status}[/]")
         else:
-            table.add_row("Database:", f"[{Colors.SUCCESS}]{postgres_config.host}:{postgres_config.port}[/]")
+            table.add_row("Database:", f"[{Colors.WARNING}]Not configured[/]")
         
     except Exception as e:
         table.add_row("Error:", f"[{Colors.ERROR}]{str(e)}[/]")
@@ -168,3 +170,49 @@ def _build_activity_info(state: FlowState) -> Table:
         table.add_row(f"[{Colors.ERROR}]Error: {str(e)}[/]")
     
     return table
+
+
+def _resolve_database_status(config_mgr) -> Optional[str]:
+    """Resolve database status from deployment config or active workspace config/env."""
+    # Prefer deployment-scoped PostgreSQL config when available.
+    postgres_config = config_mgr.get_postgres_config()
+    if postgres_config is not None:
+        return f"{postgres_config.host}:{postgres_config.port}/{postgres_config.database}"
+
+    # Fallback: check active workspace config and DB-related environment variables.
+    try:
+        from caracal.flow.workspace import get_workspace
+
+        workspace_config_path = get_workspace().config_path
+        has_database_section = False
+
+        if workspace_config_path.exists():
+            config_text = workspace_config_path.read_text(encoding="utf-8")
+            has_database_section = bool(re.search(r"(?m)^\s*database\s*:", config_text))
+
+        env_keys = (
+            "CARACAL_DATABASE_URL",
+            "CARACAL_DB_HOST",
+            "CARACAL_DB_PORT",
+            "CARACAL_DB_NAME",
+            "CARACAL_DB_USER",
+            "CARACAL_DB_PASSWORD",
+            "DB_HOST",
+            "DB_PORT",
+            "DB_NAME",
+            "DB_USER",
+            "DB_PASSWORD",
+        )
+        has_db_env = any(bool(os.getenv(key)) for key in env_keys)
+
+        if has_database_section or has_db_env:
+            from caracal.config import load_config
+
+            runtime_config = load_config()
+            runtime_db = getattr(runtime_config, "database", None)
+            if runtime_db:
+                return f"{runtime_db.host}:{runtime_db.port}/{runtime_db.database}"
+    except Exception:
+        return None
+
+    return None
