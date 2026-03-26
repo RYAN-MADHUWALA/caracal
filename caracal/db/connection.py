@@ -177,7 +177,7 @@ class DatabaseConnectionManager:
 
         self._engine = create_engine(connection_url, **engine_kwargs)
 
-        # If workspace schema is set, transparently route all queries there
+        # If workspace schema is set, transsourcely route all queries there
         if pg_schema:
             @sa_event.listens_for(self._engine, "connect")
             def _set_search_path(dbapi_conn, connection_record):

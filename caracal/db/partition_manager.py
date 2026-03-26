@@ -160,7 +160,7 @@ class PartitionManager:
                     pg_get_expr(c.relpartbound, c.oid) as partition_bounds
                 FROM pg_class c
                 JOIN pg_inherits i ON c.oid = i.inhrelid
-                JOIN pg_class p ON i.inhparent = p.oid
+                JOIN pg_class p ON i.inhsource = p.oid
                 WHERE p.relname = 'ledger_events'
                 ORDER BY c.relname;
             """)
@@ -237,7 +237,7 @@ class PartitionManager:
     
     def detach_partition(self, partition_name: str) -> None:
         """
-        Detach a partition from the parent table.
+        Detach a partition from the source table.
         
         This is the first step in archiving old partitions. After detaching,
         the partition becomes a standalone table that can be backed up and
@@ -271,7 +271,7 @@ class PartitionManager:
         """
         Archive partitions older than specified months.
         
-        This method detaches old partitions from the parent table. The detached
+        This method detaches old partitions from the source table. The detached
         partitions should be backed up to cold storage before being dropped.
         
         Args:
