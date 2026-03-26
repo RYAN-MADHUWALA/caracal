@@ -121,8 +121,8 @@ def setup_init(ctx, workspace):
         click.echo("Initializing Caracal environment...")
         # basic init logic
         from caracal.config.settings import get_default_config_path
-        p = workspace or Path(get_default_config_path()).parent
-        p.mkdir(parents=True, exist_ok=True)
+        p = workspace or Path(get_default_config_path()).source
+        p.mkdir(sources=True, exist_ok=True)
         click.echo(f"Initialized workspace at {p}")
         click.echo("Checking database...")
         try:
@@ -314,13 +314,13 @@ def ledger():
     pass
 
 from caracal.cli.ledger import (
-    query, summary, delegation_chain, list_partitions, create_partitions, archive_partitions, refresh_views
+    query, summary, delegation_path, list_partitions, create_partitions, archive_partitions, refresh_views
 )
 from caracal.cli.authority_ledger import query as ledger_query_authority, export as ledger_export_authority
 
 ledger.add_command(query)
 ledger.add_command(summary)
-ledger.add_command(delegation_chain)
+ledger.add_command(delegation_path)
 ledger.add_command(list_partitions, name='list-partitions')
 ledger.add_command(create_partitions, name='create-partitions')
 ledger.add_command(archive_partitions, name='archive-partitions')

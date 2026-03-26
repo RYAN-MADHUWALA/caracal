@@ -78,7 +78,7 @@ class DelegationEdge:
     target_mandate_id: UUID
     source_principal_type: str
     target_principal_type: str
-    delegation_type: str  # "hierarchical" | "peer"
+    delegation_type: str  # "directed" | "peer"
     context_tags: List[str] = field(default_factory=list)
     granted_at: datetime = field(default_factory=datetime.utcnow)
     expires_at: Optional[datetime] = None
@@ -121,8 +121,8 @@ class DelegationGraph:
     """
     Manages authority delegation topology across principal types.
 
-    Supports chains like:
-      user → agent → service  (hierarchical)
+    Supports paths like:
+      user → agent → service  (directed)
       agent ↔ agent            (peer)
       user → service           (direct cross-type)
 
@@ -181,14 +181,14 @@ class DelegationGraph:
     @staticmethod
     def get_delegation_type(source_type: str, target_type: str) -> str:
         """
-        Determine if delegation is hierarchical or peer.
+        Determine if delegation is directed or peer.
 
         Returns:
-            'peer' if same principal types, 'hierarchical' otherwise
+            'peer' if same principal types, 'directed' otherwise
         """
         if source_type == target_type:
             return "peer"
-        return "hierarchical"
+        return "directed"
 
     # ----------------------------------------------------------------
     # Edge Management
@@ -644,9 +644,9 @@ class DelegationGraph:
 
         # Build edges
         edges_out = []
-        by_delegation_type = {"hierarchical": 0, "peer": 0}
+        by_delegation_type = {"directed": 0, "peer": 0}
         for e in all_edges:
-            dtype = e.delegation_type or "hierarchical"
+            dtype = e.delegation_type or "directed"
             by_delegation_type[dtype] = by_delegation_type.get(dtype, 0) + 1
             edges_out.append({
                 "edge_id": str(e.edge_id),
@@ -670,23 +670,23 @@ class DelegationGraph:
 
         return DelegationGraphTopology(nodes=nodes, edges=edges_out, stats=stats)
 
-    def get_chain_details(
+    def get_path_details(
         self,
         root_mandate_id: UUID,
         active_only: bool = True,
     ) -> dict:
         """
-        Build a detailed delegation chain view rooted at a mandate.
+        Build a detailed delegation path view rooted at a mandate.
 
         The resulting structure is optimized for presentation in CLI/TUI and
         includes depth, branching, leaf nodes, and per-node validity metadata.
 
         Args:
-            root_mandate_id: Root mandate of the delegation chain
+            root_mandate_id: Root mandate of the delegation path
             active_only: Only include active (non-revoked, non-expired) edges
 
         Returns:
-            Dict with keys: root_mandate_id, chain, edges, stats
+            Dict with keys: root_mandate_id, path, edges, stats
         """
         now = datetime.utcnow()
         topology = self.get_topology(root_mandate_id=root_mandate_id, active_only=active_only)
@@ -704,7 +704,7 @@ class DelegationGraph:
             in_adj.setdefault(tgt, []).append(src)
 
         root_id = str(root_mandate_id)
-        depth_map: Dict[str, int] = {root_id: 0}
+        distance_map: Dict[str, int] = {root_id: 0}
         path_count: Dict[str, int] = {root_id: 1}
         queue = [root_id]
         visited_bfs: Set[str] = set()
@@ -714,15 +714,15 @@ class DelegationGraph:
             if current in visited_bfs:
                 continue
             visited_bfs.add(current)
-            current_depth = depth_map[current]
+            current_distance = distance_map[current]
 
-            for child in out_adj.get(current, []):
-                if child not in depth_map or depth_map[child] > current_depth + 1:
-                    depth_map[child] = current_depth + 1
-                path_count[child] = path_count.get(child, 0) + path_count.get(current, 0)
-                queue.append(child)
+            for target in out_adj.get(current, []):
+                if target not in distance_map or distance_map[target] > current_distance + 1:
+                    distance_map[target] = current_distance + 1
+                path_count[target] = path_count.get(target, 0) + path_count.get(current, 0)
+                queue.append(target)
 
-        reachable_nodes = [nid for nid in depth_map.keys() if nid in node_by_id]
+        reachable_nodes = [nid for nid in distance_map.keys() if nid in node_by_id]
 
         cycle_detected = False
         temp_mark: Set[str] = set()
@@ -737,15 +737,15 @@ class DelegationGraph:
                 return
             temp_mark.add(node_id)
             for nxt in out_adj.get(node_id, []):
-                if nxt in depth_map:
+                if nxt in distance_map:
                     _visit(nxt)
             temp_mark.remove(node_id)
             perm_mark.add(node_id)
 
         _visit(root_id)
 
-        chain_rows = []
-        for node_id in sorted(reachable_nodes, key=lambda nid: (depth_map[nid], nid)):
+        path_rows = []
+        for node_id in sorted(reachable_nodes, key=lambda nid: (distance_map[nid], nid)):
             node = node_by_id[node_id]
             valid_until_raw = node.get("valid_until")
             is_expired = False
@@ -757,16 +757,16 @@ class DelegationGraph:
 
             inbound = in_adj.get(node_id, [])
             outbound = out_adj.get(node_id, [])
-            chain_rows.append({
+            path_rows.append({
                 "mandate_id": node_id,
                 "subject_id": node.get("subject_id"),
                 "subject_name": node.get("subject_name"),
                 "principal_type": node.get("principal_type"),
-                "depth": depth_map[node_id],
-                "parent_count": len(inbound),
-                "child_count": len(outbound),
+                "distance": distance_map[node_id],
+                "source_count": len(inbound),
+                "target_count": len(outbound),
                 "path_count": path_count.get(node_id, 0),
-                "delegation_depth": None,
+                "network_distance": None,
                 "active": bool(node.get("active", False)),
                 "expired": is_expired,
                 "valid_from": node.get("valid_from"),
@@ -775,36 +775,36 @@ class DelegationGraph:
                 "action_scope": node.get("action_scope") or [],
             })
 
-        # Backfill delegation_depth from mandate records where possible.
-        for row in chain_rows:
+        # Backfill network_distance from mandate records where possible.
+        for row in path_rows:
             mandate = self.db_session.query(ExecutionMandate).filter(
                 ExecutionMandate.mandate_id == UUID(row["mandate_id"])
             ).first()
-            row["delegation_depth"] = int(mandate.delegation_depth or 0) if mandate else 0
+            row["network_distance"] = int(mandate.network_distance or 0) if mandate else 0
 
         branch_nodes = sum(1 for nid in reachable_nodes if len(out_adj.get(nid, [])) > 1)
         leaf_nodes = sum(1 for nid in reachable_nodes if len(out_adj.get(nid, [])) == 0)
-        max_depth = max((depth_map[nid] for nid in reachable_nodes), default=0)
+        max_distance = max((distance_map[nid] for nid in reachable_nodes), default=0)
 
-        chain_edge_set = {
+        path_edge_set = {
             e["edge_id"]
             for e in topology.edges
-            if e["source_mandate_id"] in depth_map and e["target_mandate_id"] in depth_map
+            if e["source_mandate_id"] in distance_map and e["target_mandate_id"] in distance_map
         }
-        chain_edges = [e for e in topology.edges if e["edge_id"] in chain_edge_set]
+        path_edges = [e for e in topology.edges if e["edge_id"] in path_edge_set]
 
-        is_valid = bool(chain_rows) and not cycle_detected and all(
-            r["active"] and not r["expired"] for r in chain_rows
+        is_valid = bool(path_rows) and not cycle_detected and all(
+            r["active"] and not r["expired"] for r in path_rows
         )
 
         return {
             "root_mandate_id": root_id,
-            "chain": chain_rows,
-            "edges": chain_edges,
+            "path": path_rows,
+            "edges": path_edges,
             "stats": {
-                "total_nodes": len(chain_rows),
-                "total_edges": len(chain_edges),
-                "max_depth": max_depth,
+                "total_nodes": len(path_rows),
+                "total_edges": len(path_edges),
+                "max_distance": max_distance,
                 "branch_nodes": branch_nodes,
                 "leaf_nodes": leaf_nodes,
                 "has_cycles": cycle_detected,
@@ -812,19 +812,19 @@ class DelegationGraph:
             },
         }
 
-    def check_delegation_chain(self, mandate_id: UUID) -> bool:
+    def check_delegation_path(self, mandate_id: UUID) -> bool:
         """
-        Validate delegation chain for a mandate via the graph.
+        Validate delegation path for a mandate via the graph.
 
         Checks all inbound authority edges are active, their source mandates
         are valid (not revoked, not expired), and recursively validates up
-        the chain.
+        the path.
 
         Args:
             mandate_id: The mandate to validate
 
         Returns:
-            True if the delegation chain is valid
+            True if the delegation path is valid
         """
         sources = self.get_authority_sources(mandate_id, active_only=True)
 
@@ -841,7 +841,7 @@ class DelegationGraph:
             ).first()
 
             if not source_mandate:
-                logger.warning(f"Source mandate {edge.source_mandate_id} not found in chain")
+                logger.warning(f"Source mandate {edge.source_mandate_id} not found in path")
                 return False
 
             if source_mandate.revoked:
@@ -856,8 +856,8 @@ class DelegationGraph:
                 logger.warning(f"Source mandate {edge.source_mandate_id} is not yet valid")
                 return False
 
-            # Recursively validate up the chain
-            if not self.check_delegation_chain(edge.source_mandate_id):
+            # Recursively validate up the path
+            if not self.check_delegation_path(edge.source_mandate_id):
                 return False
 
         return True
