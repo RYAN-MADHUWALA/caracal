@@ -11,7 +11,7 @@ Caracal Core is the **execution authority enforcement engine** for AI agents. It
 
 | Component | Description |
 |-----------|-------------|
-| **Gateway Proxy** | Intercepts agent requests and validates mandates at the network level |
+| **Broker Runtime** | Executes provider actions directly using local provider configuration |
 | **Authority Policy Engine** | Evaluates whether mandates can be issued based on principal policies |
 | **Authority Ledger** | Immutable, Merkle tree-backed log of all authority events |
 | **CLI Tools** | Command-line interface for operations and automation |
@@ -46,14 +46,6 @@ Caracal Core is the **execution authority enforcement engine** for AI agents. It
 - **[SDK Reference](./apiReference/sdkClient)** -- Python SDK
 - **[MCP Integration](./apiReference/mcpIntegration)** -- Model Context Protocol
 
-### Deployment
-
-- **[Docker Compose](./deployment/dockerCompose)** -- Local/development
-- **[Kubernetes](./deployment/kubernetes)** -- Container orchestration
-- **[Production Guide](./deployment/production)** -- Scaling and security
-
----
-
 ## Architecture Overview
 
 ```
@@ -61,14 +53,14 @@ Caracal Core is the **execution authority enforcement engine** for AI agents. It
 |                     AI AGENT APPLICATION                         |
 +-------------------------------+---------------------------------+
                                 |
-                                | HTTP Request
+                                | Authority request
                                 v
 +-----------------------------------------------------------------+
-|                    CARACAL GATEWAY PROXY                         |
-|  +--------------+  +----------------+  +--------------------+   |
-|  | Authenticate |--| Validate       |--| Record Authority   |   |
-|  | Principal    |  | Mandate        |  | Event              |   |
-|  +--------------+  +----------------+  +--------------------+   |
+|                       CARACAL BROKER                             |
+|  +----------------+  +--------------------+  +---------------+  |
+|  | Validate       |--| Record Authority   |--| Execute       |  |
+|  | Mandate Scope  |  | Event              |  | Provider Call |  |
+|  +----------------+  +--------------------+  +---------------+  |
 +-------------------------------+---------------------------------+
                                 |
               +-----------------+-----------------+
@@ -92,7 +84,8 @@ Caracal Core is the **execution authority enforcement engine** for AI agents. It
 
 ### Network-Level Enforcement
 
-The Gateway intercepts all agent traffic. Mandates are validated **before** requests reach external APIs. Agents cannot bypass authority controls.
+The broker validates mandates and provider-scoped resource/action pairs before
+any provider request executes.
 
 ### Immutable Audit Trail
 
