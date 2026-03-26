@@ -101,7 +101,7 @@ def setup_logging(
     # Configure file handler if specified
     if log_file is not None:
         log_file = Path(log_file)
-            ensure_source_tree(source_of(log_file))
+        ensure_source_tree(source_of(log_file))
         
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(numeric_level)
