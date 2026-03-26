@@ -110,7 +110,7 @@ class MandateDelegationFlow:
                     return
 
                 graph = DelegationGraph(db_session)
-                details = graph.get_chain_details(root_mandate_id=mandate_id)
+                details = graph.get_path_details(root_mandate_id=mandate_id)
 
                 # Build graph visualization from full reachable subgraph
                 tree = self._build_delegation_graph(mandate, details, db_session)
@@ -122,11 +122,11 @@ class MandateDelegationFlow:
                 stats = details.get("stats", {})
                 self.console.print(f"  [{Colors.INFO}]Nodes: {stats.get('total_nodes', 0)}[/]")
                 self.console.print(f"  [{Colors.INFO}]Edges: {stats.get('total_edges', 0)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Max Depth: {stats.get('max_depth', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Max Network Distance: {stats.get('max_network_distance', 0)}[/]")
                 self.console.print(f"  [{Colors.INFO}]Branch Nodes: {stats.get('branch_nodes', 0)}[/]")
                 self.console.print(f"  [{Colors.INFO}]Leaf Nodes: {stats.get('leaf_nodes', 0)}[/]")
                 validity_style = Colors.SUCCESS if stats.get('is_valid', False) else Colors.ERROR
-                self.console.print(f"  [{validity_style}]Chain Valid: {stats.get('is_valid', False)}[/]")
+                self.console.print(f"  [{validity_style}]Path Valid: {stats.get('is_valid', False)}[/]")
             
             db_manager.close()
             
@@ -149,7 +149,7 @@ class MandateDelegationFlow:
             guide_style=Colors.DIM
         )
         
-        chain_nodes = details.get("chain", [])
+        path_nodes = details.get("path", [])
         edges = details.get("edges", [])
         outbound = [e for e in edges if e.get("source_mandate_id") == str(mandate.mandate_id)]
 
@@ -157,15 +157,15 @@ class MandateDelegationFlow:
             out_branch = tree.add(f"[{Colors.WARNING}]⇒ Outbound ({len(outbound)})[/]")
             for edge in outbound:
                 target_id = edge.get("target_mandate_id")
-                target_node = next((n for n in chain_nodes if n.get("mandate_id") == target_id), None)
+                target_node = next((n for n in path_nodes if n.get("mandate_id") == target_id), None)
                 target_name = target_node.get("subject_name", target_id[:8]) if target_node else target_id[:8]
                 target_type = target_node.get("principal_type", edge.get("target_principal_type", "unknown")) if target_node else edge.get("target_principal_type", "unknown")
-                depth = target_node.get("depth", "?") if target_node else "?"
+                network_distance = target_node.get("network_distance", "?") if target_node else "?"
                 tags = edge.get("context_tags") or []
                 tag_text = f" [{Colors.DIM}]tags={','.join(tags)}[/]" if tags else ""
                 out_branch.add(
                     f"[{Colors.NEUTRAL}]{target_type}[/] {target_name}... "
-                    f"[{Colors.DIM}](depth={depth}, {edge.get('delegation_type', 'hierarchical')}){tag_text}[/]"
+                    f"[{Colors.DIM}](network_distance={network_distance}, {edge.get('delegation_type', 'directed')}){tag_text}[/]"
                 )
 
         if not outbound:
@@ -213,12 +213,12 @@ class MandateDelegationFlow:
                 self.console.print(f"  [{Colors.INFO}]Source Mandate Scope:[/]")
                 self.console.print(f"    Resources: {', '.join(source_mandate.resource_scope[:3])}{'...' if len(source_mandate.resource_scope) > 3 else ''}")
                 self.console.print(f"    Actions: {', '.join(source_mandate.action_scope[:3])}{'...' if len(source_mandate.action_scope) > 3 else ''}")
-                source_depth = int(source_mandate.delegation_depth or 0)
-                self.console.print(f"    Remaining Delegation Depth: {source_depth}")
-                if source_depth <= 0:
+                source_network_distance = int(source_mandate.network_distance or 0)
+                self.console.print(f"    Remaining Delegation Network Distance: {source_network_distance}")
+                if source_network_distance <= 0:
                     self.console.print()
                     self.console.print(
-                        f"  [{Colors.ERROR}]{Icons.ERROR} This mandate cannot delegate because delegation depth is exhausted.[/]"
+                        f"  [{Colors.ERROR}]{Icons.ERROR} This mandate cannot delegate because delegation network_distance is exhausted.[/]"
                     )
                     return
                 self.console.print()
@@ -229,7 +229,7 @@ class MandateDelegationFlow:
                 target_subject_id_str = self.prompt.uuid("Target Principal ID (Tab for suggestions)", principal_items)
                 target_subject_id = UUID(target_subject_id_str)
                 
-                # Child resource scope (must be subset)
+                # Target resource scope (must be subset)
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Enter target resource scope (subset of source):[/]")
                 self.console.print(f"  [{Colors.HINT}]Source resources: {', '.join(source_mandate.resource_scope)}[/]")
@@ -247,7 +247,7 @@ class MandateDelegationFlow:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one resource is required.[/]")
                     return
                 
-                # Child action scope (must be subset)
+                # Target action scope (must be subset)
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Enter target action scope (subset of source):[/]")
                 self.console.print(f"  [{Colors.HINT}]Source actions: {', '.join(source_mandate.action_scope)}[/]")
@@ -300,7 +300,7 @@ class MandateDelegationFlow:
                 self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(target_resources)} resources[/]")
                 self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(target_actions)} actions[/]")
                 self.console.print(f"    Validity: [{Colors.NEUTRAL}]{int(validity_seconds)}s[/]")
-                self.console.print(f"    Child Delegation Depth: [{Colors.NEUTRAL}]{source_depth - 1}[/]")
+                self.console.print(f"    Target Delegation Network Distance: [{Colors.NEUTRAL}]{source_network_distance - 1}[/]")
                 if context_tags:
                     self.console.print(f"    Tags: [{Colors.NEUTRAL}]{', '.join(context_tags)}[/]")
                 self.console.print()
@@ -326,7 +326,7 @@ class MandateDelegationFlow:
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Delegation edge created![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Target Mandate ID: [{Colors.PRIMARY}]{delegated_mandate.mandate_id}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{delegated_mandate.delegation_depth}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Network Distance: [{Colors.PRIMARY}]{delegated_mandate.network_distance}[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
@@ -399,7 +399,7 @@ class MandateDelegationFlow:
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Peer delegation created![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Target Mandate ID: [{Colors.PRIMARY}]{delegated.mandate_id}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{delegated.delegation_depth}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Network Distance: [{Colors.PRIMARY}]{delegated.network_distance}[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(

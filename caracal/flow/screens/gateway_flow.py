@@ -427,7 +427,7 @@ class GatewayFlow:
             default="Revoked via TUI",
         )
         cascade_input = Prompt.ask(
-            f"[{Colors.PRIMARY}]Cascade to delegated children?[/]",
+            f"[{Colors.PRIMARY}]Cascade to delegated targetren?[/]",
             choices=["y", "n"],
             default="y",
         )
