@@ -1,14 +1,11 @@
-# This is the recommended configuration for most deployments
-# Only PostgreSQL is required; Redis and Merkle are optional
+# This is the recommended configuration for most deployments.
+# PostgreSQL, Redis, and Merkle integrity are all required.
 
 # =============================================================================
 # STORAGE PATHS
 # =============================================================================
 storage:
-  agent_registry: ~/.caracal/agents.json
-  policy_store: ~/.caracal/policies.json
-  ledger: ~/.caracal/ledger.jsonl
-  backup_dir: ~/.caracal/backups
+  backup_dir: ~/.caracal/workspaces/default/backups
   backup_count: 7
 
 # =============================================================================
@@ -17,7 +14,7 @@ storage:
 database:
   host: ${DB_HOST:localhost}
   port: ${DB_PORT:5432}
-  dbname: ${DB_NAME:caracal}
+  database: ${DB_NAME:caracal}
   user: ${DB_USER:caracal}
   password: ${DB_PASSWORD}
   pool_size: ${DB_POOL_SIZE:10}
@@ -25,7 +22,7 @@ database:
   pool_timeout: ${DB_POOL_TIMEOUT:30}
 
 # =============================================================================
-# REDIS (OPTIONAL - for caching)
+# REDIS (REQUIRED - caching and enforcement)
 # =============================================================================
 redis:
   host: ${REDIS_HOST:localhost}
@@ -70,13 +67,6 @@ mcp_adapter:
   max_request_size_mb: ${MCP_MAX_REQUEST_SIZE_MB:10}
 
 # =============================================================================
-# OPTIONAL FEATURES
-# =============================================================================
-compatibility:
-  enable_redis: true            # Caching for performance (recommended)
-  enable_merkle: false          # Cryptographic audit trails (enterprise)
-
-# =============================================================================
 # DEFAULTS
 # =============================================================================
 defaults:
@@ -87,7 +77,7 @@ defaults:
 # =============================================================================
 logging:
   level: ${LOG_LEVEL:INFO}      # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  file: ""                      # Leave empty for stdout
+  file: ~/.caracal/workspaces/default/logs/caracal.log
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # =============================================================================
@@ -100,17 +90,14 @@ performance:
   max_retries: 3
 
 # =============================================================================
-# ADVANCED: MERKLE TREE CONFIGURATION (v0.3 mode only - ignore for v0.2)
+# MERKLE TREE CONFIGURATION (REQUIRED)
 # =============================================================================
-# Merkle trees provide cryptographic audit trails. Only needed for
-# compliance requirements.
-#
-# merkle:
-#   batch_size_limit: 1000
-#   batch_timeout_seconds: 300
-#   signing_algorithm: ES256
-#   signing_backend: software
-#   private_key_path: ./keys/merkle_signing_key.pem
+merkle:
+  batch_size_limit: 1000
+  batch_timeout_seconds: 300
+  signing_algorithm: ES256
+  signing_backend: software
+  private_key_path: ~/.caracal/workspaces/default/keys/merkle_signing_key.pem
 
 # =============================================================================
 # ADVANCED: SNAPSHOT CONFIGURATION (v0.3 mode only - ignore for v0.2)
