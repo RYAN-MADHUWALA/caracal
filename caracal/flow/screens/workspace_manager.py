@@ -12,6 +12,7 @@ Provides workspace management:
 - Export/import workspace
 """
 
+import os
 from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
@@ -146,29 +147,40 @@ def _create_workspace(console: Console, state: FlowState) -> None:
         set_default_workspace(config_mgr, name)
         set_workspace(config_mgr.get_workspace_path(name))
 
-        # Quick setup (lightweight onboarding): optional PostgreSQL configuration.
-        if Confirm.ask(f"[{Colors.INFO}]Configure PostgreSQL for this workspace now?[/]", default=False):
-            console.print()
-            host = Prompt.ask(f"[{Colors.INFO}]PostgreSQL host[/]", default="localhost")
-            port = Prompt.ask(f"[{Colors.INFO}]PostgreSQL port[/]", default="5432")
-            database = Prompt.ask(f"[{Colors.INFO}]Database name[/]", default="caracal")
-            user = Prompt.ask(f"[{Colors.INFO}]Database user[/]", default="caracal")
-            password = Prompt.ask(f"[{Colors.INFO}]Database password[/]", default="", password=True)
+        # Auto-apply PostgreSQL settings from environment/defaults (no prompt),
+        # matching onboarding's non-interactive behavior.
+        host = os.getenv("CARACAL_DB_HOST") or os.getenv("DB_HOST") or "localhost"
+        port_raw = os.getenv("CARACAL_DB_PORT") or os.getenv("DB_PORT") or "5432"
+        database = os.getenv("CARACAL_DB_NAME") or os.getenv("DB_NAME") or "caracal"
+        user = os.getenv("CARACAL_DB_USER") or os.getenv("DB_USER") or "caracal"
+        password = os.getenv("CARACAL_DB_PASSWORD") or os.getenv("DB_PASSWORD") or ""
 
-            postgres = PostgresConfig(
-                host=host,
-                port=int(port),
-                database=database,
-                user=user,
-                password_ref="postgres_password",
-                ssl_mode="require",
-                pool_size=10,
-                max_overflow=5,
-                pool_timeout=30,
-            )
+        try:
+            port = int(port_raw)
+        except (TypeError, ValueError):
+            port = 5432
+
+        postgres = PostgresConfig(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password_ref="postgres_password",
+            ssl_mode="require",
+            pool_size=10,
+            max_overflow=5,
+            pool_timeout=30,
+        )
+
+        try:
             config_mgr.set_postgres_config(postgres)
             if password:
                 config_mgr.store_secret("postgres_password", password, name)
+        except Exception:
+            # Do not block workspace creation when DB is temporarily unavailable.
+            console.print(
+                f"  [{Colors.WARNING}]{Icons.WARNING} Workspace created, but PostgreSQL auto-configuration could not be validated[/]"
+            )
         
         console.print()
         console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Workspace '{name}' created successfully and set as active[/]")
