@@ -20,6 +20,7 @@ from rich.layout import Layout
 
 from caracal.flow.theme import Colors, Icons
 from caracal.flow.state import FlowState
+from caracal.flow.screens._workspace_helpers import get_default_workspace
 
 
 def show_deployment_dashboard(console: Console, state: FlowState) -> Optional[str]:
@@ -106,8 +107,7 @@ def _build_system_info() -> Table:
         
         # Workspace
         config_mgr = ConfigManager()
-        workspaces = config_mgr.list_workspaces()
-        default_ws = next((ws for ws in workspaces if ws.is_default), None)
+        default_ws = get_default_workspace(config_mgr)
         if default_ws:
             table.add_row("Workspace:", f"[{Colors.PRIMARY}]{default_ws.name}[/]")
         else:
@@ -115,7 +115,10 @@ def _build_system_info() -> Table:
         
         # PostgreSQL status
         postgres_config = config_mgr.get_postgres_config()
-        table.add_row("Database:", f"[{Colors.SUCCESS}]{postgres_config.host}:{postgres_config.port}[/]")
+        if postgres_config is None:
+            table.add_row("Database:", f"[{Colors.WARNING}]Not configured[/]")
+        else:
+            table.add_row("Database:", f"[{Colors.SUCCESS}]{postgres_config.host}:{postgres_config.port}[/]")
         
     except Exception as e:
         table.add_row("Error:", f"[{Colors.ERROR}]{str(e)}[/]")
@@ -133,8 +136,7 @@ def _build_activity_info(state: FlowState) -> Table:
     
     try:
         config_mgr = ConfigManager()
-        workspaces = config_mgr.list_workspaces()
-        default_ws = next((ws for ws in workspaces if ws.is_default), None)
+        default_ws = get_default_workspace(config_mgr)
         
         if default_ws and default_ws.sync_enabled:
             # Sync status
