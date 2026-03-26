@@ -837,9 +837,19 @@ class Broker:
             Default base URL
         """
         defaults = {
+            "ai": "https://api.example-ai.com",
             "api": "https://api.example.com/v1",
+            "application": "https://api.example.com/v1",
             "database": "https://db.example.com",
+            "data": "https://data.example.com",
+            "identity": "https://identity.example.com",
+            "messaging": "https://messaging.example.com",
+            "storage": "https://storage.example.com",
+            "payments": "https://payments.example.com",
+            "developer-tools": "https://dev.example.com",
+            "observability": "https://observability.example.com",
             "infrastructure": "https://infra.example.com",
+            "infra": "https://infra.example.com",
             "internal": "https://internal.example.com",
         }
 
