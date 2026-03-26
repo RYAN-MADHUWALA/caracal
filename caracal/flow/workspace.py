@@ -182,7 +182,27 @@ class WorkspaceManager:
         """
         rp = registry_path or _REGISTRY_PATH
         workspaces = _load_registry_workspaces(rp)
-        if rp.exists():
+
+        # Merge discovered workspace directories so onboarding/list screens
+        # reflect what actually exists on disk even when registry is stale.
+        discovered = _discover_workspace_directories()
+        if discovered:
+            known_paths = {
+                str(Path(ws.get("path", "")).expanduser().resolve())
+                for ws in workspaces
+                if ws.get("path")
+            }
+            for ws in discovered:
+                resolved_path = str(Path(ws["path"]).expanduser().resolve())
+                if resolved_path in known_paths:
+                    continue
+                workspaces.append(ws)
+                known_paths.add(resolved_path)
+
+        _ensure_single_default(workspaces)
+
+        # Persist when registry exists, or bootstrap it from discovery.
+        if rp.exists() or workspaces:
             _save_registry_workspaces(rp, workspaces)
         return workspaces
 
@@ -546,3 +566,21 @@ def _ensure_single_default(workspaces: list[dict[str, Any]]) -> None:
     keep = default_indices[0]
     for idx, ws in enumerate(workspaces):
         ws["default"] = idx == keep
+
+
+def _discover_workspace_directories() -> list[dict[str, Any]]:
+    """Discover valid workspace directories from disk."""
+    discovered: list[dict[str, Any]] = []
+    if not _WORKSPACES_DIR.exists():
+        return discovered
+
+    for item in sorted(_WORKSPACES_DIR.iterdir()):
+        if not item.is_dir() or item.name == "primary":
+            continue
+        discovered.append({
+            "name": item.name,
+            "path": str(item),
+            "default": False,
+        })
+
+    return discovered
