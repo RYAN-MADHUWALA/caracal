@@ -128,6 +128,8 @@ def _create_workspace(console: Console, state: FlowState) -> None:
     console.print()
     
     try:
+        from caracal.flow.workspace import set_workspace
+
         # Prompt for workspace name
         name = Prompt.ask(f"[{Colors.INFO}]Workspace name[/]")
         
@@ -142,6 +144,7 @@ def _create_workspace(console: Console, state: FlowState) -> None:
 
         # New workspace should become active immediately.
         set_default_workspace(config_mgr, name)
+        set_workspace(config_mgr.get_workspace_path(name))
 
         # Quick setup (lightweight onboarding): optional PostgreSQL configuration.
         if Confirm.ask(f"[{Colors.INFO}]Configure PostgreSQL for this workspace now?[/]", default=False):
@@ -203,6 +206,8 @@ def _switch_workspace(console: Console, state: FlowState) -> None:
     console.print()
     
     try:
+        from caracal.flow.workspace import set_workspace
+
         config_mgr = ConfigManager()
         workspaces = list_workspace_configs(config_mgr)
         
@@ -229,6 +234,7 @@ def _switch_workspace(console: Console, state: FlowState) -> None:
         if result and result.key != "back":
             # Switch to selected workspace
             set_default_workspace(config_mgr, result.key)
+            set_workspace(config_mgr.get_workspace_path(result.key))
             
             console.print()
             console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Switched to workspace: {result.key}[/]")

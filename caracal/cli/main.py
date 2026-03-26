@@ -26,38 +26,30 @@ from caracal.cli.context import CLIContext, pass_context
 def get_active_workspace() -> str:
     """Get the currently active workspace name."""
     try:
-        from caracal.flow.workspace import WorkspaceManager
-        
-        # Get list of workspaces from registry
-        workspaces = WorkspaceManager.list_workspaces()
-        
-        if not workspaces:
+        from caracal.deployment.config_manager import ConfigManager
+
+        config_mgr = ConfigManager()
+        default_workspace = config_mgr.get_default_workspace_name()
+        if not default_workspace:
             return "default"
-        
-        # For now, return the first workspace
-        # TODO: Add default workspace tracking to workspaces.json
-        return workspaces[0]["name"]
+        return default_workspace
     except Exception:
         return "default"
 
 
 def get_workspace_config_path(workspace_name: Optional[str]) -> Optional[Path]:
-    """Resolve a workspace's config.yaml path from the global workspace registry."""
+    """Resolve a workspace's config.yaml path from deployment workspace config."""
     if not workspace_name:
         return None
 
     try:
-        from caracal.flow.workspace import WorkspaceManager
+        from caracal.deployment.config_manager import ConfigManager
 
-        for workspace in WorkspaceManager.list_workspaces():
-            if workspace.get("name") == workspace_name:
-                config_path = Path(workspace["path"]).expanduser() / "config.yaml"
-                if config_path.exists():
-                    return config_path
+        config_mgr = ConfigManager()
+        workspace_path = config_mgr.get_workspace_path(workspace_name)
+        return workspace_path / "config.yaml"
     except Exception:
         return None
-
-    return None
 
 
 def workspace_context_callback(ctx, param, value):
@@ -194,6 +186,14 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
         resolved_config_path = config
     else:
         resolved_config_path = get_workspace_config_path(ctx.obj.workspace) or get_default_config_path()
+
+    # Set active runtime workspace early so all path defaults (backup/log/cache)
+    # resolve to the selected workspace directory.
+    try:
+        from caracal.flow.workspace import set_workspace
+        set_workspace(Path(resolved_config_path).expanduser().parent)
+    except Exception:
+        pass
 
     ctx.obj.config_path = str(resolved_config_path)
     
@@ -337,7 +337,13 @@ def workspace_list(ctx, format):
     
     try:
         config_mgr = ConfigManager()
-        workspaces = config_mgr.list_workspaces()
+        workspace_names = config_mgr.list_workspaces()
+        workspace_configs = []
+        for name in workspace_names:
+            try:
+                workspace_configs.append(config_mgr.get_workspace_config(name))
+            except Exception:
+                continue
         
         if format == 'json':
             data = [
@@ -347,18 +353,18 @@ def workspace_list(ctx, format):
                     'sync_enabled': ws.sync_enabled,
                     'created': ws.created_at.isoformat() if ws.created_at else None
                 }
-                for ws in workspaces
+                for ws in workspace_configs
             ]
             click.echo(json_lib.dumps(data, indent=2))
         else:
-            if not workspaces:
+            if not workspace_configs:
                 click.echo("No workspaces found. Run 'caracal init' to create default workspace.")
                 return
             
             click.echo()
             click.echo(click.style("WORKSPACES", bold=True))
             click.echo()
-            for ws in workspaces:
+            for ws in workspace_configs:
                 marker = click.style("●", fg='green') if ws.is_default else " "
                 sync_status = click.style("synced", fg='cyan') if ws.sync_enabled else click.style("local", fg='yellow')
                 click.echo(f"  {marker} {click.style(ws.name, bold=True)} ({sync_status})")
