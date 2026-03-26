@@ -83,22 +83,22 @@ class TestDelegationOperations:
     async def test_create(self, scoped_setup):
         ctx, adapter, _ = scoped_setup
         result = await ctx.delegation.create(
-            parent_mandate_id="m1",
-            child_subject_id="child_1",
+            source_mandate_id="m1",
+            target_subject_id="target_1",
             resource_scope=["data.*"],
             action_scope=["read"],
             validity_seconds=1800,
         )
         assert result["id"] == "d1"
         sent = adapter.sent_requests[0]
-        assert sent.body["parent_mandate_id"] == "m1"
+        assert sent.body["source_mandate_id"] == "m1"
         assert sent.body["resource_scope"] == ["data.*"]
 
     @pytest.mark.asyncio
     async def test_get_token(self, scoped_setup):
         ctx, _, _ = scoped_setup
         result = await ctx.delegation.get_token(
-            source_principal_id="parent_1", target_principal_id="child_1",
+            source_principal_id="source_1", target_principal_id="target_1",
         )
         assert result["token"] == "jwt..."
 

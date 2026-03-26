@@ -30,7 +30,7 @@ class TestNativeImports:
         assert hasattr(MeteringEvent, 'timestamp')
         assert hasattr(MeteringEvent, 'metadata')
         assert hasattr(MeteringEvent, 'correlation_id')
-        assert hasattr(MeteringEvent, 'parent_event_id')
+        assert hasattr(MeteringEvent, 'source_event_id')
         assert hasattr(MeteringEvent, 'tags')
         
         # Verify it has expected methods
