@@ -30,6 +30,16 @@ class Mode(str, Enum):
     DEVELOPMENT = "dev"
     USER = "user"
 
+    @property
+    def is_dev(self) -> bool:
+        """Return True when mode is development."""
+        return self == Mode.DEVELOPMENT
+
+    @property
+    def is_user(self) -> bool:
+        """Return True when mode is user."""
+        return self == Mode.USER
+
 
 class ModeManager:
     """
