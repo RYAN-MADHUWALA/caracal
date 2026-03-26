@@ -140,8 +140,6 @@ def create(
         # Create database connection
         from caracal.db.connection import get_db_manager
         from caracal.db.models import AuthorityPolicy, Principal
-        from caracal.core.identity import AgentRegistry
-        from pathlib import Path
         from uuid import uuid4
         
         db_manager = get_db_manager(cli_ctx.config)
@@ -161,18 +159,6 @@ def create(
                 principal_name = f"principal-{principal_uuid}"
                 principal_owner = "unknown"
                 principal_type = "agent"
-
-                try:
-                    registry_path = Path(cli_ctx.config.storage.principal_registry).expanduser()
-                    backup_count = cli_ctx.config.storage.backup_count
-                    registry = AgentRegistry(str(registry_path), backup_count=backup_count)
-                    agent = registry.get_principal(str(principal_uuid))
-                    if agent:
-                        principal_name = agent.name
-                        principal_owner = agent.owner
-                except Exception:
-                    # Best-effort enrichment only; fallback values are safe.
-                    pass
 
                 principal = Principal(
                     principal_id=principal_uuid,
