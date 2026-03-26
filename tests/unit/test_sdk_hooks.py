@@ -8,14 +8,14 @@ Tests for SDK Hooks and Extension interface.
 
 import pytest
 
-from caracal.sdk.hooks import (
+from caracal_sdk.hooks import (
     HookRegistry,
     SDKRequest,
     SDKResponse,
     ScopeRef,
     StateSnapshot,
 )
-from caracal.sdk.extensions import CaracalExtension
+from caracal_sdk.extensions import CaracalExtension
 
 
 # ---------------------------------------------------------------------------
