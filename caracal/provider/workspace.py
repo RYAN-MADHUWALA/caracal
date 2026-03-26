@@ -16,8 +16,8 @@ from caracal.deployment.exceptions import WorkspaceNotFoundError
 from caracal.provider.definitions import (
     build_action_scope,
     build_resource_scope,
-    get_provider_definition,
     parse_provider_scope,
+    provider_definition_from_mapping,
     resolve_provider_definition_id,
 )
 
@@ -33,7 +33,19 @@ class WorkspaceProviderBinding:
 
     @property
     def definition(self):
-        return get_provider_definition(self.definition_id)
+        definition_payload = self.entry.get("definition")
+        if isinstance(definition_payload, dict):
+            return provider_definition_from_mapping(
+                definition_payload,
+                default_definition_id=self.definition_id,
+                default_service_type=self.service_type,
+                default_display_name=self.provider_name,
+                default_auth_scheme=str(self.entry.get("auth_scheme") or "api_key"),
+                default_base_url=self.entry.get("base_url"),
+            )
+        raise ValueError(
+            f"Provider '{self.provider_name}' is missing structured definition payload"
+        )
 
     def list_resource_scopes(self) -> List[str]:
         return [
