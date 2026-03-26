@@ -10,14 +10,14 @@ Python SDK for integrating authority enforcement into AI agent applications.
 ## Installation
 
 ```bash
-pip install caracal-core
+pip install caracal-sdk
 ```
 
 
 ## Quick Start
 
 ```python
-from caracal.sdk import CaracalClient
+from caracal_sdk import CaracalClient
 
 client = CaracalClient(api_key="sk_test_123")
 
@@ -35,7 +35,7 @@ mandate = await client.mandates.create(
 ## Workspace-Scoped Operations
 
 ```python
-from caracal.sdk import CaracalClient
+from caracal_sdk import CaracalClient
 
 client = CaracalClient(api_key="sk_test_123")
 
@@ -63,10 +63,10 @@ other_ctx = client.context.checkout(
 ## Advanced Builder Mode
 
 ```python
-from caracal.sdk import CaracalBuilder
-from caracal.sdk.adapters import WebSocketAdapter
-from caracal.sdk.enterprise.compliance import ComplianceExtension
-from caracal.sdk.enterprise.analytics import AnalyticsExtension
+from caracal_sdk import CaracalBuilder
+from caracal_sdk.adapters import WebSocketAdapter
+from caracal_sdk.enterprise.compliance import ComplianceExtension
+from caracal_sdk.enterprise.analytics import AnalyticsExtension
 
 client = (
     CaracalBuilder()
@@ -81,21 +81,21 @@ client = (
 
 | Module         | Import                   | Responsibility             |
 | -------------- | ------------------------ | -------------------------- |
-| **Client**     | `caracal.sdk.client`     | Init, builder, config      |
-| **Context**    | `caracal.sdk.context`    | Org/Workspace scope        |
-| **Agents**     | `caracal.sdk.agents`     | Agent CRUD                 |
-| **Mandates**   | `caracal.sdk.mandates`   | Mandate lifecycle          |
-| **Delegation** | `caracal.sdk.delegation` | Token management           |
-| **Ledger**     | `caracal.sdk.ledger`     | Audit queries              |
-| **Adapters**   | `caracal.sdk.adapters`   | Transport (HTTP, WS, Mock) |
-| **Hooks**      | `caracal.sdk.hooks`      | Lifecycle events           |
-| **Extensions** | `caracal.sdk.extensions` | Plugin interface           |
+| **Client**     | `caracal_sdk.client`     | Init, builder, config      |
+| **Context**    | `caracal_sdk.context`    | Org/Workspace scope        |
+| **Agents**     | `caracal_sdk.agents`     | Agent CRUD                 |
+| **Mandates**   | `caracal_sdk.mandates`   | Mandate lifecycle          |
+| **Delegation** | `caracal_sdk.delegation` | Token management           |
+| **Ledger**     | `caracal_sdk.ledger`     | Audit queries              |
+| **Adapters**   | `caracal_sdk.adapters`   | Transport (HTTP, WS, Mock) |
+| **Hooks**      | `caracal_sdk.hooks`      | Lifecycle events           |
+| **Extensions** | `caracal_sdk.extensions` | Plugin interface           |
 
 ## Writing Extensions
 
 ```python
-from caracal.sdk.extensions import CaracalExtension
-from caracal.sdk.hooks import HookRegistry
+from caracal_sdk.extensions import CaracalExtension
+from caracal_sdk.hooks import HookRegistry
 
 class MyExtension(CaracalExtension):
     @property
@@ -116,7 +116,7 @@ class MyExtension(CaracalExtension):
 
 ## Enterprise Extensions
 
-Premium extensions in `caracal.sdk.enterprise`:
+Premium extensions in `caracal_sdk.enterprise`:
 
 - **ComplianceExtension** — SOC 2, ISO 27001, GDPR, HIPAA compliance reporting
 - **AnalyticsExtension** — Advanced export + dashboard
@@ -125,7 +125,7 @@ Premium extensions in `caracal.sdk.enterprise`:
 - **LicenseExtension** — Enterprise license validation
 - **SyncExtension** — Multi-node state synchronization
 
-Regulated industry extensions in `caracal.sdk.enterprise.regulated`:
+Regulated industry extensions in `caracal_sdk.enterprise.regulated`:
 
 - **HealthcareExtension** — HIPAA, HL7 FHIR compliance
 - **FinanceExtension** — PCI DSS, SOX compliance
@@ -135,7 +135,7 @@ Regulated industry extensions in `caracal.sdk.enterprise.regulated`:
 The SDK uses fail-closed semantics. Errors raise exceptions rather than silently failing:
 
 ```python
-from caracal.sdk import CaracalClient
+from caracal_sdk import CaracalClient
 from caracal.exceptions import SDKConfigurationError
 
 try:
