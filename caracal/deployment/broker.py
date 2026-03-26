@@ -32,6 +32,12 @@ from caracal.deployment.exceptions import (
     ProviderTimeoutError,
     SecretNotFoundError,
 )
+from caracal.provider.definitions import (
+    ScopeParseError,
+    get_provider_definition,
+    parse_provider_scope,
+    resolve_provider_definition_id,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -49,6 +55,8 @@ class ProviderRequest:
     provider: str
     method: str
     endpoint: str
+    resource: Optional[str] = None
+    action: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
     headers: Dict[str, str] = field(default_factory=dict)
     body: Optional[Dict[str, Any]] = None
@@ -68,6 +76,7 @@ class ProviderConfig:
     """Provider configuration data model."""
     name: str
     provider_type: str
+    provider_definition: Optional[str] = None
     api_key_ref: Optional[str] = None
     auth_scheme: str = "api_key"
     credential_ref: Optional[str] = None
@@ -83,6 +92,7 @@ class ProviderConfig:
     tags: List[str] = field(default_factory=list)
     access_policy: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    enforce_scoped_requests: bool = False
 
     def __post_init__(self) -> None:
         # Preserve backward compatibility with legacy api_key_ref-based configs.
@@ -90,6 +100,10 @@ class ProviderConfig:
             self.credential_ref = self.api_key_ref
         if self.api_key_ref is None and self.credential_ref:
             self.api_key_ref = self.credential_ref
+        self.provider_definition = resolve_provider_definition_id(
+            service_type=self.provider_type,
+            requested_definition=self.provider_definition,
+        )
 
     @property
     def service_type(self) -> str:
@@ -126,12 +140,18 @@ class RateLimit:
         """Refill tokens based on elapsed time."""
         now = datetime.now()
         elapsed = (now - self.last_refill).total_seconds()
+        if elapsed <= 0:
+            return
         
         # Refill rate: requests_per_minute / 60 = requests per second
         refill_rate = self.requests_per_minute / 60.0
         tokens_to_add = elapsed * refill_rate
         
         self.tokens = min(self.tokens + tokens_to_add, self.requests_per_minute)
+        # Avoid tiny floating-point drift for immediate consecutive calls.
+        nearest_int = round(self.tokens)
+        if abs(self.tokens - nearest_int) < 1e-3:
+            self.tokens = float(nearest_int)
         self.last_refill = now
 
 
@@ -140,7 +160,7 @@ class CircuitBreaker:
     """Circuit breaker for provider fault tolerance."""
     failure_threshold: int = 5
     timeout_seconds: int = 30
-    half_open_max_calls: int = 3
+    half_open_max_calls: int = 1
     
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0
@@ -183,6 +203,44 @@ class CircuitBreaker:
             self._on_success()
             return result
         except Exception as e:
+            self._on_failure()
+            raise
+
+    async def call_async(self, func):
+        """
+        Execute async function with circuit breaker protection.
+
+        Args:
+            func: Async function to execute
+
+        Returns:
+            Function result
+
+        Raises:
+            CircuitBreakerOpenError: If circuit is open
+        """
+        if self.state == CircuitState.OPEN:
+            if self._should_attempt_reset():
+                self.state = CircuitState.HALF_OPEN
+                self.half_open_calls = 0
+                logger.info("circuit_breaker_half_open")
+            else:
+                raise CircuitBreakerOpenError(
+                    f"Circuit breaker is open. Opened at {self.opened_at}"
+                )
+
+        if self.state == CircuitState.HALF_OPEN:
+            if self.half_open_calls >= self.half_open_max_calls:
+                raise CircuitBreakerOpenError(
+                    "Circuit breaker half-open call limit reached"
+                )
+            self.half_open_calls += 1
+
+        try:
+            result = await func()
+            self._on_success()
+            return result
+        except Exception:
             self._on_failure()
             raise
     
@@ -237,6 +295,8 @@ class ProviderInfo:
     tags: List[str] = field(default_factory=list)
     status: str = "configured"
     last_error: Optional[str] = None
+    provider_definition: Optional[str] = None
+    scoped_authorization: bool = False
 
     @property
     def service_type(self) -> str:
@@ -425,7 +485,9 @@ class Broker:
                 version=config.version,
                 tags=config.tags,
                 status=self._status_from_circuit_state(circuit_breaker.state),
-                last_error=None  # Could track this in metrics
+                last_error=None,  # Could track this in metrics
+                provider_definition=config.provider_definition,
+                scoped_authorization=config.enforce_scoped_requests,
             ))
         
         return providers
@@ -560,6 +622,7 @@ class Broker:
         
         config = self._providers[provider]
         circuit_breaker = self._circuit_breakers[provider]
+        self._validate_request_scope(provider, config, request)
         
         # Check rate limit
         if provider in self._rate_limiters:
@@ -576,11 +639,11 @@ class Broker:
                 )
         
         # Execute with circuit breaker
-        def make_request():
-            return asyncio.run(self._call_provider_with_retry(provider, config, request))
-        
+        async def make_request():
+            return await self._call_provider_with_retry(provider, config, request)
+
         try:
-            response = circuit_breaker.call(make_request)
+            response = await circuit_breaker.call_async(make_request)
             return response
         except CircuitBreakerOpenError:
             logger.error(
@@ -625,7 +688,15 @@ class Broker:
                 
                 # Build request
                 client = await self._get_client()
-                base_url = config.base_url or self._get_default_base_url(config.provider_type)
+                base_url = config.base_url
+                if not base_url and config.provider_definition:
+                    try:
+                        definition = get_provider_definition(config.provider_definition)
+                        base_url = definition.default_base_url
+                    except Exception:
+                        base_url = None
+                if not base_url:
+                    base_url = self._get_default_base_url(config.provider_type)
                 url = f"{base_url}/{request.endpoint.lstrip('/')}"
                 
                 headers = {
@@ -815,6 +886,92 @@ class Broker:
             )
 
         raise ProviderAuthenticationError(f"Unsupported auth scheme: {config.auth_scheme}")
+
+    def _validate_request_scope(
+        self,
+        provider: str,
+        config: ProviderConfig,
+        request: ProviderRequest,
+    ) -> None:
+        """
+        Validate provider-scoped action/resource contract before execution.
+
+        When scoped enforcement is enabled, the broker requires a canonical
+        provider resource and action and verifies that HTTP method/path align
+        with the provider definition.
+        """
+        definition = get_provider_definition(config.provider_definition or "generic_http")
+
+        resource_id = self._normalize_scope_identifier(
+            scope_or_id=request.resource,
+            expected_kind="resource",
+            provider=provider,
+        )
+        action_id = self._normalize_scope_identifier(
+            scope_or_id=request.action,
+            expected_kind="action",
+            provider=provider,
+        )
+
+        if config.enforce_scoped_requests and (not resource_id or not action_id):
+            raise ProviderConfigurationError(
+                f"Provider '{provider}' requires provider-scoped resource/action headers for execution"
+            )
+
+        if not resource_id and not action_id:
+            return
+
+        if resource_id and resource_id not in definition.resources:
+            raise ProviderConfigurationError(
+                f"Resource '{resource_id}' is not supported by provider definition '{definition.definition_id}'"
+            )
+
+        if action_id:
+            action = definition.get_action(action_id=action_id, resource_id=resource_id)
+            if not action:
+                raise ProviderConfigurationError(
+                    f"Action '{action_id}' is not supported for provider '{provider}'"
+                )
+
+            request_method = request.method.strip().upper()
+            if request_method != action.method.upper():
+                raise ProviderConfigurationError(
+                    f"Action '{action_id}' requires HTTP {action.method}, got {request_method}"
+                )
+
+            normalized_endpoint = "/" + request.endpoint.lstrip("/")
+            if not normalized_endpoint.startswith(action.path_prefix):
+                raise ProviderConfigurationError(
+                    f"Action '{action_id}' requires path prefix '{action.path_prefix}', "
+                    f"got '{normalized_endpoint}'"
+                )
+
+    @staticmethod
+    def _normalize_scope_identifier(
+        scope_or_id: Optional[str],
+        expected_kind: str,
+        provider: str,
+    ) -> Optional[str]:
+        if scope_or_id is None:
+            return None
+        cleaned = scope_or_id.strip()
+        if not cleaned:
+            return None
+        if cleaned.startswith("provider:"):
+            try:
+                parsed = parse_provider_scope(cleaned)
+            except ScopeParseError as e:
+                raise ProviderConfigurationError(str(e)) from e
+            if parsed["kind"] != expected_kind:
+                raise ProviderConfigurationError(
+                    f"Expected {expected_kind} scope but got {parsed['kind']}: {cleaned}"
+                )
+            if parsed["provider_name"] != provider:
+                raise ProviderConfigurationError(
+                    f"Scope provider '{parsed['provider_name']}' does not match request provider '{provider}'"
+                )
+            return parsed["identifier"]
+        return cleaned
 
     @staticmethod
     def _status_from_circuit_state(state: CircuitState) -> str:
