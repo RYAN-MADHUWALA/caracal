@@ -129,11 +129,6 @@ class StorageConfig:
     
     backup_dir: str
     backup_count: int = 3
-    
-    # Legacy compatibility fields. These are optional in PostgreSQL-only mode.
-    principal_registry: str = ""
-    policy_store: str = ""
-    ledger: str = ""
 
 
 @dataclass
@@ -360,9 +355,6 @@ def get_default_config() -> CaracalConfig:
     storage = StorageConfig(
         backup_dir=str(ws.backups_dir),
         backup_count=3,
-        principal_registry="",
-        policy_store="",
-        ledger="",
     )
     
     defaults = DefaultsConfig(
@@ -491,20 +483,11 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
     storage_data = config_data['storage']
     
     # Expand paths with user home directory
-    def _resolve_storage_path(key: str, default_value: str) -> str:
-        """Resolve storage path from YAML, falling back to default when absent/empty."""
-        raw_value = storage_data.get(key)
-        value = raw_value if raw_value else default_value
-        return os.path.expanduser(value) if value else ""
-
     storage = StorageConfig(
         backup_dir=os.path.expanduser(
             storage_data.get('backup_dir', default_config.storage.backup_dir)
         ),
         backup_count=storage_data.get('backup_count', default_config.storage.backup_count),
-        principal_registry=_resolve_storage_path('principal_registry', default_config.storage.principal_registry),
-        policy_store=_resolve_storage_path('policy_store', default_config.storage.policy_store),
-        ledger=_resolve_storage_path('ledger', default_config.storage.ledger),
     )
     
     # Parse defaults configuration (optional)
