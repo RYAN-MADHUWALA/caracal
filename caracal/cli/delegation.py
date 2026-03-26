@@ -9,42 +9,83 @@ Provides commands for generating and viewing delegation tokens.
 
 import json
 import sys
-from pathlib import Path
+from dataclasses import dataclass
+from uuid import UUID
 
 import click
 
 from caracal.core.delegation import DelegationTokenManager
-from caracal.core.identity import PrincipalRegistry
-from caracal.exceptions import CaracalError
+from caracal.db.connection import get_db_manager
+from caracal.db.models import AuthorityPolicy, Principal
+from caracal.exceptions import CaracalError, PrincipalNotFoundError
 
 
-def get_principal_registry_with_delegation(config) -> tuple:
-    """
-    Create PrincipalRegistry and DelegationTokenManager instances from configuration.
-    
-    Args:
-        config: Configuration object
-        
-    Returns:
-        Tuple of (PrincipalRegistry, DelegationTokenManager)
-    """
-    registry_path = Path(config.storage.principal_registry).expanduser()
-    backup_count = config.storage.backup_count
-    
-    # Create delegation token manager first
-    delegation_manager = DelegationTokenManager(principal_registry=None)
-    
-    # Create agent registry with delegation manager
-    registry = PrincipalRegistry(
-        str(registry_path),
-        backup_count=backup_count,
-        delegation_token_manager=delegation_manager
-    )
-    
-    # Set registry reference in delegation manager
-    delegation_manager.principal_registry = registry
-    
-    return registry, delegation_manager
+@dataclass
+class _PrincipalView:
+    """Minimal principal view required by DelegationTokenManager."""
+
+    principal_id: str
+    metadata: dict
+
+
+class _DBPrincipalRegistryAdapter:
+    """Principal lookup/metadata adapter backed by PostgreSQL."""
+
+    def __init__(self, config):
+        self._config = config
+
+    def get_principal(self, principal_id: str):
+        try:
+            principal_uuid = UUID(principal_id)
+        except ValueError:
+            return None
+
+        db_manager = get_db_manager(self._config)
+        try:
+            with db_manager.session_scope() as session:
+                row = session.query(Principal).filter_by(principal_id=principal_uuid).first()
+                if not row:
+                    return None
+                return _PrincipalView(
+                    principal_id=str(row.principal_id),
+                    metadata=row.principal_metadata or {},
+                )
+        finally:
+            db_manager.close()
+
+    def ensure_signing_keys(self, principal_id: str, delegation_manager: DelegationTokenManager) -> None:
+        """Ensure principal has ES256 signing keys stored in PostgreSQL metadata."""
+        try:
+            principal_uuid = UUID(principal_id)
+        except ValueError as exc:
+            raise PrincipalNotFoundError(f"Invalid principal ID: {principal_id}") from exc
+
+        db_manager = get_db_manager(self._config)
+        try:
+            with db_manager.session_scope() as session:
+                row = session.query(Principal).filter_by(principal_id=principal_uuid).first()
+                if not row:
+                    raise PrincipalNotFoundError(f"Principal not found: {principal_id}")
+
+                metadata = dict(row.principal_metadata or {})
+                if "private_key_pem" in metadata and "public_key_pem" in metadata:
+                    return
+
+                private_key_pem, public_key_pem = delegation_manager.generate_key_pair()
+                metadata["private_key_pem"] = private_key_pem.decode("utf-8")
+                metadata["public_key_pem"] = public_key_pem.decode("utf-8")
+                row.principal_metadata = metadata
+        finally:
+            db_manager.close()
+
+    def assert_exists(self, principal_id: str) -> None:
+        if self.get_principal(principal_id) is None:
+            raise PrincipalNotFoundError(f"Principal not found: {principal_id}")
+
+
+def _get_delegation_manager(config) -> tuple[_DBPrincipalRegistryAdapter, DelegationTokenManager]:
+    registry = _DBPrincipalRegistryAdapter(config)
+    return registry, DelegationTokenManager(principal_registry=registry)
 
 
 @click.command('generate')
@@ -131,8 +172,11 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create registry and delegation manager
-        registry, delegation_manager = get_principal_registry_with_delegation(cli_ctx.config)
+        # Build PostgreSQL-backed principal adapter + delegation manager
+        registry, delegation_manager = _get_delegation_manager(cli_ctx.config)
+        registry.assert_exists(source_id)
+        registry.assert_exists(target_id)
+        registry.ensure_signing_keys(source_id, delegation_manager)
         
         # Parse allowed operations
         allowed_operations = list(operations) if operations else None
@@ -141,9 +185,9 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
         tags_list = list(context_tags) if context_tags else None
         
         # Generate token
-        token = registry.generate_delegation_token(
-            source_principal_id=source_id,
-            target_principal_id=target_id,
+        token = delegation_manager.generate_token(
+            source_principal_id=UUID(source_id),
+            target_principal_id=UUID(target_id),
             expiration_seconds=expiration,
             allowed_operations=allowed_operations,
             delegation_type=delegation_type,
@@ -151,10 +195,6 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
             target_principal_type=target_type,
             context_tags=tags_list
         )
-        
-        if token is None:
-            click.echo("Error: Delegation token generation not available", err=True)
-            sys.exit(1)
         
         # Display success message
         click.echo("✓ Delegation token generated successfully!")
@@ -327,8 +367,8 @@ def validate(ctx, token: str):
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create registry and delegation manager
-        registry, delegation_manager = get_principal_registry_with_delegation(cli_ctx.config)
+        # Create PostgreSQL-backed delegation manager
+        _, delegation_manager = _get_delegation_manager(cli_ctx.config)
         
         # Validate token
         claims = delegation_manager.validate_token(token)
@@ -385,69 +425,51 @@ def revoke(ctx, policy_id: str, confirm: bool):
         # Get CLI context
         cli_ctx = ctx.obj
         
-        # Create policy store
-        from pathlib import Path
-        from caracal.core.policy import PolicyStore
-        
-        registry_path = Path(cli_ctx.config.storage.principal_registry).expanduser()
-        policy_path = Path(cli_ctx.config.storage.policy_store).expanduser()
-        backup_count = cli_ctx.config.storage.backup_count
-        
-        registry = PrincipalRegistry(str(registry_path), backup_count=backup_count)
-        policy_store = PolicyStore(str(policy_path), principal_registry=registry, backup_count=backup_count)
-        
-        # Get the policy to verify it exists and is delegated
-        policy = None
-        for p in policy_store.list_all_policies():
-            if p.policy_id == policy_id:
-                policy = p
-                break
-        
-        if not policy:
-            click.echo(f"Error: Policy not found: {policy_id}", err=True)
-            sys.exit(1)
-        
-        if not policy.active:
-            click.echo(f"Error: Policy {policy_id} is already inactive", err=True)
-            sys.exit(1)
-        
-        if policy.delegated_from_principal_id is None:
-            click.echo(
-                f"Error: Policy {policy_id} is not a delegated policy",
-                err=True
-            )
-            sys.exit(1)
-        
-        # Get agent details for display
-        agent = registry.get_principal(policy.principal_id)
-        parent = registry.get_principal(policy.delegated_from_principal_id)
-        
-        # Confirm revocation
-        if not confirm:
-            click.echo("Delegation Details:")
-            click.echo("=" * 50)
-            click.echo(f"Target Agent:  {agent.name if agent else 'Unknown'} ({policy.principal_id})")
-            click.echo(f"Source Agent:  {parent.name if parent else 'Unknown'} ({policy.delegated_from_principal_id})")
-            click.echo(f"Time Window:   {policy.time_window}")
-            click.echo()
-            
-            if not click.confirm("Are you sure you want to revoke this delegation?"):
-                click.echo("Revocation cancelled.")
-                return
-        
-        # Deactivate the policy
-        policy_store._policies[policy_id].active = False
-        policy_store._persist()
-        
-        click.echo()
-        click.echo("✓ Delegation revoked successfully!")
-        click.echo()
-        click.echo(f"Policy ID:     {policy_id}")
-        click.echo(f"Target Agent:  {agent.name if agent else 'Unknown'}")
-        click.echo(f"Status:        Inactive")
-        click.echo()
-        click.echo("⚠ The target principal remains registered but its delegated authority is now revoked.")
-        
+        db_manager = get_db_manager(cli_ctx.config)
+        try:
+            with db_manager.session_scope() as session:
+                try:
+                    policy_uuid = UUID(policy_id)
+                except ValueError:
+                    click.echo(f"Error: Invalid policy ID format: {policy_id}", err=True)
+                    sys.exit(1)
+
+                policy = session.query(AuthorityPolicy).filter_by(policy_id=policy_uuid).first()
+                if not policy:
+                    click.echo(f"Error: Policy not found: {policy_id}", err=True)
+                    sys.exit(1)
+
+                if not policy.active:
+                    click.echo(f"Error: Policy {policy_id} is already inactive", err=True)
+                    sys.exit(1)
+
+                principal = session.query(Principal).filter_by(principal_id=policy.principal_id).first()
+
+                # Confirm revocation
+                if not confirm:
+                    click.echo("Delegation Policy Details:")
+                    click.echo("=" * 50)
+                    click.echo(f"Policy ID:     {policy_id}")
+                    click.echo(f"Principal:     {principal.name if principal else 'Unknown'} ({policy.principal_id})")
+                    click.echo(f"Allow Deleg.:  {'Yes' if policy.allow_delegation else 'No'}")
+                    click.echo(f"Status:        {'Active' if policy.active else 'Inactive'}")
+                    click.echo()
+
+                    if not click.confirm("Are you sure you want to revoke this delegation policy?"):
+                        click.echo("Revocation cancelled.")
+                        return
+
+                policy.active = False
+
+                click.echo()
+                click.echo("✓ Delegation policy revoked successfully!")
+                click.echo()
+                click.echo(f"Policy ID:     {policy_id}")
+                click.echo(f"Principal:     {principal.name if principal else 'Unknown'}")
+                click.echo("Status:        Inactive")
+        finally:
+            db_manager.close()
+
     except CaracalError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
