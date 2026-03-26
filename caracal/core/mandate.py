@@ -213,6 +213,7 @@ class MandateManager:
         delegation_type: str = "hierarchical",
         delegation_depth: Optional[int] = None,
         parent_mandate_id: Optional[UUID] = None,
+        enforce_issuer_policy: bool = True,
         context_tags: Optional[List[str]] = None,
     ) -> ExecutionMandate:
         """
@@ -233,6 +234,7 @@ class MandateManager:
             delegation_type: Type of delegation (hierarchical/peer)
             delegation_depth: How many additional delegation hops are allowed
             parent_mandate_id: Parent mandate for delegated mandates
+            enforce_issuer_policy: Whether to validate against issuer authority policy
             context_tags: Context tags for dynamic authority filtering
         
         Returns:
@@ -264,83 +266,85 @@ class MandateManager:
                 )
                 raise ValueError(error_msg)
         
-        # Validate issuer has active authority policy
-        issuer_policy = self._get_active_policy(issuer_id)
-        if not issuer_policy:
-            error_msg = f"Issuer {issuer_id} does not have an active authority policy"
-            logger.warning(error_msg)
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=issuer_id,
-                decision="denied",
-                denial_reason=error_msg
-            )
-            raise ValueError(error_msg)
-        
-        # Validate requested validity period against policy
-        if validity_seconds > issuer_policy.max_validity_seconds:
-            error_msg = (
-                f"Requested mandate validity {validity_seconds}s exceeds policy maximum "
-                f"{issuer_policy.max_validity_seconds}s"
-            )
-            logger.warning(error_msg)
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=issuer_id,
-                decision="denied",
-                denial_reason=error_msg
-            )
-            raise ValueError(error_msg)
-        
-        # Validate requested scope against policy
-        if not self._validate_scope_subset(resource_scope, issuer_policy.allowed_resource_patterns):
-            error_msg = "Requested resource scope exceeds policy limits"
-            logger.warning(error_msg)
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=issuer_id,
-                decision="denied",
-                denial_reason=error_msg
-            )
-            raise ValueError(error_msg)
-        
-        if not self._validate_scope_subset(action_scope, issuer_policy.allowed_actions):
-            error_msg = "Requested action scope exceeds policy limits"
-            logger.warning(error_msg)
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=issuer_id,
-                decision="denied",
-                denial_reason=error_msg
-            )
-            raise ValueError(error_msg)
+        issuer_policy = None
+        if enforce_issuer_policy:
+            # Validate issuer has active authority policy
+            issuer_policy = self._get_active_policy(issuer_id)
+            if not issuer_policy:
+                error_msg = f"Issuer {issuer_id} does not have an active authority policy"
+                logger.warning(error_msg)
+                self._record_ledger_event(
+                    event_type="denied",
+                    principal_id=issuer_id,
+                    decision="denied",
+                    denial_reason=error_msg
+                )
+                raise ValueError(error_msg)
+
+            # Validate requested validity period against policy
+            if validity_seconds > issuer_policy.max_validity_seconds:
+                error_msg = (
+                    f"Requested mandate validity {validity_seconds}s exceeds policy maximum "
+                    f"{issuer_policy.max_validity_seconds}s"
+                )
+                logger.warning(error_msg)
+                self._record_ledger_event(
+                    event_type="denied",
+                    principal_id=issuer_id,
+                    decision="denied",
+                    denial_reason=error_msg
+                )
+                raise ValueError(error_msg)
+
+            # Validate requested scope against policy
+            if not self._validate_scope_subset(resource_scope, issuer_policy.allowed_resource_patterns):
+                error_msg = "Requested resource scope exceeds policy limits"
+                logger.warning(error_msg)
+                self._record_ledger_event(
+                    event_type="denied",
+                    principal_id=issuer_id,
+                    decision="denied",
+                    denial_reason=error_msg
+                )
+                raise ValueError(error_msg)
+
+            if not self._validate_scope_subset(action_scope, issuer_policy.allowed_actions):
+                error_msg = "Requested action scope exceeds policy limits"
+                logger.warning(error_msg)
+                self._record_ledger_event(
+                    event_type="denied",
+                    principal_id=issuer_id,
+                    decision="denied",
+                    denial_reason=error_msg
+                )
+                raise ValueError(error_msg)
 
         # Resolve delegation depth for this mandate.
         # If not explicitly provided, inherit issuer policy maximum when delegation is allowed.
         if delegation_depth is None:
-            resolved_delegation_depth = (
-                int(issuer_policy.max_delegation_depth)
-                if issuer_policy.allow_delegation
-                else 0
-            )
+            if enforce_issuer_policy and issuer_policy and issuer_policy.allow_delegation:
+                resolved_delegation_depth = int(issuer_policy.max_delegation_depth)
+            else:
+                resolved_delegation_depth = 0
         else:
             resolved_delegation_depth = int(delegation_depth)
 
         if resolved_delegation_depth < 0:
             raise ValueError("Delegation depth cannot be negative")
 
-        policy_max_depth = int(issuer_policy.max_delegation_depth)
-        if resolved_delegation_depth > policy_max_depth:
-            raise ValueError(
-                f"Requested delegation depth {resolved_delegation_depth} exceeds policy maximum "
-                f"{policy_max_depth}"
-            )
+        if enforce_issuer_policy and issuer_policy:
+            policy_max_depth = int(issuer_policy.max_delegation_depth)
+            if resolved_delegation_depth > policy_max_depth:
+                raise ValueError(
+                    f"Requested delegation depth {resolved_delegation_depth} exceeds policy maximum "
+                    f"{policy_max_depth}"
+                )
 
-        if not issuer_policy.allow_delegation and resolved_delegation_depth > 0:
-            raise ValueError(
-                f"Issuer {issuer_id} is not allowed to issue delegable mandates "
-                f"according to their authority policy"
-            )
+            if not issuer_policy.allow_delegation and resolved_delegation_depth > 0:
+                raise ValueError(
+                    f"Issuer {issuer_id} is not allowed to issue delegable mandates "
+                    f"according to their authority policy"
+                )
         
         # Generate unique mandate ID
         mandate_id = uuid4()
@@ -668,6 +672,7 @@ class MandateManager:
                 delegation_type=delegation_type,
                 delegation_depth=child_delegation_depth,
                 parent_mandate_id=source_mandate_id,
+                enforce_issuer_policy=False,
                 context_tags=context_tags,
             )
             
