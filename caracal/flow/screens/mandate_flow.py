@@ -471,11 +471,11 @@ class MandateFlow:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Mandate not found.[/]")
                     return
                 
-                # Check for child mandates (cascade impact)
-                child_count = db_session.query(ExecutionMandate).filter_by(
-                    parent_mandate_id=mandate_id,
-                    revoked=False
-                ).count()
+                # Check for downstream delegated mandates using graph topology.
+                from caracal.core.delegation_graph import DelegationGraph
+                graph = DelegationGraph(db_session)
+                topology = graph.get_topology(root_mandate_id=mandate_id, active_only=True)
+                child_count = max(0, int(topology.stats.get("total_nodes", 0)) - 1)
                 
                 cascade = False
                 if child_count > 0:

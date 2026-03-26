@@ -46,6 +46,7 @@ class MandateDelegationFlow:
                 title="Mandate Delegation",
                 items=[
                     ("graph", "Show Delegation Graph", "Visualize mandate delegation topology"),
+                    ("chain", "View Delegation Chain", "Detailed chain depth, branching, and validity"),
                     ("delegate", "Delegate Mandate", "Create a delegation edge"),
                     ("peer", "Peer Delegate", "Create peer-to-peer delegation"),
                     ("list", "View Delegation Edges", "List edges for a principal"),
@@ -61,6 +62,8 @@ class MandateDelegationFlow:
             
             if action == "graph":
                 self.show_delegation_graph()
+            elif action == "chain":
+                self.view_delegation_chain()
             elif action == "delegate":
                 self.delegate_mandate()
             elif action == "peer":
@@ -85,7 +88,8 @@ class MandateDelegationFlow:
         
         try:
             from caracal.db.connection import get_db_manager
-            from caracal.db.models import ExecutionMandate, DelegationEdgeModel, Principal
+            from caracal.db.models import ExecutionMandate
+            from caracal.core.delegation_graph import DelegationGraph
             
             db_manager = get_db_manager()
             
@@ -103,31 +107,29 @@ class MandateDelegationFlow:
                 mandate_id = UUID(mandate_id_str)
                 
                 mandate = db_session.query(ExecutionMandate).filter_by(mandate_id=mandate_id).first()
-                
+
                 if not mandate:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Mandate not found.[/]")
                     return
-                
-                # Get all edges connected to this mandate
-                edges = db_session.query(DelegationEdgeModel).filter(
-                    (DelegationEdgeModel.source_mandate_id == mandate_id) |
-                    (DelegationEdgeModel.target_mandate_id == mandate_id),
-                    DelegationEdgeModel.revoked == False,
-                ).all()
-                
-                # Build graph visualization
-                tree = self._build_delegation_graph(mandate, edges, db_session)
+
+                graph = DelegationGraph(db_session)
+                details = graph.get_chain_details(root_mandate_id=mandate_id)
+
+                # Build graph visualization from full reachable subgraph
+                tree = self._build_delegation_graph(mandate, details, db_session)
                 
                 self.console.print()
                 self.console.print(tree)
                 self.console.print()
-                
-                # Show graph summary
-                inbound = [e for e in edges if e.target_mandate_id == mandate_id]
-                outbound = [e for e in edges if e.source_mandate_id == mandate_id]
-                self.console.print(f"  [{Colors.INFO}]Inbound Edges: {len(inbound)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Outbound Edges: {len(outbound)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Total Connected Edges: {len(edges)}[/]")
+
+                stats = details.get("stats", {})
+                self.console.print(f"  [{Colors.INFO}]Nodes: {stats.get('total_nodes', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Edges: {stats.get('total_edges', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Max Depth: {stats.get('max_depth', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Branch Nodes: {stats.get('branch_nodes', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Leaf Nodes: {stats.get('leaf_nodes', 0)}[/]")
+                validity_style = Colors.SUCCESS if stats.get('is_valid', False) else Colors.ERROR
+                self.console.print(f"  [{validity_style}]Chain Valid: {stats.get('is_valid', False)}[/]")
             
             db_manager.close()
             
@@ -135,9 +137,9 @@ class MandateDelegationFlow:
             logger.error(f"Error showing delegation graph: {e}")
             self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
     
-    def _build_delegation_graph(self, mandate: Any, edges: list, db_session: Any) -> Tree:
-        """Build a tree visualization of the delegation graph."""
-        from caracal.db.models import ExecutionMandate, Principal
+    def _build_delegation_graph(self, mandate: Any, details: dict, db_session: Any) -> Tree:
+        """Build a tree visualization of the delegation graph subgraph."""
+        from caracal.db.models import Principal
         
         principal = db_session.query(Principal).filter_by(principal_id=mandate.subject_id).first()
         root_name = principal.name if principal else str(mandate.subject_id)[:8]
@@ -150,36 +152,110 @@ class MandateDelegationFlow:
             guide_style=Colors.DIM
         )
         
-        # Add inbound edges
-        inbound = [e for e in edges if e.target_mandate_id == mandate.mandate_id]
-        if inbound:
-            in_branch = tree.add(f"[{Colors.INFO}]⇐ Inbound ({len(inbound)})[/]")
-            for edge in inbound:
-                source = db_session.query(ExecutionMandate).filter_by(mandate_id=edge.source_mandate_id).first()
-                source_name = str(edge.source_mandate_id)[:8] if not source else str(source.subject_id)[:8]
-                tags = f" [{Colors.DIM}]tags={edge.context_tags}[/]" if edge.context_tags else ""
-                in_branch.add(
-                    f"[{Colors.NEUTRAL}]{edge.source_principal_type}[/] {source_name}... "
-                    f"[{Colors.DIM}]({edge.delegation_type}){tags}[/]"
-                )
-        
-        # Add outbound edges
-        outbound = [e for e in edges if e.source_mandate_id == mandate.mandate_id]
+        chain_nodes = details.get("chain", [])
+        edges = details.get("edges", [])
+        outbound = [e for e in edges if e.get("source_mandate_id") == str(mandate.mandate_id)]
+
         if outbound:
             out_branch = tree.add(f"[{Colors.WARNING}]⇒ Outbound ({len(outbound)})[/]")
             for edge in outbound:
-                target = db_session.query(ExecutionMandate).filter_by(mandate_id=edge.target_mandate_id).first()
-                target_name = str(edge.target_mandate_id)[:8] if not target else str(target.subject_id)[:8]
-                tags = f" [{Colors.DIM}]tags={edge.context_tags}[/]" if edge.context_tags else ""
+                target_id = edge.get("target_mandate_id")
+                target_node = next((n for n in chain_nodes if n.get("mandate_id") == target_id), None)
+                target_name = target_node.get("subject_name", target_id[:8]) if target_node else target_id[:8]
+                target_type = target_node.get("principal_type", edge.get("target_principal_type", "unknown")) if target_node else edge.get("target_principal_type", "unknown")
+                depth = target_node.get("depth", "?") if target_node else "?"
+                tags = edge.get("context_tags") or []
+                tag_text = f" [{Colors.DIM}]tags={','.join(tags)}[/]" if tags else ""
                 out_branch.add(
-                    f"[{Colors.NEUTRAL}]{edge.target_principal_type}[/] {target_name}... "
-                    f"[{Colors.DIM}]({edge.delegation_type}){tags}[/]"
+                    f"[{Colors.NEUTRAL}]{target_type}[/] {target_name}... "
+                    f"[{Colors.DIM}](depth={depth}, {edge.get('delegation_type', 'hierarchical')}){tag_text}[/]"
                 )
-        
-        if not inbound and not outbound:
+
+        if not outbound:
             tree.add(f"[{Colors.DIM}]No delegation edges[/]")
         
         return tree
+
+    def view_delegation_chain(self) -> None:
+        """View detailed delegation chain for a root mandate."""
+        self.console.print(Panel(
+            f"[{Colors.NEUTRAL}]Detailed chain depth, branching, and validity[/]",
+            title=f"[bold {Colors.INFO}]Delegation Chain[/]",
+            border_style=Colors.PRIMARY,
+        ))
+        self.console.print()
+
+        try:
+            from caracal.db.connection import get_db_manager
+            from caracal.db.models import ExecutionMandate
+            from caracal.core.delegation_graph import DelegationGraph
+
+            db_manager = get_db_manager()
+
+            with db_manager.session_scope() as db_session:
+                mandates = db_session.query(ExecutionMandate).all()
+                if not mandates:
+                    self.console.print(f"  [{Colors.DIM}]No mandates exist.[/]")
+                    return
+
+                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}...") for m in mandates]
+                root_id_str = self.prompt.uuid("Root Mandate ID (Tab for suggestions)", items)
+                root_id = UUID(root_id_str)
+
+                graph = DelegationGraph(db_session)
+                details = graph.get_chain_details(root_mandate_id=root_id)
+                stats = details.get("stats", {})
+
+                self.console.print(f"  [{Colors.INFO}]Nodes: {stats.get('total_nodes', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Edges: {stats.get('total_edges', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Max Depth: {stats.get('max_depth', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Branch Nodes: {stats.get('branch_nodes', 0)}[/]")
+                self.console.print(f"  [{Colors.INFO}]Leaf Nodes: {stats.get('leaf_nodes', 0)}[/]")
+                validity_style = Colors.SUCCESS if stats.get('is_valid', False) else Colors.ERROR
+                self.console.print(f"  [{validity_style}]Chain Valid: {stats.get('is_valid', False)}[/]")
+                self.console.print()
+
+                rows = details.get("chain", [])
+                if not rows:
+                    self.console.print(f"  [{Colors.DIM}]No chain rows available.[/]")
+                    return
+
+                table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
+                table.add_column("Depth", style=Colors.NEUTRAL)
+                table.add_column("Mandate", style=Colors.DIM)
+                table.add_column("Type", style=Colors.NEUTRAL)
+                table.add_column("Children", style=Colors.NEUTRAL)
+                table.add_column("Paths", style=Colors.NEUTRAL)
+                table.add_column("DelDepth", style=Colors.NEUTRAL)
+                table.add_column("Status", style=Colors.NEUTRAL)
+
+                for row in rows:
+                    status = "Active"
+                    status_style = Colors.SUCCESS
+                    if not row.get("active", False):
+                        status = "Revoked"
+                        status_style = Colors.ERROR
+                    elif row.get("expired", False):
+                        status = "Expired"
+                        status_style = Colors.WARNING
+
+                    table.add_row(
+                        str(row.get("depth", 0)),
+                        str(row.get("mandate_id", ""))[:8] + "...",
+                        str(row.get("principal_type", "unknown")),
+                        str(row.get("child_count", 0)),
+                        str(row.get("path_count", 0)),
+                        str(row.get("delegation_depth", 0)),
+                        f"[{status_style}]{status}[/]",
+                    )
+
+                self.console.print(table)
+
+            db_manager.close()
+
+        except Exception as e:
+            logger.error(f"Error viewing delegation chain: {e}")
+            self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
     
     def delegate_mandate(self) -> None:
         """Delegate mandate with scope subset validation."""
