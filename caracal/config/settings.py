@@ -11,6 +11,7 @@ Supports encrypted configuration values using ENC[...] syntax.
 import os
 import re
 import subprocess
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -445,10 +446,24 @@ def load_config(
             config_data = yaml.safe_load(f)
         logger.debug(f"Loaded configuration from {config_path}")
     except yaml.YAMLError as e:
-        logger.error(f"Failed to parse YAML configuration file '{config_path}': {e}", exc_info=True)
-        raise InvalidConfigurationError(
-            f"Failed to parse YAML configuration file '{config_path}': {e}"
-        )
+        if _attempt_legacy_workspace_config_repair(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f)
+                logger.warning(
+                    "Auto-repaired malformed workspace config and retried load",
+                    config_path=config_path,
+                )
+            except Exception:
+                logger.error(f"Failed to parse YAML configuration file '{config_path}': {e}", exc_info=True)
+                raise InvalidConfigurationError(
+                    f"Failed to parse YAML configuration file '{config_path}': {e}"
+                )
+        else:
+            logger.error(f"Failed to parse YAML configuration file '{config_path}': {e}", exc_info=True)
+            raise InvalidConfigurationError(
+                f"Failed to parse YAML configuration file '{config_path}': {e}"
+            )
     except Exception as e:
         logger.error(f"Failed to read configuration file '{config_path}': {e}", exc_info=True)
         raise InvalidConfigurationError(
@@ -780,6 +795,64 @@ def _ensure_merkle_private_key(key_path: Path) -> None:
             )
 
     os.chmod(key_path, 0o600)
+
+
+def _attempt_legacy_workspace_config_repair(config_path: str) -> bool:
+    """Repair known malformed onboarding YAML files in workspace directories.
+
+    Returns True when a repair was applied.
+    """
+    cfg = Path(config_path).expanduser()
+    if cfg.name != "config.yaml":
+        return False
+
+    workspace_dir = cfg.parent
+    if workspace_dir.name == ".caracal" or workspace_dir.parent.name != "workspaces":
+        return False
+
+    try:
+        original = cfg.read_text()
+    except Exception:
+        return False
+
+    # Limit repair to onboarding-generated files we can confidently regenerate.
+    if "Caracal Core Configuration" not in original:
+        return False
+
+    try:
+        backup = cfg.with_suffix(f".yaml.broken.{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
+        backup.write_text(original)
+
+        repaired = {
+            "storage": {
+                "backup_dir": str(workspace_dir / "backups"),
+                "backup_count": 3,
+            },
+            "defaults": {
+                "time_window": "daily",
+            },
+            "logging": {
+                "level": "INFO",
+                "file": str(workspace_dir / "logs" / "caracal.log"),
+            },
+            "redis": {
+                "host": "localhost",
+                "port": 6379,
+                "db": 0,
+            },
+            "merkle": {
+                "signing_backend": "software",
+                "signing_algorithm": "ES256",
+                "private_key_path": str(workspace_dir / "keys" / "merkle_signing_key.pem"),
+            },
+        }
+
+        with open(cfg, "w") as f:
+            f.write("# Caracal Core Configuration\n\n")
+            yaml.safe_dump(repaired, f, default_flow_style=False, sort_keys=False)
+        return True
+    except Exception:
+        return False
 
 
 def _validate_config(config: CaracalConfig) -> None:

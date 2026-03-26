@@ -474,31 +474,34 @@ def _initialize_caracal_dir(path: Path, wipe: bool = False) -> None:
     # Create default config if needed
     config_path = path / "config.yaml"
     if not config_path.exists():
-        default_config = f"""# Caracal Core Configuration
+        import yaml
 
-storage:
-    # PostgreSQL-only mode; file-based identity/policy/ledger storage is disabled
-  backup_dir: {path}/backups
-  backup_count: 3
-
-defaults:
-  time_window: daily
-
-logging:
-  level: INFO
-    file: {path}/logs/caracal.log
-
-redis:
-    host: localhost
-    port: 6379
-    db: 0
-
-merkle:
-    signing_backend: software
-    signing_algorithm: ES256
-    private_key_path: {path}/keys/merkle_signing_key.pem
-"""
-        config_path.write_text(default_config)
+        default_config = {
+            "storage": {
+                "backup_dir": str(path / "backups"),
+                "backup_count": 3,
+            },
+            "defaults": {
+                "time_window": "daily",
+            },
+            "logging": {
+                "level": "INFO",
+                "file": str(path / "logs" / "caracal.log"),
+            },
+            "redis": {
+                "host": "localhost",
+                "port": 6379,
+                "db": 0,
+            },
+            "merkle": {
+                "signing_backend": "software",
+                "signing_algorithm": "ES256",
+                "private_key_path": str(path / "keys" / "merkle_signing_key.pem"),
+            },
+        }
+        with open(config_path, "w") as f:
+            f.write("# Caracal Core Configuration\n\n")
+            yaml.safe_dump(default_config, f, default_flow_style=False, sort_keys=False)
     
     # All authority data is managed by PostgreSQL.
     
