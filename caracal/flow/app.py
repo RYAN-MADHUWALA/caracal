@@ -253,13 +253,6 @@ class FlowApp:
             
             config = load_config()
             
-            # Storage paths
-            self.console.print(f"  [{Colors.INFO}]Storage:[/]")
-            self.console.print(f"    Agent Registry: [{Colors.DIM}]{config.storage.principal_registry}[/]")
-            self.console.print(f"    Policy Store: [{Colors.DIM}]{config.storage.policy_store}[/]")
-            self.console.print(f"    Ledger: [{Colors.DIM}]{config.storage.ledger}[/]")
-            self.console.print()
-            
             # Database
             self.console.print(f"  [{Colors.INFO}]Database:[/]")
             self.console.print(f"    Type: [{Colors.NEUTRAL}]PostgreSQL[/]")
