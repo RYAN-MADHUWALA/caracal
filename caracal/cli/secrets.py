@@ -31,7 +31,7 @@ def secrets_group():
 def list_secrets(org_id: str, env_id: str, tier: str) -> None:
     """List secret refs in the vault for (org, env)."""
     try:
-        from caracal.sdk.secrets import SecretsAdapter
+        from caracal_sdk.secrets import SecretsAdapter
         adapter = SecretsAdapter(tier=tier, org_id=org_id, env_id=env_id)
         refs = adapter.list_refs()
         if not refs:

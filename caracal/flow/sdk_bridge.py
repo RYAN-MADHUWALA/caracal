@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Optional
 
 from caracal.logging_config import get_logger
-from caracal.sdk.client import CaracalClient
-from caracal.sdk.context import ContextManager, ScopeContext
+from caracal_sdk.client import CaracalClient
+from caracal_sdk.context import ContextManager, ScopeContext
 
 logger = get_logger(__name__)
 
