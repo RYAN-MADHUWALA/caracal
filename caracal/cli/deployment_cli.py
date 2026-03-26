@@ -42,8 +42,6 @@ from caracal.deployment.exceptions import (
     InvalidWorkspaceNameError,
 )
 from caracal.provider.definitions import (
-    get_provider_definition,
-    list_provider_definition_ids,
     resolve_provider_definition_id,
 )
 from caracal.provider.workspace import (
@@ -858,6 +856,63 @@ def _normalize_auth_scheme(auth_scheme: str) -> str:
     return auth_scheme.strip().replace("-", "_").lower()
 
 
+def _parse_resources(resource_specs: tuple[str, ...]) -> Dict[str, Dict[str, Any]]:
+    """Parse --resource entries as <resource_id>[=<description>]."""
+    resources: Dict[str, Dict[str, Any]] = {}
+    for spec in resource_specs:
+        raw = spec.strip()
+        if not raw:
+            continue
+        if "=" in raw:
+            resource_id, description = raw.split("=", 1)
+        else:
+            resource_id, description = raw, raw
+        resource_id = resource_id.strip()
+        if not resource_id:
+            raise click.ClickException(f"Invalid resource spec '{spec}'")
+        resources[resource_id] = {"description": description.strip() or resource_id, "actions": {}}
+    if not resources:
+        raise click.ClickException("At least one --resource is required")
+    return resources
+
+
+def _parse_actions(
+    action_specs: tuple[str, ...],
+    resources: Dict[str, Dict[str, Any]],
+) -> None:
+    """
+    Parse --action entries as <resource_id>:<action_id>:<method>:<path_prefix>.
+    """
+    if not action_specs:
+        raise click.ClickException("At least one --action is required")
+    for spec in action_specs:
+        parts = spec.split(":", 3)
+        if len(parts) != 4:
+            raise click.ClickException(
+                f"Invalid action spec '{spec}'. Expected <resource_id>:<action_id>:<method>:<path_prefix>"
+            )
+        resource_id, action_id, method, path_prefix = [p.strip() for p in parts]
+        if resource_id not in resources:
+            raise click.ClickException(
+                f"Action '{spec}' references unknown resource '{resource_id}'. Add it with --resource first."
+            )
+        if not path_prefix.startswith("/"):
+            raise click.ClickException(
+                f"Action '{spec}' has invalid path_prefix '{path_prefix}'. It must start with '/'."
+            )
+        resources[resource_id]["actions"][action_id] = {
+            "description": action_id,
+            "method": method.upper(),
+            "path_prefix": path_prefix,
+        }
+
+    for resource_id, payload in resources.items():
+        if not payload["actions"]:
+            raise click.ClickException(
+                f"Resource '{resource_id}' has no actions. Add at least one --action for each resource."
+            )
+
+
 def _require_workspace(config_manager: ConfigManager, workspace: Optional[str]) -> str:
     """Resolve workspace or fail with a user-facing error."""
     resolved = _resolve_workspace_name(config_manager, workspace)
@@ -899,6 +954,7 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
             name=provider_name,
             provider_type=entry.get("service_type", entry.get("provider_type", "api")),
             provider_definition=entry.get("provider_definition"),
+            provider_definition_data=entry.get("definition"),
             api_key_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
             credential_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
             auth_scheme=entry.get("auth_scheme", "api_key"),
@@ -926,10 +982,8 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
 @click.option("--service-type", default="api", show_default=True, help="Service type (llm, api, database, infra, internal)")
 @click.option(
     "--provider-definition",
-    type=click.Choice(list_provider_definition_ids(), case_sensitive=False),
-    default="generic_http",
-    show_default=True,
-    help="Provider definition that declares supported resources/actions",
+    default=None,
+    help="Provider definition ID (defaults to provider name)",
 )
 @click.option("--base-url", help="Provider base URL")
 @click.option(
@@ -955,6 +1009,20 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
 @click.option("--max-retries", type=int, default=3, show_default=True, help="Retry attempts")
 @click.option("--rate-limit-rpm", type=int, help="Client-side requests per minute limit")
 @click.option("--version", help="Provider API/version label")
+@click.option(
+    "--resource",
+    "resource_specs",
+    multiple=True,
+    required=True,
+    help="Resource definition: <resource_id>[=<description>] (repeatable)",
+)
+@click.option(
+    "--action",
+    "action_specs",
+    multiple=True,
+    required=True,
+    help="Action definition: <resource_id>:<action_id>:<method>:<path_prefix> (repeatable)",
+)
 @click.option("--tag", "tags", multiple=True, help="Tag (repeatable)")
 @click.option("--metadata", "metadata_pairs", multiple=True, help="Metadata key=value (repeatable)")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
@@ -972,6 +1040,8 @@ def provider_add(
     max_retries: int,
     rate_limit_rpm: Optional[int],
     version: Optional[str],
+    resource_specs: tuple[str, ...],
+    action_specs: tuple[str, ...],
     tags: tuple[str, ...],
     metadata_pairs: tuple[str, ...],
     workspace: Optional[str],
@@ -985,14 +1055,9 @@ def provider_add(
         normalized_auth = _normalize_auth_scheme(auth_scheme)
         resolved_definition_id = resolve_provider_definition_id(
             service_type=service_type,
-            requested_definition=provider_definition,
+            requested_definition=provider_definition or name,
         )
-        definition = get_provider_definition(resolved_definition_id)
-        effective_service_type = (
-            service_type
-            if service_type and service_type.lower() != "api"
-            else definition.service_type
-        )
+        effective_service_type = service_type.strip().lower() if service_type else "api"
 
         gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
         if edition_manager.is_enterprise() and gateway_url:
@@ -1022,12 +1087,27 @@ def provider_add(
         providers = _load_workspace_providers(config_manager, workspace)
         existing = providers.get(name, {})
         metadata = _parse_metadata_pairs(metadata_pairs)
-        resolved_base_url = base_url or definition.default_base_url
+        resolved_base_url = base_url
+        resources = _parse_resources(resource_specs)
+        _parse_actions(action_specs, resources)
+        definition_payload = {
+            "definition_id": resolved_definition_id,
+            "service_type": effective_service_type,
+            "display_name": name,
+            "auth_scheme": normalized_auth,
+            "default_base_url": resolved_base_url,
+            "resources": resources,
+        }
+        resource_ids = sorted(resources.keys())
+        action_ids = sorted(
+            {action_id for payload in resources.values() for action_id in payload["actions"].keys()}
+        )
 
         providers[name] = {
             "name": name,
             "service_type": effective_service_type,
-            "provider_definition": definition.definition_id,
+            "provider_definition": resolved_definition_id,
+            "definition": definition_payload,
             "base_url": resolved_base_url,
             "auth_scheme": normalized_auth,
             "credential_ref": secret_ref,
@@ -1042,8 +1122,8 @@ def provider_add(
             "auth_metadata": {"header_name": auth_header_name} if auth_header_name else {},
             "default_headers": existing.get("default_headers", {}),
             "metadata": metadata,
-            "resources": definition.list_resource_ids(),
-            "actions": definition.list_action_ids(),
+            "resources": resource_ids,
+            "actions": action_ids,
             "enforce_scoped_requests": True,
             "created_at": existing.get("created_at", datetime.utcnow().isoformat()),
             "updated_at": datetime.utcnow().isoformat(),
@@ -1054,7 +1134,7 @@ def provider_add(
         console.print(f"[green]✓[/green] Provider added: {name}")
         console.print(f"  Workspace: {workspace}")
         console.print(f"  Service Type: {effective_service_type}")
-        console.print(f"  Definition: {definition.definition_id}")
+        console.print(f"  Definition: {resolved_definition_id}")
         console.print(f"  Auth Scheme: {normalized_auth}")
         
     except Exception as e:
@@ -1172,7 +1252,7 @@ def provider_list(workspace: Optional[str], format: str):
                 table.add_row(
                     provider["name"],
                     provider["service_type"],
-                    provider.get("provider_definition") or "generic_http",
+                    provider.get("provider_definition") or "custom",
                     provider.get("auth_scheme") or "n/a",
                     provider.get("base_url") or "configured",
                     provider["status"],

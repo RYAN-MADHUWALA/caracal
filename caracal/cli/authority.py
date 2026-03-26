@@ -1069,10 +1069,17 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
     help='Peer target principal ID (UUID)',
 )
 @click.option(
+    '--provider',
+    multiple=True,
+    shell_complete=provider_name_shell_complete,
+    help='Provider name used for scope autocompletion and filtering (repeatable)',
+)
+@click.option(
     '--resource-scope',
     '-r',
     required=True,
     multiple=True,
+    shell_complete=resource_scope_shell_complete,
     help='Resource scope patterns (must be subset of source)',
 )
 @click.option(
@@ -1080,6 +1087,7 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
     '-a',
     required=True,
     multiple=True,
+    shell_complete=action_scope_shell_complete,
     help='Action scope (must be subset of source)',
 )
 @click.option(
@@ -1107,6 +1115,7 @@ def peer_delegate_cmd(
     ctx,
     source_mandate_id: str,
     target_subject_id: str,
+    provider: tuple,
     resource_scope: tuple,
     action_scope: tuple,
     validity_seconds: int,
@@ -1125,8 +1134,9 @@ def peer_delegate_cmd(
         caracal authority peer-delegate \\
             --source-mandate-id <source-id> \\
             --target-subject-id <target-id> \\
-            --resource-scope "api:*" \\
-            --action-scope "api_call" \\
+            --provider model-provider \\
+            --resource-scope "provider:model-provider:resource:inference" \\
+            --action-scope "provider:model-provider:action:invoke" \\
             --validity-seconds 3600
     """
     try:
@@ -1143,9 +1153,17 @@ def peer_delegate_cmd(
             click.echo(f"Error: Validity seconds must be positive", err=True)
             sys.exit(1)
         
+        workspace = get_workspace_from_ctx(ctx)
+        providers = [str(p) for p in provider]
         resource_scope_list = list(resource_scope)
         action_scope_list = list(action_scope)
         context_tags_list = list(context_tags) if context_tags else None
+        validate_provider_scopes(
+            workspace=workspace,
+            resource_scopes=resource_scope_list,
+            action_scopes=action_scope_list,
+            providers=providers or None,
+        )
         
         mandate_manager, db_manager = get_mandate_manager(cli_ctx.config)
         
