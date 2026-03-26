@@ -1,9 +1,4 @@
-"""
-Helpers for workspace data used by Flow screens.
-
-These helpers adapt ConfigManager's workspace-name API into full
-WorkspaceConfig objects expected by the TUI screens.
-"""
+"""Helpers for workspace data used by Flow screens."""
 
 from typing import List, Optional
 
