@@ -196,46 +196,34 @@ def config_mode(mode_value: Optional[str], format: str):
 @click.option("--gateway-token", help="Gateway JWT token (optional)")
 @click.option("--format", "-f", type=click.Choice(["table", "json"]), default="table", help="Output format")
 def config_edition(edition_value: Optional[str], gateway_url: Optional[str], gateway_token: Optional[str], format: str):
-    """Get or set edition (opensource or enterprise)."""
+    """Show auto-detected edition (manual setting is disabled)."""
     try:
         edition_manager = EditionManager()
-        
-        if edition_value:
-            # Set edition
-            edition = Edition(edition_value.lower())
-            
-            if edition == Edition.ENTERPRISE and not gateway_url:
-                console.print("[red]Error:[/red] --gateway-url is required for enterprise edition")
-                sys.exit(1)
-            
-            edition_manager.set_edition(edition, gateway_url, gateway_token)
-            
-            if format == "json":
-                result = {"edition": edition.value, "status": "updated"}
-                if gateway_url:
-                    result["gateway_url"] = gateway_url
-                click.echo(json.dumps(result))
-            else:
-                console.print(f"[green]✓[/green] Edition set to: {edition.value}")
-                if gateway_url:
-                    console.print(f"  Gateway URL: {gateway_url}")
+
+        if edition_value or gateway_url or gateway_token:
+            console.print(
+                "[red]Error:[/red] Manual edition selection is disabled. "
+                "Edition is auto-detected from enterprise connectivity."
+            )
+            console.print("  Use [bold]caracal sync connect <url> <token>[/bold] to enter Enterprise mode.")
+            console.print("  Use [bold]caracal sync disconnect[/bold] to return to Open Source mode.")
+            sys.exit(1)
+
+        edition = edition_manager.get_edition()
+
+        if format == "json":
+            result = {"edition": edition.value, "mode": "auto"}
+            if edition == Edition.ENTERPRISE:
+                detected_gateway_url = edition_manager.get_gateway_url()
+                if detected_gateway_url:
+                    result["gateway_url"] = detected_gateway_url
+            click.echo(json.dumps(result))
         else:
-            # Get edition
-            edition = edition_manager.get_edition()
-            
-            if format == "json":
-                result = {"edition": edition.value}
-                if edition == Edition.ENTERPRISE:
-                    gateway_url = edition_manager.get_gateway_url()
-                    if gateway_url:
-                        result["gateway_url"] = gateway_url
-                click.echo(json.dumps(result))
-            else:
-                console.print(f"Current edition: [bold]{edition.value}[/bold]")
-                if edition == Edition.ENTERPRISE:
-                    gateway_url = edition_manager.get_gateway_url()
-                    if gateway_url:
-                        console.print(f"  Gateway URL: {gateway_url}")
+            console.print(f"Current edition: [bold]{edition.value}[/bold] [dim](auto)[/dim]")
+            if edition == Edition.ENTERPRISE:
+                detected_gateway_url = edition_manager.get_gateway_url()
+                if detected_gateway_url:
+                    console.print(f"  Gateway URL: {detected_gateway_url}")
                         
     except Exception as e:
         logger.error("config_edition_failed", error=str(e))
@@ -541,6 +529,24 @@ def sync_connect(url: str, token: str, workspace: Optional[str]):
         
         sync_engine = SyncEngine()
         sync_engine.connect(workspace, url, token)
+
+        # Edition is policy-driven by connectivity: migrate to Enterprise after connect.
+        try:
+            migration_manager = MigrationManager()
+            current_edition = EditionManager().get_edition()
+            if current_edition != Edition.ENTERPRISE:
+                migration_manager.migrate_edition(
+                    Edition.ENTERPRISE,
+                    gateway_url=url,
+                    gateway_token=token,
+                    migrate_api_keys=True,
+                )
+        except Exception as migration_error:
+            logger.warning("sync_connect_enterprise_migration_skipped", error=str(migration_error))
+            console.print(
+                "[yellow]Warning:[/yellow] Connected, but enterprise migration had warnings: "
+                f"{migration_error}"
+            )
         
         console.print(f"[green]✓[/green] Workspace connected to enterprise")
         console.print(f"  Workspace: {workspace}")
@@ -554,7 +560,13 @@ def sync_connect(url: str, token: str, workspace: Optional[str]):
 
 @sync_group.command(name="disconnect")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-def sync_disconnect(workspace: Optional[str]):
+@click.option("--force", is_flag=True, help="Skip safety confirmation prompts")
+@click.option(
+    "--allow-local-secrets-migration",
+    is_flag=True,
+    help="Allow Enterprise->Open Source migration to move provider secrets to local storage",
+)
+def sync_disconnect(workspace: Optional[str], force: bool, allow_local_secrets_migration: bool):
     """Disconnect workspace from enterprise backend."""
     try:
         from caracal.deployment.sync_engine import SyncEngine
@@ -568,11 +580,42 @@ def sync_disconnect(workspace: Optional[str]):
                 sys.exit(1)
             workspace = workspaces[0]
         
+        current_edition = EditionManager().get_edition()
+
+        if current_edition == Edition.ENTERPRISE and not force:
+            console.print("[yellow]Security warning:[/yellow] You are disconnecting Enterprise mode.")
+            console.print("  Default behavior is a [bold]fresh Open Source start[/bold] with no secret migration.")
+            console.print("  This avoids copying enterprise-managed secrets into local storage by default.")
+            console.print()
+            if not click.confirm("Proceed with Enterprise disconnect and switch to Open Source fresh start?"):
+                console.print("Cancelled.")
+                return
+
+        # Migrate edition first so gateway indicators are cleared for auto-detection.
+        if current_edition == Edition.ENTERPRISE:
+            migration_manager = MigrationManager()
+            migration_manager.migrate_edition(
+                Edition.OPENSOURCE,
+                migrate_api_keys=allow_local_secrets_migration,
+            )
+
         sync_engine = SyncEngine()
         sync_engine.disconnect(workspace)
+
+        # Ensure enterprise license state does not keep edition in enterprise mode.
+        try:
+            from caracal.enterprise.license import EnterpriseLicenseValidator
+
+            EnterpriseLicenseValidator().disconnect()
+        except Exception as license_error:
+            logger.debug("sync_disconnect_license_clear_skipped", error=str(license_error))
         
         console.print(f"[green]✓[/green] Workspace disconnected from enterprise")
         console.print(f"  Workspace: {workspace}")
+        if current_edition == Edition.ENTERPRISE and not allow_local_secrets_migration:
+            console.print("  Mode: Open Source (fresh start, local secret migration disabled)")
+        elif current_edition == Edition.ENTERPRISE:
+            console.print("  Mode: Open Source (local secret migration enabled)")
         
     except Exception as e:
         logger.error("sync_disconnect_failed", error=str(e))
