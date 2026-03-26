@@ -421,6 +421,17 @@ def load_config(
     
     # Expand user home directory
     config_path = os.path.expanduser(config_path)
+
+    # If caller points to a workspace config.yaml, align runtime workspace
+    # context so all workspace-local paths (backup/log/cache/keys) resolve
+    # to that workspace instead of the process default.
+    try:
+        cfg_path_obj = Path(config_path)
+        if cfg_path_obj.name == "config.yaml":
+            from caracal.flow.workspace import set_workspace
+            set_workspace(cfg_path_obj.parent)
+    except Exception:
+        pass
     
     # If config file doesn't exist, return defaults
     if not os.path.exists(config_path):
