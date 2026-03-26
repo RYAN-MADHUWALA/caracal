@@ -57,7 +57,7 @@ def format_output(data, format_type: str = "table"):
 
 
 def _resolve_workspace_name(config_manager: ConfigManager, workspace: Optional[str]) -> Optional[str]:
-    """Resolve workspace name from explicit option, ConfigManager, or Flow registry."""
+    """Resolve workspace name from explicit option, ConfigManager, or registry default."""
     if workspace:
         return workspace
 
@@ -91,6 +91,9 @@ def _resolve_workspace_name(config_manager: ConfigManager, workspace: Optional[s
 
         flow_workspaces = WorkspaceManager.list_workspaces()
         if flow_workspaces:
+            default_ws = next((ws for ws in flow_workspaces if ws.get("default")), None)
+            if default_ws and default_ws.get("name"):
+                return str(default_ws["name"])
             return flow_workspaces[0].get("name")
     except Exception:
         pass
@@ -356,21 +359,9 @@ def workspace_switch(name: str):
         if name not in config_manager.list_workspaces():
             console.print(f"[red]Error:[/red] Workspace not found: {name}")
             sys.exit(1)
-        
-        # Set as default workspace
-        config = config_manager.get_workspace_config(name)
-        
-        # Unset default on all other workspaces
-        for ws in config_manager.list_workspaces():
-            if ws != name:
-                ws_config = config_manager.get_workspace_config(ws)
-                if ws_config.is_default:
-                    ws_config.is_default = False
-                    config_manager.set_workspace_config(ws, ws_config)
-        
-        # Set as default
-        config.is_default = True
-        config_manager.set_workspace_config(name, config)
+
+        # Set as default workspace (also syncs workspaces.json default).
+        config_manager.set_default_workspace(name)
         
         console.print(f"[green]✓[/green] Switched to workspace: {name}")
         
