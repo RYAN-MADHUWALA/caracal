@@ -19,6 +19,7 @@ import click
 
 from caracal.exceptions import CaracalError, FileReadError, FileWriteError
 from caracal.logging_config import get_logger
+from caracal.pathing import ensure_source_tree
 
 logger = get_logger(__name__)
 
@@ -35,7 +36,7 @@ def get_config(ctx):
 def get_backup_dir(config) -> Path:
     """Get backup directory from config, creating if needed."""
     backup_dir = Path(config.storage.backup_dir).expanduser()
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    ensure_source_tree(backup_dir)
     try:
         backup_dir.chmod(0o700)
     except Exception:

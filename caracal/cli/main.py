@@ -17,6 +17,7 @@ import click
 from click import Context
 
 from caracal._version import __version__
+from caracal.pathing import ensure_source_tree, source_of
 from caracal.config.settings import get_default_config_path, load_config
 from caracal.exceptions import CaracalError, InvalidConfigurationError
 from caracal.logging_config import setup_logging
@@ -191,7 +192,7 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
     # resolve to the selected workspace directory.
     try:
         from caracal.flow.workspace import set_workspace
-        set_workspace(Path(resolved_config_path).expanduser().parent)
+        set_workspace(source_of(Path(resolved_config_path).expanduser()))
     except Exception:
         pass
 
@@ -275,8 +276,8 @@ def init(ctx, workspace_dir):
         click.echo("Initializing Caracal...")
         
         # Create config directory
-        config_dir = workspace_dir or Path(get_default_config_path()).parent
-        config_dir.mkdir(parents=True, exist_ok=True)
+        config_dir = workspace_dir or source_of(Path(get_default_config_path()))
+        ensure_source_tree(config_dir)
         click.echo(f"✓ Created config directory: {config_dir}")
         
         # Initialize database
