@@ -12,9 +12,7 @@ The `VERSION` file contains only the version number (e.g., `1.0.0`) and is used 
 
 1. **Python Package** (`pyproject.toml`, `setup.py`)
 2. **Runtime Code** (`caracal/_version.py`, `caracal/__init__.py`)
-3. **Docker Images** (via build scripts)
-4. **Helm Charts** (`helm/caracal/Chart.yaml`)
-5. **Kubernetes Manifests** (all `*.yaml` files in `k8s/`)
+3. **CLI/TUI Runtime Metadata** (version surfaced by commands and UI)
 
 ### How It Works
 
@@ -61,34 +59,8 @@ from caracal._version import __version__
 __all__ = ["__version__"]
 ```
 
-#### Docker Images
-
-Docker images are built with version tags read from the VERSION file:
-
-```bash
-VERSION=$(cat VERSION | tr -d '[:space:]')
-docker build -t caracal-gateway:v$VERSION -f Dockerfile.gateway .
-```
-
-#### Helm Charts
-
-The `update-version.sh` script updates Helm Chart.yaml:
-
-```bash
-VERSION=$(cat VERSION | tr -d '[:space:]')
-sed -i "s/^version: .*/version: $VERSION/" helm/caracal/Chart.yaml
-sed -i "s/^appVersion: .*/appVersion: \"$VERSION\"/" helm/caracal/Chart.yaml
-```
-
-#### Kubernetes Manifests
-
-All Kubernetes manifests use version labels that are updated by the script:
-
-```yaml
-metadata:
-  labels:
-    app.kubernetes.io/version: "1.0.0"  # Updated by script
-```
+Gateway deployment artifacts (Docker gateway image, Helm, Kubernetes manifests)
+are enterprise-only and are versioned in the enterprise repository.
 
 ## Usage
 
@@ -111,7 +83,7 @@ metadata:
 
 4. **Commit changes:**
    ```bash
-   git add VERSION pyproject.toml helm/ k8s/
+   git add VERSION pyproject.toml
    git commit -m "Bump version to 1.0.0"
    ```
 
@@ -126,9 +98,7 @@ Use the release script for a complete release process:
 This will:
 1. Update all version references
 2. Create git tag (optional)
-3. Build Docker images (optional)
-4. Package Helm chart (optional)
-5. Publish to PyPI (optional)
+3. Publish to PyPI (optional)
 
 ### Manual Release Steps
 
@@ -142,7 +112,7 @@ echo "1.0.0" > VERSION
 ./scripts/update-version.sh
 
 # 3. Commit changes
-git add VERSION pyproject.toml helm/ k8s/
+git add VERSION pyproject.toml
 git commit -m "Bump version to 1.0.0"
 
 # 4. Create tag
@@ -150,16 +120,7 @@ git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin main
 git push origin v1.0.0
 
-# 5. Build Docker images
-./scripts/build-images.sh
-
-# 6. Package Helm chart
-cd helm
-helm package caracal
-helm push caracal-1.0.0.tgz oci://registry.example.com/charts
-
-# 7. Publish to PyPI
-cd ..
+# 5. Publish to PyPI
 python -m build
 twine upload dist/*
 ```
@@ -176,29 +137,12 @@ Caracal Core follows [Semantic Versioning](https://semver.org/):
 ### Version Prefixes
 
 - **Git tags**: Use `v` prefix (e.g., `v1.0.0`)
-- **Docker images**: Use `v` prefix (e.g., `caracal-gateway:v1.0.0`)
-- **Helm charts**: No `v` prefix (e.g., `version: 1.0.0`)
 - **Python package**: No `v` prefix (e.g., `version = "1.0.0"`)
-- **Kubernetes labels**: No `v` prefix (e.g., `app.kubernetes.io/version: "1.0.0"`)
 
 ## Files Updated by Scripts
 
-### update-version.sh
-
-- `helm/caracal/Chart.yaml` (version and appVersion)
-- All `k8s/**/*.yaml` files (app.kubernetes.io/version labels)
-
-### build-images.sh
-
-Builds Docker images with version tags:
-- `caracal-gateway:v{VERSION}`
-- `caracal-mcp-adapter:v{VERSION}`
-- `caracal-consumer:v{VERSION}`
-- `caracal-cli:v{VERSION}`
-
-### release.sh
-
-Orchestrates the entire release process by calling other scripts and performing git operations.
+`release.sh` orchestrates the open-source release process by updating versioned
+metadata, tagging, and publishing package artifacts.
 
 ## Accessing Version at Runtime
 
@@ -213,18 +157,6 @@ print(caracal.__version__)  # e.g., "1.0.0"
 
 ```bash
 caracal --version
-```
-
-### Docker Container
-
-```bash
-docker run caracal-gateway:v1.0.0 caracal --version
-```
-
-### Kubernetes
-
-```bash
-kubectl get deployment caracal-gateway -o jsonpath='{.metadata.labels.app\.kubernetes\.io/version}'
 ```
 
 ## Best Practices
