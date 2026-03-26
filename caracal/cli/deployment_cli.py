@@ -41,6 +41,15 @@ from caracal.deployment.exceptions import (
     WorkspaceAlreadyExistsError,
     InvalidWorkspaceNameError,
 )
+from caracal.provider.definitions import (
+    get_provider_definition,
+    list_provider_definition_ids,
+    resolve_provider_definition_id,
+)
+from caracal.provider.workspace import (
+    load_workspace_provider_registry,
+    save_workspace_provider_registry,
+)
 
 logger = structlog.get_logger(__name__)
 console = Console()
@@ -860,25 +869,13 @@ def _require_workspace(config_manager: ConfigManager, workspace: Optional[str]) 
 def _load_workspace_providers(config_manager: ConfigManager, workspace: str) -> Dict[str, Dict[str, Any]]:
     """Load provider registry from workspace metadata."""
     try:
-        config = config_manager.get_workspace_config(workspace)
+        return load_workspace_provider_registry(config_manager, workspace)
     except WorkspaceNotFoundError:
         logger.warning(
             "workspace_provider_registry_not_found",
             workspace=workspace,
         )
         return {}
-    metadata = dict(config.metadata or {})
-    providers = metadata.get("providers", {})
-
-    if isinstance(providers, list):
-        # Backward compatibility if metadata stored as a list.
-        normalized: Dict[str, Dict[str, Any]] = {}
-        for item in providers:
-            if isinstance(item, dict) and item.get("name"):
-                normalized[item["name"]] = item
-        return normalized
-
-    return providers if isinstance(providers, dict) else {}
 
 
 def _save_workspace_providers(
@@ -887,16 +884,7 @@ def _save_workspace_providers(
     providers: Dict[str, Dict[str, Any]],
 ) -> None:
     """Persist provider registry in workspace metadata."""
-    config = config_manager.get_workspace_config(workspace)
-    metadata = dict(config.metadata or {})
-    metadata["provider_registry"] = {
-        "mode": "broker",
-        "version": "v1",
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    metadata["providers"] = providers
-    config.metadata = metadata
-    config_manager.set_workspace_config(workspace, config)
+    save_workspace_provider_registry(config_manager, workspace, providers)
 
 
 def _build_oss_broker(config_manager: ConfigManager, workspace: str):
@@ -910,6 +898,7 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
         provider_config = ProviderConfig(
             name=provider_name,
             provider_type=entry.get("service_type", entry.get("provider_type", "api")),
+            provider_definition=entry.get("provider_definition"),
             api_key_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
             credential_ref=entry.get("credential_ref") or entry.get("api_key_ref"),
             auth_scheme=entry.get("auth_scheme", "api_key"),
@@ -925,6 +914,7 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
             tags=entry.get("tags", []),
             access_policy=entry.get("access_policy", {}),
             metadata=entry.get("metadata", {}),
+            enforce_scoped_requests=bool(entry.get("enforce_scoped_requests", False)),
         )
         broker.configure_provider(provider_name, provider_config)
 
@@ -934,6 +924,13 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
 @provider_group.command(name="add")
 @click.argument("name")
 @click.option("--service-type", default="api", show_default=True, help="Service type (llm, api, database, infra, internal)")
+@click.option(
+    "--provider-definition",
+    type=click.Choice(list_provider_definition_ids(), case_sensitive=False),
+    default="generic_http",
+    show_default=True,
+    help="Provider definition that declares supported resources/actions",
+)
 @click.option("--base-url", help="Provider base URL")
 @click.option(
     "--auth-scheme",
@@ -959,12 +956,12 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
 @click.option("--rate-limit-rpm", type=int, help="Client-side requests per minute limit")
 @click.option("--version", help="Provider API/version label")
 @click.option("--tag", "tags", multiple=True, help="Tag (repeatable)")
-@click.option("--scope", "scopes", multiple=True, help="Allowed authority scope (repeatable)")
 @click.option("--metadata", "metadata_pairs", multiple=True, help="Metadata key=value (repeatable)")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
 def provider_add(
     name: str,
     service_type: str,
+    provider_definition: str,
     base_url: Optional[str],
     auth_scheme: str,
     credential: Optional[str],
@@ -976,16 +973,32 @@ def provider_add(
     rate_limit_rpm: Optional[int],
     version: Optional[str],
     tags: tuple[str, ...],
-    scopes: tuple[str, ...],
     metadata_pairs: tuple[str, ...],
     workspace: Optional[str],
 ):
     """Add a provider configuration."""
     try:
         config_manager = ConfigManager()
+        edition_manager = EditionManager()
 
         workspace = _require_workspace(config_manager, workspace)
         normalized_auth = _normalize_auth_scheme(auth_scheme)
+        resolved_definition_id = resolve_provider_definition_id(
+            service_type=service_type,
+            requested_definition=provider_definition,
+        )
+        definition = get_provider_definition(resolved_definition_id)
+        effective_service_type = (
+            service_type
+            if service_type and service_type.lower() != "api"
+            else definition.service_type
+        )
+
+        gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+        if edition_manager.is_enterprise() and gateway_url:
+            raise click.ClickException(
+                "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
+            )
 
         if credential and credential_ref:
             raise click.ClickException("Use either --credential or --credential-ref, not both")
@@ -1009,11 +1022,13 @@ def provider_add(
         providers = _load_workspace_providers(config_manager, workspace)
         existing = providers.get(name, {})
         metadata = _parse_metadata_pairs(metadata_pairs)
+        resolved_base_url = base_url or definition.default_base_url
 
         providers[name] = {
             "name": name,
-            "service_type": service_type,
-            "base_url": base_url,
+            "service_type": effective_service_type,
+            "provider_definition": definition.definition_id,
+            "base_url": resolved_base_url,
             "auth_scheme": normalized_auth,
             "credential_ref": secret_ref,
             "healthcheck_path": health_path,
@@ -1023,10 +1038,13 @@ def provider_add(
             "version": version,
             "tags": list(tags),
             "capabilities": [],
-            "access_policy": {"scopes": list(scopes)},
+            "access_policy": {"scopes": []},
             "auth_metadata": {"header_name": auth_header_name} if auth_header_name else {},
             "default_headers": existing.get("default_headers", {}),
             "metadata": metadata,
+            "resources": definition.list_resource_ids(),
+            "actions": definition.list_action_ids(),
+            "enforce_scoped_requests": True,
             "created_at": existing.get("created_at", datetime.utcnow().isoformat()),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -1035,7 +1053,8 @@ def provider_add(
 
         console.print(f"[green]✓[/green] Provider added: {name}")
         console.print(f"  Workspace: {workspace}")
-        console.print(f"  Service Type: {service_type}")
+        console.print(f"  Service Type: {effective_service_type}")
+        console.print(f"  Definition: {definition.definition_id}")
         console.print(f"  Auth Scheme: {normalized_auth}")
         
     except Exception as e:
@@ -1081,6 +1100,9 @@ def provider_list(workspace: Optional[str], format: str):
                         "version": provider.version,
                         "status": provider.status,
                         "tags": provider.tags,
+                        "provider_definition": provider.provider_definition,
+                        "resources": provider.resources,
+                        "actions": provider.actions,
                     }
                     for provider in providers
                 ]
@@ -1106,6 +1128,9 @@ def provider_list(workspace: Optional[str], format: str):
                             "version": provider.version,
                             "status": provider.status,
                             "tags": stored.get("tags", []),
+                            "provider_definition": stored.get("provider_definition"),
+                            "resources": stored.get("resources", []),
+                            "actions": stored.get("actions", []),
                         }
                     )
         else:
@@ -1122,6 +1147,9 @@ def provider_list(workspace: Optional[str], format: str):
                         "version": provider.version,
                         "status": provider.status,
                         "tags": stored.get("tags", []),
+                        "provider_definition": stored.get("provider_definition"),
+                        "resources": stored.get("resources", []),
+                        "actions": stored.get("actions", []),
                     }
                 )
         
@@ -1135,6 +1163,7 @@ def provider_list(workspace: Optional[str], format: str):
             table = Table(title=f"Providers for workspace '{workspace}'")
             table.add_column("Name", style="cyan")
             table.add_column("Service", style="yellow")
+            table.add_column("Definition", style="white")
             table.add_column("Auth", style="blue")
             table.add_column("Endpoint", style="magenta")
             table.add_column("Status", style="green")
@@ -1143,6 +1172,7 @@ def provider_list(workspace: Optional[str], format: str):
                 table.add_row(
                     provider["name"],
                     provider["service_type"],
+                    provider.get("provider_definition") or "generic_http",
                     provider.get("auth_scheme") or "n/a",
                     provider.get("base_url") or "configured",
                     provider["status"],

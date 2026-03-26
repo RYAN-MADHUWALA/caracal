@@ -58,17 +58,6 @@ const sidebars: SidebarsConfig = {
             'caracalCore/apiReference/mcpDecorators',
           ],
         },
-        {
-          type: 'category',
-          label: 'Deployment',
-          items: [
-            'caracalCore/deployment/dockerCompose',
-            'caracalCore/deployment/kubernetes',
-            'caracalCore/deployment/kubernetesAdvanced',
-            'caracalCore/deployment/production',
-            'caracalCore/deployment/operationalRunbook',
-          ],
-        },
       ],
     },
     {
