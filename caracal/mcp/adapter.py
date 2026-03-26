@@ -212,8 +212,8 @@ class MCPAdapter:
             import uuid
             correlation_id = str(uuid.uuid4())
             
-            # Extract parent_event_id from context if present
-            parent_event_id = mcp_context.get("parent_event_id")
+            # Extract source_event_id from context if present
+            source_event_id = mcp_context.get("source_event_id")
             
             # Create tags for categorization
             tags = ["mcp", "tool", tool_name]
@@ -230,7 +230,7 @@ class MCPAdapter:
                     "mandate_id": str(mandate_id)
                 },
                 correlation_id=correlation_id,
-                parent_event_id=parent_event_id,
+                source_event_id=source_event_id,
                 tags=tags
             )
             
@@ -370,8 +370,8 @@ class MCPAdapter:
             import uuid
             correlation_id = str(uuid.uuid4())
             
-            # Extract parent_event_id from context if present
-            parent_event_id = mcp_context.get("parent_event_id")
+            # Extract source_event_id from context if present
+            source_event_id = mcp_context.get("source_event_id")
             
             # Create tags for categorization
             resource_type_tag = self._get_resource_type(resource_uri)
@@ -390,7 +390,7 @@ class MCPAdapter:
                     "mandate_id": str(mandate_id)
                 },
                 correlation_id=correlation_id,
-                parent_event_id=parent_event_id,
+                source_event_id=source_event_id,
                 tags=tags
             )
             
@@ -834,8 +834,8 @@ class MCPAdapter:
                     import uuid
                     correlation_id = str(uuid.uuid4())
                     
-                    # Extract parent_event_id from context if present
-                    parent_event_id = mcp_context.get("parent_event_id")
+                    # Extract source_event_id from context if present
+                    source_event_id = mcp_context.get("source_event_id")
                     
                     # Create tags for categorization
                     tags = ["mcp", "tool", tool_name, "decorator"]
@@ -851,7 +851,7 @@ class MCPAdapter:
                             "mandate_id": str(mandate_id)
                         },
                         correlation_id=correlation_id,
-                        parent_event_id=parent_event_id,
+                        source_event_id=source_event_id,
                         tags=tags
                     )
                     
