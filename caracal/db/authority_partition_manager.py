@@ -229,7 +229,7 @@ class AuthorityLedgerPartitionManager:
                     c.reltuples::bigint AS row_count
                 FROM pg_class c
                 JOIN pg_inherits i ON i.inhrelid = c.oid
-                JOIN pg_class p ON p.oid = i.inhparent
+                JOIN pg_class p ON p.oid = i.inhsource
                 WHERE p.relname = :table_name
                 ORDER BY c.relname
             """)
