@@ -21,6 +21,7 @@ from rich.table import Table
 
 from caracal.flow.components.menu import show_menu
 from caracal.flow.components.prompt import FlowPrompt
+from caracal.flow.screens._provider_scope_helpers import load_provider_scope_catalog
 from caracal.flow.theme import Colors, Icons
 from caracal.flow.state import FlowState, RecentAction
 from caracal.logging_config import get_logger
@@ -105,7 +106,7 @@ class AuthorityPolicyFlow:
                 
                 for policy in policies:
                     status_style = Colors.SUCCESS if policy.active else Colors.DIM
-                    delegation_str = f"Yes (depth {policy.max_delegation_depth})" if policy.allow_delegation else "No"
+                    delegation_str = f"Yes (depth {policy.max_network_distance})" if policy.allow_delegation else "No"
                     actions_str = ", ".join(policy.allowed_actions[:2]) + ("..." if len(policy.allowed_actions) > 2 else "")
                     
                     table.add_row(
@@ -165,32 +166,75 @@ class AuthorityPolicyFlow:
                     default=3600,
                     min_value=60,
                 )
-                
-                # Resource patterns
+
+                scope_catalog = load_provider_scope_catalog()
+                providers = scope_catalog["providers"]
+                resources = scope_catalog["resources"]
+                actions_catalog = scope_catalog["actions"]
+
+                if not providers:
+                    self.console.print(
+                        f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured in this workspace.[/]"
+                    )
+                    self.console.print(
+                        f"  [{Colors.HINT}]Add a provider first via 'caracal provider add ...'[/]"
+                    )
+                    return
+
+                provider_choice = self.prompt.select(
+                    "Scope provider",
+                    choices=providers + ["all"],
+                    default=providers[0],
+                )
+
+                if provider_choice != "all":
+                    provider_prefix = f"provider:{provider_choice}:"
+                    resources = [s for s in resources if s.startswith(provider_prefix)]
+                    actions_catalog = [s for s in actions_catalog if s.startswith(provider_prefix)]
+
+                if not resources or not actions_catalog:
+                    self.console.print(
+                        f"  [{Colors.ERROR}]{Icons.ERROR} Selected provider has no scope catalog.[/]"
+                    )
+                    return
+
+                # Resource scopes
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Enter allowed resource patterns (one per line, empty to finish):[/]")
-                self.console.print(f"  [{Colors.HINT}]Examples: api:openai:*, database:users:read, file:reports/*.pdf[/]")
+                self.console.print(f"  [{Colors.INFO}]Select allowed provider resource scopes:[/]")
                 resource_patterns = []
                 while True:
-                    pattern = self.prompt.text(f"Resource pattern {len(resource_patterns) + 1}", required=False)
-                    if not pattern:
+                    remaining = [r for r in resources if r not in resource_patterns]
+                    if not remaining:
                         break
-                    resource_patterns.append(pattern)
+                    choice = self.prompt.select(
+                        f"Resource scope {len(resource_patterns) + 1}",
+                        choices=remaining + ["done"],
+                        default=remaining[0],
+                    )
+                    if choice == "done":
+                        break
+                    resource_patterns.append(choice)
                 
                 if not resource_patterns:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one resource pattern is required.[/]")
                     return
                 
-                # Action patterns
+                # Action scopes
                 self.console.print()
-                self.console.print(f"  [{Colors.INFO}]Enter allowed actions (one per line, empty to finish):[/]")
-                self.console.print(f"  [{Colors.HINT}]Examples: api_call, database_query, file_read[/]")
+                self.console.print(f"  [{Colors.INFO}]Select allowed provider action scopes:[/]")
                 actions = []
                 while True:
-                    action = self.prompt.text(f"Action {len(actions) + 1}", required=False)
-                    if not action:
+                    remaining = [a for a in actions_catalog if a not in actions]
+                    if not remaining:
                         break
-                    actions.append(action)
+                    choice = self.prompt.select(
+                        f"Action scope {len(actions) + 1}",
+                        choices=remaining + ["done"],
+                        default=remaining[0],
+                    )
+                    if choice == "done":
+                        break
+                    actions.append(choice)
                 
                 if not actions:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one action is required.[/]")
@@ -232,7 +276,7 @@ class AuthorityPolicyFlow:
                     allowed_resource_patterns=resource_patterns,
                     allowed_actions=actions,
                     allow_delegation=allow_delegation,
-                    max_delegation_depth=int(max_delegation_depth),
+                    max_network_distance=int(max_delegation_depth),
                     created_at=datetime.utcnow(),
                     created_by="flow_user",
                     active=True,
@@ -313,7 +357,7 @@ class AuthorityPolicyFlow:
                 self.console.print(f"  [{Colors.INFO}]Delegation:[/]")
                 self.console.print(f"    Allowed: [{Colors.NEUTRAL}]{'Yes' if policy.allow_delegation else 'No'}[/]")
                 if policy.allow_delegation:
-                    self.console.print(f"    Max Depth: [{Colors.NEUTRAL}]{policy.max_delegation_depth}[/]")
+                    self.console.print(f"    Max Depth: [{Colors.NEUTRAL}]{policy.max_network_distance}[/]")
             
             db_manager.close()
             
@@ -359,7 +403,7 @@ class AuthorityPolicyFlow:
                 self.console.print(f"    Max mandate validity (seconds): {policy.max_validity_seconds}s")
                 self.console.print(f"    Delegation: {'Yes' if policy.allow_delegation else 'No'}")
                 if policy.allow_delegation:
-                    self.console.print(f"    Max Depth: {policy.max_delegation_depth}")
+                    self.console.print(f"    Max Depth: {policy.max_network_distance}")
                 self.console.print()
                 
                 # Edit max mandate validity
@@ -375,9 +419,9 @@ class AuthorityPolicyFlow:
                 if self.prompt.confirm("Update delegation settings?", default=False):
                     policy.allow_delegation = self.prompt.confirm("Allow delegation?", default=policy.allow_delegation)
                     if policy.allow_delegation:
-                        policy.max_delegation_depth = self.prompt.number(
+                        policy.max_network_distance = self.prompt.number(
                             "Maximum delegation depth",
-                            default=policy.max_delegation_depth,
+                            default=policy.max_network_distance,
                             min_value=1,
                         )
                 

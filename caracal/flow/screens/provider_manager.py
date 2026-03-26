@@ -1,422 +1,256 @@
 """
-Copyright (C) 2026 Garudex Labs.  All Rights Reserved.
-Caracal, a product of Garudex Labs
+Provider Manager screen.
 
-Provider Manager Screen.
-
-Provides provider management:
-- List providers
-- Add provider
-- Test provider
-- Remove provider
-- View provider metrics
+Provider configuration is workspace-local in open-source mode and
+provider-definition-driven across all flows.
 """
 
+from __future__ import annotations
+
+from datetime import datetime
 from typing import Optional
+
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
-from rich.prompt import Prompt, Confirm
 
-from caracal.flow.theme import Colors, Icons
-from caracal.flow.state import FlowState, RecentAction
+from caracal.deployment import ConfigManager, EditionManager
 from caracal.flow.components.menu import Menu, MenuItem
+from caracal.flow.state import FlowState, RecentAction
+from caracal.flow.theme import Colors, Icons
+from caracal.provider.definitions import (
+    get_provider_definition,
+    list_provider_definition_ids,
+)
+from caracal.provider.workspace import (
+    load_workspace_provider_registry,
+    save_workspace_provider_registry,
+)
 
 
 def show_provider_manager(console: Console, state: FlowState) -> None:
-    """
-    Display provider manager interface.
-    
-    CLI Equivalent: caracal provider [command]
-    """
+    """Display provider manager interface."""
     while True:
         console.clear()
-        
-        # Show header
-        console.print(Panel(
-            f"[{Colors.PRIMARY}]Provider Manager[/]",
-            subtitle=f"[{Colors.HINT}]CLI: caracal provider[/]",
-            border_style=Colors.INFO,
-        ))
+        console.print(
+            Panel(
+                f"[{Colors.PRIMARY}]Provider Manager[/]",
+                subtitle=f"[{Colors.HINT}]Provider-defined resource/action catalog[/]",
+                border_style=Colors.INFO,
+            )
+        )
         console.print()
-        
-        # Build menu
-        items = [
-            MenuItem("list", "List Providers", "View configured providers", Icons.LIST),
-            MenuItem("add", "Add Provider", "Configure new provider", Icons.ADD),
-            MenuItem("test", "Test Provider", "Check provider connectivity", Icons.TEST),
-            MenuItem("metrics", "View Metrics", "Provider usage statistics", Icons.CHART),
-            MenuItem("remove", "Remove Provider", "Delete provider configuration", Icons.DELETE),
-            MenuItem("back", "Back to Menu", "", Icons.ARROW_LEFT),
-        ]
-        
-        menu = Menu("Provider Operations", items=items)
+
+        menu = Menu(
+            "Provider Operations",
+            items=[
+                MenuItem("list", "List Providers", "View configured providers", Icons.LIST),
+                MenuItem("add", "Add Provider", "Configure provider + secure credentials", Icons.ADD),
+                MenuItem("remove", "Remove Provider", "Delete provider configuration", Icons.DELETE),
+                MenuItem("back", "Back to Menu", "", Icons.ARROW_LEFT),
+            ],
+        )
         result = menu.run()
-        
         if not result or result.key == "back":
             break
-        
-        # Handle selection
         if result.key == "list":
-            _list_providers(console, state)
+            _list_providers(console)
         elif result.key == "add":
             _add_provider(console, state)
-        elif result.key == "test":
-            _test_provider(console, state)
-        elif result.key == "metrics":
-            _view_metrics(console, state)
         elif result.key == "remove":
             _remove_provider(console, state)
 
 
-def _list_providers(console: Console, state: FlowState) -> None:
-    """List all configured providers."""
-    from caracal.deployment.edition import EditionManager
-    from caracal.deployment.broker import Broker
-    from caracal.deployment.gateway_client import GatewayClient
-    
+def _active_workspace(config_manager: ConfigManager) -> str:
+    workspace = config_manager.get_default_workspace_name()
+    if workspace:
+        return workspace
+    workspaces = config_manager.list_workspaces()
+    if workspaces:
+        return workspaces[0]
+    raise RuntimeError("No workspaces found. Run 'caracal init' first.")
+
+
+def _list_providers(console: Console) -> None:
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
     console.clear()
-    console.print(Panel(
-        f"[{Colors.PRIMARY}]Configured Providers[/]",
-        subtitle=f"[{Colors.HINT}]CLI: caracal provider list[/]",
-        border_style=Colors.INFO,
-    ))
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Configured Providers[/]",
+            subtitle=f"[{Colors.HINT}]Workspace: {workspace}[/]",
+            border_style=Colors.INFO,
+        )
+    )
     console.print()
-    
-    try:
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        
-        if edition.is_enterprise:
-            # Use gateway client
-            gateway_client = GatewayClient()
-            providers = gateway_client.get_available_providers()
-            
-            console.print(f"  [{Colors.INFO}]Edition: Enterprise (providers managed by gateway)[/]")
-        else:
-            # Use broker
-            broker = Broker()
-            providers = broker.list_providers()
-            
-            console.print(f"  [{Colors.INFO}]Edition: Open Source (direct provider access)[/]")
-        
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured.[/]")
         console.print()
-        
-        if not providers:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured[/]")
-        else:
-            table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
-            table.add_column("Name", style=Colors.PRIMARY)
-            table.add_column("Type", style=Colors.INFO)
-            table.add_column("Status", style=Colors.NEUTRAL)
-            table.add_column("Endpoint", style=Colors.DIM)
-            
-            for provider in providers:
-                status_icon = Icons.SUCCESS if provider.status == "healthy" else Icons.ERROR
-                status_color = Colors.SUCCESS if provider.status == "healthy" else Colors.ERROR
-                status_text = f"[{status_color}]{status_icon} {provider.status}[/]"
-                
-                table.add_row(
-                    provider.name,
-                    provider.provider_type,
-                    status_text,
-                    provider.base_url or "Default"
-                )
-            
-            console.print(table)
-        
-    except Exception as e:
-        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-    
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
+    table.add_column("Name", style=Colors.PRIMARY)
+    table.add_column("Definition", style=Colors.NEUTRAL)
+    table.add_column("Service", style=Colors.NEUTRAL)
+    table.add_column("Auth", style=Colors.NEUTRAL)
+    table.add_column("Endpoint", style=Colors.DIM)
+    table.add_column("Scopes", style=Colors.DIM)
+
+    for name in sorted(providers.keys()):
+        entry = providers[name]
+        resources = entry.get("resources", [])
+        actions = entry.get("actions", [])
+        table.add_row(
+            name,
+            str(entry.get("provider_definition") or "generic_http"),
+            str(entry.get("service_type") or "api"),
+            str(entry.get("auth_scheme") or "api_key"),
+            str(entry.get("base_url") or "configured"),
+            f"{len(resources)} resources / {len(actions)} actions",
+        )
+
+    console.print(table)
     console.print()
-    console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-    input()
+    Prompt.ask("Press Enter to continue", default="")
 
 
 def _add_provider(console: Console, state: FlowState) -> None:
-    """Add a new provider."""
-    from caracal.deployment.edition import EditionManager
-    from caracal.deployment.broker import Broker, ProviderConfig
-    
-    console.clear()
-    console.print(Panel(
-        f"[{Colors.PRIMARY}]Add Provider[/]",
-        subtitle=f"[{Colors.HINT}]CLI: caracal provider add <name> --api-key=<key>[/]",
-        border_style=Colors.INFO,
-    ))
-    console.print()
-    
-    try:
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        
-        if edition.is_enterprise:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Providers are managed by the gateway in Enterprise edition[/]")
-            console.print(f"  [{Colors.HINT}]Contact your administrator to add providers[/]")
-            input()
-            return
-        
-        # Prompt for provider details
-        name = Prompt.ask(f"[{Colors.INFO}]Provider name[/]")
-        
-        console.print()
-        console.print(f"  [{Colors.INFO}]Select provider type:[/]")
-        console.print(f"    1. OpenAI")
-        console.print(f"    2. Anthropic")
-        console.print(f"    3. Custom")
-        console.print()
-        
-        type_choice = Prompt.ask(
-            f"[{Colors.INFO}]Type[/]",
-            choices=["1", "2", "3"],
-            default="1"
+    edition_manager = EditionManager()
+    if edition_manager.is_enterprise():
+        console.print(
+            f"  [{Colors.WARNING}]{Icons.WARNING} Enterprise mode detected.[/] "
+            f"[{Colors.DIM}]Register providers in the gateway vault/registry.[/]"
         )
-        
-        type_map = {
-            "1": "openai",
-            "2": "anthropic",
-            "3": "custom",
-        }
-        provider_type = type_map.get(type_choice, "openai")
-        
-        api_key = Prompt.ask(f"[{Colors.INFO}]API Key[/]", password=True)
-        
-        base_url = None
-        if provider_type == "custom":
-            base_url = Prompt.ask(f"[{Colors.INFO}]Base URL[/]")
-        
-        # Create provider config
-        config = ProviderConfig(
-            name=name,
-            provider_type=provider_type,
-            api_key_ref="",  # Will be encrypted
-            base_url=base_url,
-            timeout_seconds=30,
-            max_retries=3,
-            rate_limit=None,
-            metadata={}
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+
+    console.clear()
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Add Provider[/]",
+            subtitle=f"[{Colors.HINT}]Workspace: {workspace}[/]",
+            border_style=Colors.INFO,
         )
-        
-        # Configure provider
-        broker = Broker()
-        broker.configure_provider(name, config, api_key=api_key)
-        
-        console.print()
-        console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{name}' added successfully[/]")
-        
-        state.add_recent_action(RecentAction.create(
-            "provider_add",
-            f"Added provider: {name}",
-            success=True
-        ))
-        
-    except Exception as e:
-        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-        state.add_recent_action(RecentAction.create(
-            "provider_add",
-            "Failed to add provider",
-            success=False
-        ))
-    
+    )
     console.print()
-    console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-    input()
 
+    name = Prompt.ask(f"[{Colors.INFO}]Provider name[/]").strip()
+    definitions = list_provider_definition_ids()
+    definition_choice = Prompt.ask(
+        f"[{Colors.INFO}]Provider definition[/]",
+        choices=definitions,
+        default="generic_http",
+    )
+    definition = get_provider_definition(definition_choice)
+    auth_scheme = Prompt.ask(
+        f"[{Colors.INFO}]Auth scheme[/]",
+        choices=["none", "api-key", "bearer", "basic", "header"],
+        default="api-key",
+    ).replace("-", "_")
+    base_url = Prompt.ask(
+        f"[{Colors.INFO}]Base URL[/]",
+        default=definition.default_base_url or "",
+    ).strip()
 
-def _test_provider(console: Console, state: FlowState) -> None:
-    """Test provider connectivity."""
-    from caracal.deployment.edition import EditionManager
-    from caracal.deployment.broker import Broker
-    from caracal.deployment.gateway_client import GatewayClient
-    
-    console.clear()
-    console.print(Panel(
-        f"[{Colors.PRIMARY}]Test Provider[/]",
-        subtitle=f"[{Colors.HINT}]CLI: caracal provider test <name>[/]",
-        border_style=Colors.INFO,
-    ))
+    credential_ref: Optional[str] = None
+    if auth_scheme != "none":
+        credential_value = Prompt.ask(f"[{Colors.INFO}]Credential[/]", password=True).strip()
+        if not credential_value:
+            console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Credential is required for authenticated providers.[/]")
+            Prompt.ask("Press Enter to continue", default="")
+            return
+        credential_ref = f"provider_{name}_credential"
+        config_manager.store_secret(credential_ref, credential_value, workspace)
+
+    providers = load_workspace_provider_registry(config_manager, workspace)
+    providers[name] = {
+        "name": name,
+        "service_type": definition.service_type,
+        "provider_definition": definition.definition_id,
+        "base_url": base_url or definition.default_base_url,
+        "auth_scheme": auth_scheme,
+        "credential_ref": credential_ref,
+        "healthcheck_path": "/health",
+        "timeout_seconds": 30,
+        "max_retries": 3,
+        "rate_limit_rpm": None,
+        "version": None,
+        "tags": [],
+        "capabilities": [],
+        "access_policy": {"scopes": []},
+        "auth_metadata": {},
+        "default_headers": {},
+        "metadata": {},
+        "resources": definition.list_resource_ids(),
+        "actions": definition.list_action_ids(),
+        "enforce_scoped_requests": True,
+        "created_at": providers.get(name, {}).get("created_at", datetime.utcnow().isoformat()),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    save_workspace_provider_registry(config_manager, workspace, providers)
+
     console.print()
-    
-    try:
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        
-        # Get list of providers
-        if edition.is_enterprise:
-            gateway_client = GatewayClient()
-            providers = gateway_client.get_available_providers()
-        else:
-            broker = Broker()
-            providers = broker.list_providers()
-        
-        if not providers:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured[/]")
-            input()
-            return
-        
-        # Build menu of providers
-        items = []
-        for provider in providers:
-            items.append(MenuItem(
-                provider.name,
-                provider.name,
-                f"Type: {provider.provider_type}",
-                Icons.PROVIDER
-            ))
-        items.append(MenuItem("back", "Cancel", "", Icons.ARROW_LEFT))
-        
-        menu = Menu("Select Provider to Test", items=items)
-        result = menu.run()
-        
-        if result and result.key != "back":
-            console.print()
-            console.print(f"  [{Colors.INFO}]Testing provider: {result.key}...[/]")
-            
-            # Test provider
-            if edition.is_enterprise:
-                health = gateway_client.check_connection()
-                success = health.status == "healthy"
-            else:
-                health = broker.test_provider(result.key)
-                success = health.status == "pass"
-            
-            console.print()
-            if success:
-                console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider is healthy[/]")
-                console.print(f"    Status: {health.status}")
-                console.print(f"    Message: {health.message}")
-            else:
-                console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Provider test failed[/]")
-                console.print(f"    Status: {health.status}")
-                console.print(f"    Message: {health.message}")
-            
-            console.print()
-            console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-            input()
-        
-    except Exception as e:
-        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-        input()
-
-
-def _view_metrics(console: Console, state: FlowState) -> None:
-    """View provider metrics."""
-    from caracal.deployment.edition import EditionManager
-    from caracal.deployment.broker import Broker
-    
-    console.clear()
-    console.print(Panel(
-        f"[{Colors.PRIMARY}]Provider Metrics[/]",
-        subtitle=f"[{Colors.HINT}]CLI: caracal provider metrics[/]",
-        border_style=Colors.INFO,
-    ))
-    console.print()
-    
-    try:
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        
-        if edition.is_enterprise:
-            console.print(f"  [{Colors.INFO}]Metrics are available in the gateway dashboard[/]")
-            input()
-            return
-        
-        broker = Broker()
-        providers = broker.list_providers()
-        
-        if not providers:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured[/]")
-            input()
-            return
-        
-        # Show metrics for each provider
-        for provider in providers:
-            try:
-                metrics = broker.get_provider_metrics(provider.name)
-                
-                console.print(f"  [{Colors.PRIMARY}]{provider.name}[/]")
-                console.print(f"    Requests: {metrics.request_count}")
-                console.print(f"    Errors: {metrics.error_count}")
-                console.print(f"    Avg Latency: {metrics.avg_latency_ms:.2f}ms")
-                console.print(f"    Success Rate: {metrics.success_rate:.1%}")
-                console.print()
-            except Exception as e:
-                console.print(f"  [{Colors.ERROR}]{provider.name}: Error - {e}[/]")
-                console.print()
-        
-    except Exception as e:
-        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-    
-    console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-    input()
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{name}' added.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_add", f"Added provider {name}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
 
 
 def _remove_provider(console: Console, state: FlowState) -> None:
-    """Remove a provider."""
-    from caracal.deployment.edition import EditionManager
-    from caracal.deployment.broker import Broker
-    
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
     console.clear()
-    console.print(Panel(
-        f"[{Colors.PRIMARY}]Remove Provider[/]",
-        subtitle=f"[{Colors.HINT}]CLI: caracal provider remove <name>[/]",
-        border_style=Colors.INFO,
-    ))
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Remove Provider[/]",
+            subtitle=f"[{Colors.HINT}]Workspace: {workspace}[/]",
+            border_style=Colors.INFO,
+        )
+    )
     console.print()
-    
-    try:
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        
-        if edition.is_enterprise:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Providers are managed by the gateway in Enterprise edition[/]")
-            console.print(f"  [{Colors.HINT}]Contact your administrator to remove providers[/]")
-            input()
-            return
-        
-        broker = Broker()
-        providers = broker.list_providers()
-        
-        if not providers:
-            console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured[/]")
-            input()
-            return
-        
-        # Build menu of providers
-        items = []
-        for provider in providers:
-            items.append(MenuItem(
-                provider.name,
-                provider.name,
-                f"Type: {provider.provider_type}",
-                Icons.PROVIDER
-            ))
-        items.append(MenuItem("back", "Cancel", "", Icons.ARROW_LEFT))
-        
-        menu = Menu("Select Provider to Remove", items=items)
-        result = menu.run()
-        
-        if result and result.key != "back":
-            # Confirm removal
-            console.print()
-            if Confirm.ask(f"[{Colors.WARNING}]Remove provider '{result.key}'?[/]"):
-                broker.remove_provider(result.key)
-                
-                console.print()
-                console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{result.key}' removed[/]")
-                
-                state.add_recent_action(RecentAction.create(
-                    "provider_remove",
-                    f"Removed provider: {result.key}",
-                    success=True
-                ))
-            else:
-                console.print(f"  [{Colors.DIM}]Cancelled[/]")
-            
-            console.print()
-            console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")
-            input()
-        
-    except Exception as e:
-        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-        input()
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    names = sorted(providers.keys())
+    selected = Prompt.ask(
+        f"[{Colors.INFO}]Provider name[/]",
+        choices=names,
+        default=names[0],
+    )
+
+    if not Confirm.ask(f"[{Colors.WARNING}]Remove provider '{selected}'?[/]", default=False):
+        return
+
+    removed = providers.pop(selected)
+    save_workspace_provider_registry(config_manager, workspace, providers)
+
+    credential_ref = removed.get("credential_ref")
+    vault = config_manager._load_vault(workspace)
+    if credential_ref and credential_ref in vault:
+        del vault[credential_ref]
+    for legacy_key in (f"provider_{selected}_api_key", f"provider_{selected}_credential"):
+        if legacy_key in vault:
+            del vault[legacy_key]
+    config_manager._save_vault(workspace, vault)
+
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' removed.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_remove", f"Removed provider {selected}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
