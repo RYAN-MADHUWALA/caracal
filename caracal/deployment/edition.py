@@ -72,10 +72,10 @@ class EditionManager:
         """
         Returns current edition (OPENSOURCE or ENTERPRISE).
         
-        Edition detection follows a fallback chain:
-        1. Configuration file (~/.caracal/config.toml)
-        2. Auto-detection based on available components
-        3. Default edition (OPENSOURCE)
+          Edition detection is policy-driven and auto-derived from runtime state:
+          1. Enterprise connectivity indicators (gateway URL, sync-enabled workspace,
+              enterprise license state)
+          2. Default edition (OPENSOURCE)
         
         The result is cached to avoid repeated file I/O.
         
@@ -90,37 +90,7 @@ class EditionManager:
             return self._cached_edition
         
         try:
-            # Step 1: Check configuration file
-            if self.CONFIG_FILE.exists():
-                try:
-                    config = toml.load(self.CONFIG_FILE)
-                    edition_str = config.get("edition", {}).get("current")
-                    if edition_str:
-                        try:
-                            edition = Edition(edition_str.lower())
-                            self._cached_edition = edition
-                            self._cache_timestamp = datetime.now()
-                            logger.debug(
-                                "edition_detected_from_config",
-                                edition=edition.value,
-                                config_file=str(self.CONFIG_FILE)
-                            )
-                            return edition
-                        except ValueError:
-                            logger.warning(
-                                "invalid_edition_in_config",
-                                config_file=str(self.CONFIG_FILE),
-                                value=edition_str,
-                                valid_editions=[e.value for e in Edition]
-                            )
-                except (toml.TomlDecodeError, OSError) as e:
-                    logger.warning(
-                        "config_file_read_error",
-                        config_file=str(self.CONFIG_FILE),
-                        error=str(e)
-                    )
-            
-            # Step 2: Auto-detect based on available components
+            # Auto-detect based on connectivity and runtime indicators.
             edition = self._auto_detect_edition()
             self._cached_edition = edition
             self._cache_timestamp = datetime.now()
@@ -141,12 +111,13 @@ class EditionManager:
     def _auto_detect_edition(self) -> Edition:
         """
         Auto-detects edition based on available components.
-        
+
         Detection logic:
         - If gateway URL is configured, assume Enterprise Edition
-        - If enterprise-specific modules are available, assume Enterprise Edition
+        - If any workspace has sync enabled with a remote URL, assume Enterprise Edition
+        - If enterprise license is connected/valid, assume Enterprise Edition
         - Otherwise, default to Open Source Edition
-        
+
         Returns:
             Detected edition
         """
@@ -163,7 +134,7 @@ class EditionManager:
                     return Edition.ENTERPRISE
             except (toml.TomlDecodeError, OSError):
                 pass
-        
+
         # Check for enterprise-specific environment variables
         if os.environ.get("CARACAL_GATEWAY_URL"):
             logger.debug(
@@ -171,17 +142,44 @@ class EditionManager:
                 env_var="CARACAL_GATEWAY_URL"
             )
             return Edition.ENTERPRISE
-        
-        # Check for enterprise-specific modules
+
+        # Check for sync-enabled workspaces with configured remote URL.
         try:
-            import caracal.enterprise
-            logger.debug(
-                "edition_detected_enterprise_module",
-                module="caracal.enterprise"
-            )
-            return Edition.ENTERPRISE
-        except ImportError:
-            pass
+            from caracal.deployment.config_manager import ConfigManager
+
+            cfg_mgr = ConfigManager()
+            for workspace in cfg_mgr.list_workspaces():
+                try:
+                    ws_config = cfg_mgr.get_workspace_config(workspace)
+                except Exception:
+                    continue
+
+                if ws_config.sync_enabled and ws_config.sync_url:
+                    logger.debug(
+                        "edition_detected_workspace_sync",
+                        workspace=workspace,
+                        sync_url=ws_config.sync_url,
+                    )
+                    return Edition.ENTERPRISE
+        except Exception:
+            logger.debug("edition_workspace_sync_detection_failed", exc_info=True)
+
+        # Check persisted enterprise license connectivity.
+        try:
+            from caracal.enterprise.license import load_enterprise_config
+
+            enterprise_cfg = load_enterprise_config()
+            if enterprise_cfg.get("valid") and (
+                enterprise_cfg.get("sync_api_key") or enterprise_cfg.get("enterprise_api_url")
+            ):
+                logger.debug(
+                    "edition_detected_enterprise_license",
+                    has_sync_api_key=bool(enterprise_cfg.get("sync_api_key")),
+                    has_api_url=bool(enterprise_cfg.get("enterprise_api_url")),
+                )
+                return Edition.ENTERPRISE
+        except Exception:
+            logger.debug("edition_license_detection_failed", exc_info=True)
         
         # Default to Open Source Edition
         logger.debug(
