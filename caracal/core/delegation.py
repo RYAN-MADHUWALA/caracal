@@ -55,7 +55,7 @@ class DelegationTokenClaims:
         issued_at: Token issuance timestamp
         token_id: Unique token identifier (jti claim)
         allowed_operations: List of allowed operation types
-        delegation_type: Type of delegation (hierarchical/peer)
+        delegation_type: Type of delegation (directed/peer)
         source_principal_type: Type of the delegating principal (user/agent/service)
         target_principal_type: Type of the receiving principal (user/agent/service)
         context_tags: Context tags for dynamic authority filtering
@@ -68,7 +68,7 @@ class DelegationTokenClaims:
     issued_at: datetime
     token_id: UUID
     allowed_operations: List[str]
-    delegation_type: str = "hierarchical"
+    delegation_type: str = "directed"
     source_principal_type: str = "agent"
     target_principal_type: str = "agent"
     context_tags: Optional[List[str]] = None
@@ -130,7 +130,7 @@ class DelegationTokenManager:
         target_principal_id: UUID,
         expiration_seconds: int = 86400,
         allowed_operations: Optional[List[str]] = None,
-        delegation_type: str = "hierarchical",
+        delegation_type: str = "directed",
         source_principal_type: str = "agent",
         target_principal_type: str = "agent",
         context_tags: Optional[List[str]] = None,
@@ -147,7 +147,7 @@ class DelegationTokenManager:
             target_principal_id: Target principal ID (subject/delegate)
             expiration_seconds: Token validity duration (default: 86400 = 24 hours)
             allowed_operations: List of allowed operations (default: ["api_call", "mcp_tool"])
-            delegation_type: Type of delegation (hierarchical/peer)
+            delegation_type: Type of delegation (directed/peer)
             source_principal_type: Type of delegating principal (user/agent/service)
             target_principal_type: Type of receiving principal (user/agent/service)
             context_tags: Context tags for dynamic authority filtering
@@ -394,7 +394,7 @@ class DelegationTokenManager:
                 issued_at = datetime.fromtimestamp(payload["iat"])
                 token_id = UUID(payload["jti"])
                 allowed_operations = payload["allowedOperations"]
-                delegation_type = payload.get("delegationType", "hierarchical")
+                delegation_type = payload.get("delegationType", "directed")
                 source_principal_type = payload.get("sourcePrincipalType", "agent")
                 target_principal_type = payload.get("targetPrincipalType", "agent")
                 context_tags = payload.get("contextTags")

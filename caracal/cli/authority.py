@@ -117,11 +117,11 @@ def get_authority_evaluator(config):
     help='Validity period in seconds',
 )
 @click.option(
-    '--delegation-depth',
+    '--delegation-network_distance',
     '-d',
     type=int,
     default=None,
-    help='Delegation depth for this mandate (default: policy maximum)',
+    help='Delegation network_distance for this mandate (default: policy maximum)',
 )
 @click.option(
     '--format',
@@ -138,7 +138,7 @@ def issue(
     resource_scope: tuple,
     action_scope: tuple,
     validity_seconds: int,
-    delegation_depth: Optional[int],
+    network_distance: Optional[int],
     format: str,
 ):
     """
@@ -185,8 +185,8 @@ def issue(
             click.echo(f"Error: Validity seconds must be positive, got {validity_seconds}", err=True)
             sys.exit(1)
 
-        if delegation_depth is not None and delegation_depth < 0:
-            click.echo(f"Error: Delegation depth cannot be negative, got {delegation_depth}", err=True)
+        if network_distance is not None and network_distance < 0:
+            click.echo(f"Error: Delegation network_distance cannot be negative, got {network_distance}", err=True)
             sys.exit(1)
         
         # Convert tuples to lists
@@ -204,7 +204,7 @@ def issue(
                 resource_scope=resource_scope_list,
                 action_scope=action_scope_list,
                 validity_seconds=validity_seconds,
-                delegation_depth=delegation_depth,
+                network_distance=network_distance,
             )
             
             # Commit transaction
@@ -224,7 +224,7 @@ def issue(
                     'created_at': mandate.created_at.isoformat(),
                     'revoked': mandate.revoked,
                     'delegation_type': mandate.delegation_type,
-                    'delegation_depth': mandate.delegation_depth,
+                    'network_distance': mandate.network_distance,
                 }
                 click.echo(json.dumps(output, indent=2))
             else:
@@ -239,7 +239,7 @@ def issue(
                 click.echo(f"Resource Scope:   {', '.join(mandate.resource_scope)}")
                 click.echo(f"Action Scope:     {', '.join(mandate.action_scope)}")
                 click.echo(f"Delegation Type:  {mandate.delegation_type}")
-                click.echo(f"Delegation Depth: {mandate.delegation_depth}")
+                click.echo(f"Delegation Network Distance: {mandate.network_distance}")
                 click.echo(f"Created:          {mandate.created_at}")
         
         finally:
@@ -618,7 +618,7 @@ def list_mandates(
                         'action_scope': m.action_scope,
                         'revoked': m.revoked,
                         'delegation_type': m.delegation_type,
-                        'delegation_depth': m.delegation_depth,
+                        'network_distance': m.network_distance,
                         'created_at': m.created_at.isoformat()
                     }
                     for m in mandates
@@ -630,7 +630,7 @@ def list_mandates(
                 click.echo()
                 
                 # Print header
-                click.echo(f"{'Mandate ID':<38}  {'Subject ID':<38}  {'Valid Until':<20}  {'Status':<10}  Type  Depth")
+                click.echo(f"{'Mandate ID':<38}  {'Subject ID':<38}  {'Valid Until':<20}  {'Status':<10}  Type  Network Distance")
                 click.echo("-" * 140)
                 
                 # Print mandates
@@ -652,7 +652,7 @@ def list_mandates(
                         f"{valid_until_str:<20}  "
                         f"{status:<10}  "
                         f"{m.delegation_type:<4}  "
-                        f"{(m.delegation_depth if m.delegation_depth is not None else 0)}"
+                        f"{(m.network_distance if m.network_distance is not None else 0)}"
                     )
         
         finally:
@@ -742,7 +742,7 @@ def delegate(
         # Delegate from user mandate to agent
         caracal authority delegate \\
             --source-mandate-id <source-id> \\
-            --child-subject-id <agent-id> \\
+            --target-subject-id <agent-id> \\
             --resource-scope "api:openai:gpt-4" \\
             --action-scope "api_call" \\
             --validity-seconds 1800
@@ -781,7 +781,7 @@ def delegate(
         
         try:
             # Delegate mandate
-            child_mandate = mandate_manager.delegate_mandate(
+            target_mandate = mandate_manager.delegate_mandate(
                 source_mandate_id=source_uuid,
                 target_subject_id=target_uuid,
                 resource_scope=resource_scope_list,
@@ -796,35 +796,35 @@ def delegate(
             if format.lower() == 'json':
                 # JSON output
                 output = {
-                    'mandate_id': str(child_mandate.mandate_id),
+                    'mandate_id': str(target_mandate.mandate_id),
                     'source_mandate_id': source_mandate_id,
-                    'issuer_id': str(child_mandate.issuer_id),
-                    'subject_id': str(child_mandate.subject_id),
-                    'valid_from': child_mandate.valid_from.isoformat(),
-                    'valid_until': child_mandate.valid_until.isoformat(),
-                    'resource_scope': child_mandate.resource_scope,
-                    'action_scope': child_mandate.action_scope,
-                    'delegation_type': child_mandate.delegation_type,
-                    'delegation_depth': child_mandate.delegation_depth,
-                    'context_tags': child_mandate.context_tags,
-                    'created_at': child_mandate.created_at.isoformat()
+                    'issuer_id': str(target_mandate.issuer_id),
+                    'subject_id': str(target_mandate.subject_id),
+                    'valid_from': target_mandate.valid_from.isoformat(),
+                    'valid_until': target_mandate.valid_until.isoformat(),
+                    'resource_scope': target_mandate.resource_scope,
+                    'action_scope': target_mandate.action_scope,
+                    'delegation_type': target_mandate.delegation_type,
+                    'network_distance': target_mandate.network_distance,
+                    'context_tags': target_mandate.context_tags,
+                    'created_at': target_mandate.created_at.isoformat()
                 }
                 click.echo(json.dumps(output, indent=2))
             else:
                 # Table output
                 click.echo("✓ Mandate delegated successfully!")
                 click.echo()
-                click.echo(f"Delegated Mandate ID:  {child_mandate.mandate_id}")
+                click.echo(f"Delegated Mandate ID:  {target_mandate.mandate_id}")
                 click.echo(f"Source Mandate ID:     {source_mandate_id}")
-                click.echo(f"Subject ID:            {child_mandate.subject_id}")
-                click.echo(f"Valid From:            {child_mandate.valid_from}")
-                click.echo(f"Valid Until:           {child_mandate.valid_until}")
-                click.echo(f"Resource Scope:        {', '.join(child_mandate.resource_scope)}")
-                click.echo(f"Action Scope:          {', '.join(child_mandate.action_scope)}")
-                click.echo(f"Delegation Type:       {child_mandate.delegation_type}")
-                click.echo(f"Delegation Depth:      {child_mandate.delegation_depth}")
-                if child_mandate.context_tags:
-                    click.echo(f"Context Tags:          {', '.join(child_mandate.context_tags)}")
+                click.echo(f"Subject ID:            {target_mandate.subject_id}")
+                click.echo(f"Valid From:            {target_mandate.valid_from}")
+                click.echo(f"Valid Until:           {target_mandate.valid_until}")
+                click.echo(f"Resource Scope:        {', '.join(target_mandate.resource_scope)}")
+                click.echo(f"Action Scope:          {', '.join(target_mandate.action_scope)}")
+                click.echo(f"Delegation Type:       {target_mandate.delegation_type}")
+                click.echo(f"Delegation Network Distance:      {target_mandate.network_distance}")
+                if target_mandate.context_tags:
+                    click.echo(f"Context Tags:          {', '.join(target_mandate.context_tags)}")
         
         finally:
             # Close database connection
@@ -859,7 +859,7 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
     Show the delegation graph topology.
     
     Displays all delegation edges between mandates with principal types
-    and delegation types (hierarchical/peer).
+    and delegation types (directed/peer).
     
     Examples:
     
@@ -893,7 +893,7 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
             session = db_manager.get_session()
             graph = DelegationGraph(session)
             topology = graph.get_topology(root_mandate_id=root_uuid)
-            details = graph.get_chain_details(root_uuid) if root_uuid else None
+            details = graph.get_path_details(root_uuid) if root_uuid else None
             
             if format.lower() == 'json':
                 output = {
@@ -939,17 +939,17 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
                     click.echo()
                     click.echo(
                         "Graph Details: "
-                        f"max_depth={stats.get('max_depth', 0)}, "
+                        f"max_network_distance={stats.get('max_network_distance', 0)}, "
                         f"branches={stats.get('branch_nodes', 0)}, "
                         f"leaves={stats.get('leaf_nodes', 0)}, "
                         f"valid={'yes' if stats.get('is_valid') else 'no'}"
                     )
 
-                    rows = details.get('chain', [])
+                    rows = details.get('path', [])
                     if rows:
                         click.echo()
                         click.echo(
-                            f"{'Depth':<5}  {'Mandate ID':<38}  {'Type':<8}  {'Children':<8}  {'Paths':<5}  {'DelDepth':<8}  {'Status'}"
+                            f"{'Network Distance':<5}  {'Mandate ID':<38}  {'Type':<8}  {'targetren':<8}  {'Paths':<5}  {'DelNetwork Distance':<8}  {'Status'}"
                         )
                         click.echo("-" * 110)
 
@@ -961,12 +961,12 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
                                 status = "expired"
 
                             click.echo(
-                                f"{row.get('depth', 0):<5}  "
+                                f"{row.get('network_distance', 0):<5}  "
                                 f"{row.get('mandate_id', ''):<38}  "
                                 f"{row.get('principal_type', 'unknown'):<8}  "
-                                f"{row.get('child_count', 0):<8}  "
+                                f"{row.get('target_count', 0):<8}  "
                                 f"{row.get('path_count', 0):<5}  "
-                                f"{row.get('delegation_depth', 0):<8}  "
+                                f"{row.get('network_distance', 0):<8}  "
                                 f"{status}"
                             )
         
