@@ -33,8 +33,9 @@ from caracal.deployment.exceptions import (
     SecretNotFoundError,
 )
 from caracal.provider.definitions import (
+    ProviderDefinition,
     ScopeParseError,
-    get_provider_definition,
+    provider_definition_from_mapping,
     parse_provider_scope,
     resolve_provider_definition_id,
 )
@@ -77,6 +78,7 @@ class ProviderConfig:
     name: str
     provider_type: str
     provider_definition: Optional[str] = None
+    provider_definition_data: Optional[Dict[str, Any]] = None
     api_key_ref: Optional[str] = None
     auth_scheme: str = "api_key"
     credential_ref: Optional[str] = None
@@ -691,7 +693,7 @@ class Broker:
                 base_url = config.base_url
                 if not base_url and config.provider_definition:
                     try:
-                        definition = get_provider_definition(config.provider_definition)
+                        definition = self._get_definition_for_provider(provider, config)
                         base_url = definition.default_base_url
                     except Exception:
                         base_url = None
@@ -900,7 +902,10 @@ class Broker:
         provider resource and action and verifies that HTTP method/path align
         with the provider definition.
         """
-        definition = get_provider_definition(config.provider_definition or "generic_http")
+        if not request.resource and not request.action and not config.enforce_scoped_requests:
+            return
+
+        definition = self._get_definition_for_provider(provider, config)
 
         resource_id = self._normalize_scope_identifier(
             scope_or_id=request.resource,
@@ -945,6 +950,25 @@ class Broker:
                     f"Action '{action_id}' requires path prefix '{action.path_prefix}', "
                     f"got '{normalized_endpoint}'"
                 )
+
+    @staticmethod
+    def _get_definition_for_provider(
+        provider: str,
+        config: ProviderConfig,
+    ) -> ProviderDefinition:
+        payload = config.provider_definition_data
+        if not isinstance(payload, dict):
+            raise ProviderConfigurationError(
+                f"Provider '{provider}' is missing structured definition payload"
+            )
+        return provider_definition_from_mapping(
+            payload,
+            default_definition_id=config.provider_definition or provider,
+            default_service_type=config.provider_type or "api",
+            default_display_name=provider,
+            default_auth_scheme=config.auth_scheme or "api_key",
+            default_base_url=config.base_url,
+        )
 
     @staticmethod
     def _normalize_scope_identifier(

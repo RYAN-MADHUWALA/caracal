@@ -14,6 +14,13 @@ from uuid import UUID
 
 import click
 
+from caracal.cli.provider_scopes import (
+    action_scope_shell_complete,
+    get_workspace_from_ctx,
+    provider_name_shell_complete,
+    resource_scope_shell_complete,
+    validate_provider_scopes,
+)
 from caracal.exceptions import CaracalError
 from caracal.logging_config import get_logger
 
@@ -35,18 +42,26 @@ logger = get_logger(__name__)
     help='Maximum validity period for mandates in seconds',
 )
 @click.option(
+    '--provider',
+    multiple=True,
+    shell_complete=provider_name_shell_complete,
+    help='Provider name to scope this policy to (repeatable)',
+)
+@click.option(
     '--resource-pattern',
     '-r',
     required=True,
     multiple=True,
-    help='Allowed resource patterns (can be specified multiple times)',
+    shell_complete=resource_scope_shell_complete,
+    help='Allowed provider resource scopes (repeatable)',
 )
 @click.option(
     '--action',
     '-a',
     required=True,
     multiple=True,
-    help='Allowed actions (can be specified multiple times)',
+    shell_complete=action_scope_shell_complete,
+    help='Allowed provider action scopes (repeatable)',
 )
 @click.option(
     '--allow-delegation',
@@ -55,11 +70,13 @@ logger = get_logger(__name__)
     help='Allow delegation of mandates',
 )
 @click.option(
+    '--max-delegation-network-distance',
     '--max-delegation-network_distance',
+    'max_network_distance',
     '-m',
     type=int,
     default=0,
-    help='Maximum delegation network_distance (default: 0)',
+    help='Maximum delegation network distance (default: 0)',
 )
 @click.option(
     '--format',
@@ -73,6 +90,7 @@ def create(
     ctx,
     principal_id: str,
     max_validity_seconds: int,
+    provider: tuple,
     resource_pattern: tuple,
     action: tuple,
     allow_delegation: bool,
@@ -90,24 +108,28 @@ def create(
     
     Examples:
     
-        # Create a basic policy
+        # Create a provider-scoped policy
         caracal policy create \\
             --principal-id 550e8400-e29b-41d4-a716-446655440000 \\
             --max-validity-seconds 3600 \\
-            --resource-pattern "api:openai:*" \\
-            --action "api_call"
+            --provider openai-main \\
+            --resource-pattern "provider:openai-main:resource:chat.completions" \\
+            --action "provider:openai-main:action:invoke"
         
         # Create a policy with delegation
         caracal policy create \\
             -p 550e8400-e29b-41d4-a716-446655440000 \\
             -v 7200 \\
-            -r "api:*" -r "database:*:read" \\
-            -a "api_call" -a "database_query" \\
+            --provider openai-main \\
+            -r "provider:openai-main:resource:chat.completions" \\
+            -a "provider:openai-main:action:invoke" \\
             --allow-delegation \\
-            --max-delegation-network_distance 2
+            --max-delegation-network-distance 2
         
         # JSON output
-        caracal policy create -p <principal-id> -v 3600 -r "api:*" -a "api_call" --format json
+        caracal policy create -p <principal-id> -v 3600 \\
+          -r "provider:<provider>:resource:<resource>" \\
+          -a "provider:<provider>:action:<action>" --format json
     """
     try:
         # Get CLI context
@@ -130,12 +152,22 @@ def create(
         
         # Validate max_network_distance
         if max_network_distance < 0:
-            click.echo(f"Error: Max delegation network_distance cannot be negative, got {max_network_distance}", err=True)
+            click.echo(f"Error: Max delegation network distance cannot be negative, got {max_network_distance}", err=True)
             sys.exit(1)
         
+        workspace = get_workspace_from_ctx(ctx)
+
         # Convert tuples to lists
+        providers = [str(p) for p in provider]
         resource_patterns = list(resource_pattern)
         actions = list(action)
+
+        validate_provider_scopes(
+            workspace=workspace,
+            resource_scopes=resource_patterns,
+            action_scopes=actions,
+            providers=providers or None,
+        )
         
         # Create database connection
         from caracal.db.connection import get_db_manager
@@ -211,7 +243,7 @@ def create(
                 click.echo(f"Policy ID:              {policy.policy_id}")
                 click.echo(f"Principal ID:           {policy.principal_id}")
                 click.echo(f"Max Mandate Validity:   {policy.max_validity_seconds} seconds")
-                click.echo(f"Resource Patterns:      {', '.join(policy.allowed_resource_patterns)}")
+                click.echo(f"Resource Scopes:        {', '.join(policy.allowed_resource_patterns)}")
                 click.echo(f"Allowed Actions:        {', '.join(policy.allowed_actions)}")
                 click.echo(f"Allow Delegation:       {'Yes' if policy.allow_delegation else 'No'}")
                 click.echo(f"Max Delegation Network Distance:   {policy.max_network_distance}")
