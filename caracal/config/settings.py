@@ -10,6 +10,7 @@ Supports encrypted configuration values using ENC[...] syntax.
 """
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -273,10 +274,15 @@ class MerkleConfig:
 
 @dataclass
 class CompatibilityConfig:
-    """Feature flags for optional infrastructure components."""
-    
-    enable_merkle: bool = False  # If False, skip Merkle tree computation (simpler deployment)
-    enable_redis: bool = False  # If False, skip Redis caching (PostgreSQL-only mode)
+    """Infrastructure compatibility flags.
+
+    Redis caching and Merkle integrity are mandatory in current Caracal
+    deployments. These fields are retained only for backward compatibility
+    with older config files.
+    """
+
+    enable_merkle: bool = True
+    enable_redis: bool = True
 
 
 @dataclass
@@ -350,6 +356,7 @@ def get_default_config() -> CaracalConfig:
     """
     from caracal.flow.workspace import get_workspace
     ws = get_workspace()
+    ws.ensure_dirs()
     home_dir = str(ws.root)
     
     storage = StorageConfig(
@@ -374,12 +381,18 @@ def get_default_config() -> CaracalConfig:
         max_retries=3,
     )
     
-    return CaracalConfig(
+    cfg = CaracalConfig(
         storage=storage,
         defaults=defaults,
         logging=logging,
         performance=performance,
     )
+
+    cfg.compatibility.enable_redis = True
+    cfg.compatibility.enable_merkle = True
+    cfg.merkle.private_key_path = str(ws.keys_dir / "merkle_signing_key.pem")
+    _ensure_merkle_private_key(Path(cfg.merkle.private_key_path))
+    return cfg
 
 
 def load_config(
@@ -485,7 +498,7 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
     # Expand paths with user home directory
     storage = StorageConfig(
         backup_dir=os.path.expanduser(
-            storage_data.get('backup_dir', default_config.storage.backup_dir)
+            storage_data.get('backup_dir') or default_config.storage.backup_dir
         ),
         backup_count=storage_data.get('backup_count', default_config.storage.backup_count),
     )
@@ -501,10 +514,32 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
     logging = LoggingConfig(
         level=logging_data.get('level', default_config.logging.level),
         file=os.path.expanduser(
-            logging_data.get('file', default_config.logging.file)
+            logging_data.get('file') or default_config.logging.file
         ),
         format=logging_data.get('format', default_config.logging.format),
     )
+
+    from caracal.flow.workspace import get_workspace
+    ws = get_workspace()
+    ws.ensure_dirs()
+
+    # Enforce workspace-local operational paths.
+    expected_backup_dir = str(ws.backups_dir)
+    expected_log_file = str(ws.log_path)
+    if Path(storage.backup_dir).expanduser() != ws.backups_dir:
+        logger.warning(
+            "Overriding storage.backup_dir to workspace path",
+            configured=storage.backup_dir,
+            enforced=expected_backup_dir,
+        )
+        storage.backup_dir = expected_backup_dir
+    if Path(logging.file).expanduser() != ws.log_path:
+        logger.warning(
+            "Overriding logging.file to workspace logs directory",
+            configured=logging.file,
+            enforced=expected_log_file,
+        )
+        logging.file = expected_log_file
     
     # Parse performance configuration (optional)
     performance_data = config_data.get('performance', {})
@@ -636,8 +671,8 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
     # Parse compatibility configuration (optional feature flags)
     compatibility_data = config_data.get('compatibility', {})
     compatibility = CompatibilityConfig(
-        enable_merkle=compatibility_data.get('enable_merkle', default_config.compatibility.enable_merkle),
-        enable_redis=compatibility_data.get('enable_redis', default_config.compatibility.enable_redis),
+        enable_merkle=True,
+        enable_redis=True,
     )
     
     # Parse authority enforcement configuration
@@ -648,11 +683,17 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
         compatibility_logging_enabled=authority_enforcement_data.get('compatibility_logging_enabled', default_config.authority_enforcement.compatibility_logging_enabled),
     )
     
-    # Log info about optional features
-    if not compatibility.enable_merkle:
-        logger.info("Merkle tree ledger is disabled - no cryptographic tamper-evidence")
-    if not compatibility.enable_redis:
-        logger.info("Redis caching is disabled - using PostgreSQL for all queries")
+    # Redis and Merkle are mandatory. We still preserve compatibility fields
+    # in-memory for legacy code paths, but they are always forced on.
+    _ = compatibility_data  # Parsed to tolerate legacy config keys.
+
+    if not merkle.private_key_path:
+        from caracal.flow.workspace import get_workspace
+        ws = get_workspace()
+        ws.ensure_dirs()
+        merkle.private_key_path = str(ws.keys_dir / "merkle_signing_key.pem")
+
+    _ensure_merkle_private_key(Path(merkle.private_key_path))
     
     # Log warnings for authority enforcement configuration
     if authority_enforcement.enabled:
@@ -679,6 +720,55 @@ def _build_config_from_dict(config_data: Dict[str, Any]) -> CaracalConfig:
         compatibility=compatibility,
         authority_enforcement=authority_enforcement,
     )
+
+
+def _ensure_merkle_private_key(key_path: Path) -> None:
+    """Create an ES256 private key if it is missing.
+
+    The key is created with owner-only permissions to keep signing material
+    local to the workspace.
+    """
+    key_path = key_path.expanduser()
+    if key_path.exists():
+        return
+
+    key_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        private_key = ec.generate_private_key(ec.SECP256R1())
+        pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        key_path.write_bytes(pem)
+    except Exception:
+        # Fallback for environments where cryptography extras are unavailable.
+        result = subprocess.run(
+            [
+                "openssl",
+                "ecparam",
+                "-genkey",
+                "-name",
+                "prime256v1",
+                "-noout",
+                "-out",
+                str(key_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise InvalidConfigurationError(
+                "Failed to provision Merkle signing key automatically. "
+                "Install 'cryptography' or OpenSSL and retry."
+            )
+
+    os.chmod(key_path, 0o600)
 
 
 def _validate_config(config: CaracalConfig) -> None:
@@ -820,113 +910,109 @@ def _validate_config(config: CaracalConfig) -> None:
     
     # ASE configuration validation removed - delegation settings are now inline in delegation module
     
-    # Validate Merkle configuration
-    if config.compatibility.enable_merkle:
-        # Check if Merkle is minimally configured (requires private_key_path for software backend)
-        _merkle_ready = True
-        if config.merkle.signing_backend == "software" and not config.merkle.private_key_path:
-            logger.warning(
-                "Merkle is enabled but private_key_path is not configured. "
-                "Merkle signing will be disabled until a key path is provided."
-            )
-            config.compatibility.enable_merkle = False
-            _merkle_ready = False
+    # Enforce mandatory services regardless of legacy compatibility toggles.
+    config.compatibility.enable_merkle = True
+    config.compatibility.enable_redis = True
 
-        if _merkle_ready:
-            # Cast to int to handle env var string values
-            try:
-                config.merkle.batch_size_limit = int(config.merkle.batch_size_limit)
-                config.merkle.batch_timeout_seconds = int(config.merkle.batch_timeout_seconds)
-                if config.merkle.key_rotation_enabled:
-                     config.merkle.key_rotation_days = int(config.merkle.key_rotation_days)
-            except (ValueError, TypeError):
-                raise InvalidConfigurationError("Merkle numeric configuration values must be integers")
-            if config.merkle.batch_size_limit < 1:
-                raise InvalidConfigurationError(
-                    f"merkle batch_size_limit must be at least 1, got {config.merkle.batch_size_limit}"
-                )
-            if config.merkle.batch_timeout_seconds < 1:
-                raise InvalidConfigurationError(
-                    f"merkle batch_timeout_seconds must be at least 1, got {config.merkle.batch_timeout_seconds}"
-                )
-            
-            valid_signing_algorithms = ["ES256"]
-            if config.merkle.signing_algorithm not in valid_signing_algorithms:
-                raise InvalidConfigurationError(
-                    f"merkle signing_algorithm must be one of {valid_signing_algorithms}, "
-                    f"got '{config.merkle.signing_algorithm}'"
-                )
-            
-            valid_signing_backends = ["software", "hsm"]
-            if config.merkle.signing_backend not in valid_signing_backends:
-                raise InvalidConfigurationError(
-                    f"merkle signing_backend must be one of {valid_signing_backends}, "
-                    f"got '{config.merkle.signing_backend}'"
-                )
-            
-            # Validate key rotation configuration
-            if config.merkle.key_rotation_enabled:
-                if config.merkle.key_rotation_days < 1:
-                    raise InvalidConfigurationError(
-                        f"merkle key_rotation_days must be at least 1, got {config.merkle.key_rotation_days}"
-                    )
+    # Validate Merkle configuration (mandatory)
+    if config.merkle.signing_backend == "software" and not config.merkle.private_key_path:
+        raise InvalidConfigurationError(
+            "merkle private_key_path is required when signing_backend is 'software'"
+        )
+
+    # Cast to int to handle env var string values
+    try:
+        config.merkle.batch_size_limit = int(config.merkle.batch_size_limit)
+        config.merkle.batch_timeout_seconds = int(config.merkle.batch_timeout_seconds)
+        if config.merkle.key_rotation_enabled:
+             config.merkle.key_rotation_days = int(config.merkle.key_rotation_days)
+    except (ValueError, TypeError):
+        raise InvalidConfigurationError("Merkle numeric configuration values must be integers")
+    if config.merkle.batch_size_limit < 1:
+        raise InvalidConfigurationError(
+            f"merkle batch_size_limit must be at least 1, got {config.merkle.batch_size_limit}"
+        )
+    if config.merkle.batch_timeout_seconds < 1:
+        raise InvalidConfigurationError(
+            f"merkle batch_timeout_seconds must be at least 1, got {config.merkle.batch_timeout_seconds}"
+        )
+
+    valid_signing_algorithms = ["ES256"]
+    if config.merkle.signing_algorithm not in valid_signing_algorithms:
+        raise InvalidConfigurationError(
+            f"merkle signing_algorithm must be one of {valid_signing_algorithms}, "
+            f"got '{config.merkle.signing_algorithm}'"
+        )
+
+    valid_signing_backends = ["software", "hsm"]
+    if config.merkle.signing_backend not in valid_signing_backends:
+        raise InvalidConfigurationError(
+            f"merkle signing_backend must be one of {valid_signing_backends}, "
+            f"got '{config.merkle.signing_backend}'"
+        )
+
+    # Validate key rotation configuration
+    if config.merkle.key_rotation_enabled:
+        if config.merkle.key_rotation_days < 1:
+            raise InvalidConfigurationError(
+                f"merkle key_rotation_days must be at least 1, got {config.merkle.key_rotation_days}"
+            )
     
-    # Validate Redis configuration
-    if config.compatibility.enable_redis:
-        if not config.redis.host:
-            raise InvalidConfigurationError("redis host cannot be empty when Redis is enabled")
-        
-        # Cast to int to handle env var string values
-        try:
-            config.redis.port = int(config.redis.port)
-            config.redis.db = int(config.redis.db)
-            config.redis.metrics_cache_ttl = int(config.redis.metrics_cache_ttl)
-            config.redis.allowlist_cache_ttl = int(config.redis.allowlist_cache_ttl)
-        except (ValueError, TypeError):
-            raise InvalidConfigurationError("Redis numeric configuration values must be integers")
-        
-        if config.redis.port < 1 or config.redis.port > 65535:
+    # Validate Redis configuration (mandatory)
+    if not config.redis.host:
+        raise InvalidConfigurationError("redis host cannot be empty")
+
+    # Cast to int to handle env var string values
+    try:
+        config.redis.port = int(config.redis.port)
+        config.redis.db = int(config.redis.db)
+        config.redis.metrics_cache_ttl = int(config.redis.metrics_cache_ttl)
+        config.redis.allowlist_cache_ttl = int(config.redis.allowlist_cache_ttl)
+    except (ValueError, TypeError):
+        raise InvalidConfigurationError("Redis numeric configuration values must be integers")
+
+    if config.redis.port < 1 or config.redis.port > 65535:
+        raise InvalidConfigurationError(
+            f"redis port must be between 1 and 65535, got {config.redis.port}"
+        )
+
+    if config.redis.db < 0:
+        raise InvalidConfigurationError(
+            f"redis db must be non-negative, got {config.redis.db}"
+        )
+
+    # Validate SSL configuration
+    if config.redis.ssl:
+        if not config.redis.ssl_ca_certs:
             raise InvalidConfigurationError(
-                f"redis port must be between 1 and 65535, got {config.redis.port}"
+                "redis ssl_ca_certs is required when SSL is enabled"
             )
-        
-        if config.redis.db < 0:
+
+        # Client certificate is optional for SSL, but if provided, key must also be provided
+        if config.redis.ssl_certfile and not config.redis.ssl_keyfile:
             raise InvalidConfigurationError(
-                f"redis db must be non-negative, got {config.redis.db}"
+                "redis ssl_keyfile is required when ssl_certfile is provided"
             )
-        
-        # Validate SSL configuration
-        if config.redis.ssl:
-            if not config.redis.ssl_ca_certs:
-                raise InvalidConfigurationError(
-                    "redis ssl_ca_certs is required when SSL is enabled"
-                )
-            
-            # Client certificate is optional for SSL, but if provided, key must also be provided
-            if config.redis.ssl_certfile and not config.redis.ssl_keyfile:
-                raise InvalidConfigurationError(
-                    "redis ssl_keyfile is required when ssl_certfile is provided"
-                )
-            
-            if config.redis.ssl_keyfile and not config.redis.ssl_certfile:
-                raise InvalidConfigurationError(
-                    "redis ssl_certfile is required when ssl_keyfile is provided"
-                )
-        
-        # Validate cache TTL values
-        if config.redis.metrics_cache_ttl < 1:
+
+        if config.redis.ssl_keyfile and not config.redis.ssl_certfile:
             raise InvalidConfigurationError(
-                f"redis metrics_cache_ttl must be at least 1, got {config.redis.metrics_cache_ttl}"
+                "redis ssl_certfile is required when ssl_keyfile is provided"
             )
-        
-        if config.redis.allowlist_cache_ttl < 1:
-            raise InvalidConfigurationError(
-                f"redis allowlist_cache_ttl must be at least 1, got {config.redis.allowlist_cache_ttl}"
-            )
+
+    # Validate cache TTL values
+    if config.redis.metrics_cache_ttl < 1:
+        raise InvalidConfigurationError(
+            f"redis metrics_cache_ttl must be at least 1, got {config.redis.metrics_cache_ttl}"
+        )
+
+    if config.redis.allowlist_cache_ttl < 1:
+        raise InvalidConfigurationError(
+            f"redis allowlist_cache_ttl must be at least 1, got {config.redis.allowlist_cache_ttl}"
+        )
 
     
     # Validate compatibility configuration
-    # Note: enable_merkle, enable_redis are just boolean flags - no validation needed
+    # Compatibility toggles are retained only for legacy config parsing.
     
     # Validate snapshot configuration 
     if config.snapshot.enabled:
