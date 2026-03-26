@@ -30,11 +30,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 _WORKSPACES_DIR = Path.home() / ".caracal" / "workspaces"
-_FALLBACK_ROOT = _WORKSPACES_DIR / "primary"
 _LEGACY_ROOT = Path.home() / ".caracal"
 
 # Global registry file lives outside any individual workspace so it can index all of them.
@@ -176,47 +175,89 @@ class WorkspaceManager:
     @staticmethod
     def list_workspaces(
         registry_path: Optional[Path] = None,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Return the list of registered workspaces.
 
-        Each entry has ``name`` and ``path`` keys.
+        Each entry has ``name``, ``path`` and ``default`` keys.
         """
         rp = registry_path or _REGISTRY_PATH
-        if not rp.exists():
-            return []
-        with open(rp, "r") as fh:
-            data = json.load(fh)
-        return data.get("workspaces", [])
+        workspaces = _load_registry_workspaces(rp)
+        if rp.exists():
+            _save_registry_workspaces(rp, workspaces)
+        return workspaces
 
     @staticmethod
     def register_workspace(
         name: str,
         path: str | Path,
         registry_path: Optional[Path] = None,
+        is_default: Optional[bool] = None,
     ) -> None:
         """Add a workspace to the global registry.
 
-        Duplicates (by path) are silently skipped.
+        Duplicates (by path) are updated in place.
         """
         rp = registry_path or _REGISTRY_PATH
         rp.parent.mkdir(parents=True, exist_ok=True)
-
-        workspaces: list[dict[str, str]] = []
-        if rp.exists():
-            with open(rp, "r") as fh:
-                data = json.load(fh)
-            workspaces = data.get("workspaces", [])
+        workspaces = _load_registry_workspaces(rp)
 
         # Deduplicate by resolved path
         resolved = str(Path(path).resolve())
-        if any(str(Path(w["path"]).resolve()) == resolved for w in workspaces):
-            return
+        existing_idx = next(
+            (
+                idx
+                for idx, ws in enumerate(workspaces)
+                if str(Path(ws.get("path", "")).resolve()) == resolved
+            ),
+            None,
+        )
 
-        workspaces.append({"name": name, "path": str(path)})
-        with open(rp, "w") as fh:
-            json.dump({"workspaces": workspaces}, fh, indent=2)
+        if existing_idx is not None:
+            workspaces[existing_idx]["name"] = name
+            target_idx = existing_idx
+        else:
+            workspaces.append({"name": name, "path": str(path), "default": False})
+            target_idx = len(workspaces) - 1
+
+        # First workspace defaults to default=true unless explicitly set.
+        if is_default is None:
+            is_default = not any(bool(ws.get("default")) for ws in workspaces)
+
+        if is_default:
+            for ws in workspaces:
+                ws["default"] = False
+            workspaces[target_idx]["default"] = True
+        else:
+            workspaces[target_idx]["default"] = bool(workspaces[target_idx].get("default", False))
+
+        _ensure_single_default(workspaces)
+        _save_registry_workspaces(rp, workspaces)
 
     @staticmethod
+    def set_default_workspace(
+        name: str,
+        registry_path: Optional[Path] = None,
+    ) -> bool:
+        """Mark one registered workspace as default by name."""
+        rp = registry_path or _REGISTRY_PATH
+        workspaces = _load_registry_workspaces(rp)
+        if not workspaces:
+            return False
+
+        found = False
+        for ws in workspaces:
+            if ws.get("name") == name:
+                ws["default"] = True
+                found = True
+            else:
+                ws["default"] = False
+
+        if not found:
+            return False
+
+        _save_registry_workspaces(rp, workspaces)
+        return True
+
     def delete_workspace(
         path: str | Path,
         registry_path: Optional[Path] = None,
@@ -239,9 +280,7 @@ class WorkspaceManager:
         if not rp.exists():
             return False
 
-        with open(rp, "r") as fh:
-            data = json.load(fh)
-        workspaces = data.get("workspaces", [])
+        workspaces = _load_registry_workspaces(rp)
 
         # Find and remove by resolved path
         resolved = str(Path(path).resolve())
@@ -294,8 +333,8 @@ class WorkspaceManager:
                     )
             
             # Save updated registry
-            with open(rp, "w") as fh:
-                json.dump({"workspaces": workspaces}, fh, indent=2)
+            _ensure_single_default(workspaces)
+            _save_registry_workspaces(rp, workspaces)
             
             # Optionally delete the directory
             if delete_directory:
@@ -396,6 +435,8 @@ def set_workspace(root: str | Path) -> WorkspaceManager:
 
 def _resolve_initial_workspace_root() -> Path:
     """Resolve initial workspace root from active/default workspace metadata."""
+    _cleanup_legacy_primary_dir()
+
     try:
         from caracal.deployment.config_manager import ConfigManager
 
@@ -406,12 +447,23 @@ def _resolve_initial_workspace_root() -> Path:
     except Exception:
         pass
 
+    # Fallback to default workspace from global registry if available.
+    try:
+        workspaces = WorkspaceManager.list_workspaces()
+        default_ws = next((ws for ws in workspaces if ws.get("default")), None)
+        if default_ws and default_ws.get("path"):
+            return Path(str(default_ws["path"]))
+        if workspaces and workspaces[0].get("path"):
+            return Path(str(workspaces[0]["path"]))
+    except Exception:
+        pass
+
     # Fallback to first valid workspace directory if it exists.
     try:
         if _WORKSPACES_DIR.exists():
             candidates = sorted(
                 p for p in _WORKSPACES_DIR.iterdir()
-                if p.is_dir() and (p / "workspace.toml").exists()
+                if p.is_dir() and (p / "workspace.toml").exists() and p.name != "primary"
             )
             if candidates:
                 return candidates[0]
@@ -419,4 +471,78 @@ def _resolve_initial_workspace_root() -> Path:
         pass
 
     # Last resort for brand-new installs before onboarding creates a workspace.
-    return _FALLBACK_ROOT
+    # Do not create a synthetic "primary" workspace directory.
+    return _LEGACY_ROOT
+
+
+def _cleanup_legacy_primary_dir() -> None:
+    """Remove legacy synthetic ``workspaces/primary`` when it is empty."""
+    primary_dir = _WORKSPACES_DIR / "primary"
+    if not primary_dir.exists() or not primary_dir.is_dir():
+        return
+
+    try:
+        # Only remove when it contains no files and only known runtime dirs.
+        children = list(primary_dir.iterdir())
+        allowed = {"backups", "logs", "cache", "keys"}
+        if any(child.is_file() for child in children):
+            return
+        if any(child.name not in allowed for child in children):
+            return
+
+        import shutil
+
+        shutil.rmtree(primary_dir)
+    except Exception:
+        # Best effort cleanup; never block startup.
+        return
+
+
+def _load_registry_workspaces(registry_path: Path) -> list[dict[str, Any]]:
+    """Load and normalize workspaces registry entries."""
+    if not registry_path.exists():
+        return []
+
+    with open(registry_path, "r") as fh:
+        data = json.load(fh) or {}
+
+    normalized: list[dict[str, Any]] = []
+    for ws in data.get("workspaces", []):
+        if not isinstance(ws, dict):
+            continue
+        name = ws.get("name")
+        path = ws.get("path")
+        if not name or not path:
+            continue
+        normalized.append(
+            {
+                "name": str(name),
+                "path": str(path),
+                "default": bool(ws.get("default", False)),
+            }
+        )
+
+    _ensure_single_default(normalized)
+    return normalized
+
+
+def _save_registry_workspaces(registry_path: Path, workspaces: list[dict[str, Any]]) -> None:
+    """Persist normalized workspaces registry entries."""
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(registry_path, "w") as fh:
+        json.dump({"workspaces": workspaces}, fh, indent=2)
+
+
+def _ensure_single_default(workspaces: list[dict[str, Any]]) -> None:
+    """Ensure at most one default workspace and assign one when possible."""
+    if not workspaces:
+        return
+
+    default_indices = [idx for idx, ws in enumerate(workspaces) if bool(ws.get("default"))]
+    if not default_indices:
+        workspaces[0]["default"] = True
+        return
+
+    keep = default_indices[0]
+    for idx, ws in enumerate(workspaces):
+        ws["default"] = idx == keep
