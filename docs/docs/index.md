@@ -132,7 +132,7 @@ See [CLI Reference](/caracalCore/cliReference/) for complete documentation.
 ## SDK Quick Start
 
 ```python
-from caracal.sdk import AuthorityClient
+from caracal_sdk import AuthorityClient
 
 client = AuthorityClient(
     base_url="https://your-caracal-instance.example.com",

@@ -3,13 +3,12 @@
 Dependency Rule Verification Script.
 
 Checks that the SDK architecture dependency rules are enforced:
- ✅  sdk/enterprise/   → imports from → caracal.core + caracal.sdk
- ❌  caracal.core       → NEVER imports from → sdk/enterprise/
- ❌  caracal.sdk (core) → NEVER imports from → sdk/enterprise/
+ ✅  sdk/python-sdk/src/caracal_sdk/enterprise/ → imports from → caracal.core + caracal_sdk
+ ❌  caracal.core       → NEVER imports from → caracal_sdk.enterprise
+ ❌  caracal_sdk core   → NEVER imports from → caracal_sdk.enterprise
  ❌  No 'if is_enterprise' inside core or SDK base modules
 """
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -24,18 +23,18 @@ def check_illegal_imports(base: Path) -> list[str]:
     """Check for illegal import directions."""
     violations = []
 
-    # Core engine should never import from sdk/enterprise/
+    # Core engine should never import from standalone SDK enterprise stubs.
     core_dir = base / "caracal" / "core"
     if core_dir.exists():
         for f in find_python_files(core_dir):
             content = f.read_text(errors="replace")
-            if re.search(r"from\s+caracal\.sdk\.enterprise", content):
-                violations.append(f"❌ {f.relative_to(base)}: core imports from sdk.enterprise")
-            if re.search(r"import\s+caracal\.sdk\.enterprise", content):
-                violations.append(f"❌ {f.relative_to(base)}: core imports from sdk.enterprise")
+            if re.search(r"from\s+caracal_sdk\.enterprise", content):
+                violations.append(f"❌ {f.relative_to(base)}: core imports from caracal_sdk.enterprise")
+            if re.search(r"import\s+caracal_sdk\.enterprise", content):
+                violations.append(f"❌ {f.relative_to(base)}: core imports from caracal_sdk.enterprise")
 
-    # SDK base modules should never import from sdk/enterprise/
-    sdk_dir = base / "caracal" / "sdk"
+    # SDK base modules should never import from enterprise stubs.
+    sdk_dir = base / "sdk" / "python-sdk" / "src" / "caracal_sdk"
     enterprise_dir = sdk_dir / "enterprise"
     if sdk_dir.exists():
         for f in find_python_files(sdk_dir):
@@ -43,10 +42,10 @@ def check_illegal_imports(base: Path) -> list[str]:
             if enterprise_dir.exists() and str(f).startswith(str(enterprise_dir)):
                 continue
             content = f.read_text(errors="replace")
-            if re.search(r"from\s+caracal\.sdk\.enterprise", content):
-                violations.append(f"❌ {f.relative_to(base)}: sdk.core imports from sdk.enterprise")
-            if re.search(r"import\s+caracal\.sdk\.enterprise", content):
-                violations.append(f"❌ {f.relative_to(base)}: sdk.core imports from sdk.enterprise")
+            if re.search(r"from\s+caracal_sdk\.enterprise", content):
+                violations.append(f"❌ {f.relative_to(base)}: sdk.core imports from caracal_sdk.enterprise")
+            if re.search(r"import\s+caracal_sdk\.enterprise", content):
+                violations.append(f"❌ {f.relative_to(base)}: sdk.core imports from caracal_sdk.enterprise")
 
     return violations
 
@@ -56,9 +55,9 @@ def check_conditional_enterprise(base: Path) -> list[str]:
     violations = []
     pattern = re.compile(r"if\s+.*is_enterprise", re.IGNORECASE)
 
-    for d in ["caracal/core", "caracal/sdk"]:
+    for d in ["caracal/core", "sdk/python-sdk/src/caracal_sdk"]:
         check_dir = base / d
-        enterprise_dir = base / "caracal" / "sdk" / "enterprise"
+        enterprise_dir = base / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "enterprise"
         if not check_dir.exists():
             continue
         for f in find_python_files(check_dir):
@@ -74,7 +73,7 @@ def check_conditional_enterprise(base: Path) -> list[str]:
 def check_node_sdk_imports(base: Path) -> list[str]:
     """Check Node SDK for illegal import directions."""
     violations = []
-    src_dir = base / "sdk-node" / "src"
+    src_dir = base / "sdk" / "node-sdk" / "src"
     enterprise_dir = src_dir / "enterprise"
 
     if not src_dir.exists():
@@ -98,7 +97,7 @@ def check_caracal_enterprise_imports(ecosystem_root: Path) -> list[str]:
       ✅  Can import from  caracal.enterprise.license  (real implementation)
       ✅  Can import from  caracal.enterprise.exceptions
       ✅  Can use relative imports  (from .X import Y)
-      ❌  Should NOT import from  caracal.sdk.enterprise  (extension stubs)
+    ❌  Should NOT import from  caracal_sdk.enterprise  (extension stubs)
       ❌  Should NOT import from  caracal.gateway  (it's a dead redirect)
     """
     violations = []
@@ -112,8 +111,8 @@ def check_caracal_enterprise_imports(ecosystem_root: Path) -> list[str]:
         rel = f.relative_to(ecosystem_root)
 
         # Should not import sdk.enterprise stubs
-        if re.search(r"from\s+caracal\.sdk\.enterprise", content):
-            violations.append(f"❌ {rel}: imports from caracal.sdk.enterprise (use caracal.enterprise.* instead)")
+        if re.search(r"from\s+caracal_sdk\.enterprise", content):
+            violations.append(f"❌ {rel}: imports from caracal_sdk.enterprise (use caracal.enterprise.* instead)")
 
         # Verify no imports from caracal.mcp
         if re.search(r"from\s+caracal\.mcp", content):
@@ -150,8 +149,8 @@ def main():
         sys.exit(1)
     else:
         print("✅ All dependency rules pass!")
-        print("  - Core engine does not import from sdk.enterprise")
-        print("  - SDK base modules do not import from sdk.enterprise")
+        print("  - Core engine does not import from caracal_sdk.enterprise")
+        print("  - SDK base modules do not import from caracal_sdk.enterprise")
         print("  - No conditional enterprise checks in core/sdk")
         print("  - Node SDK core does not import from enterprise")
         print("  - caracalEnterprise/services/ does not import from sdk.enterprise or dead gateway")
