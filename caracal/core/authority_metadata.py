@@ -10,7 +10,7 @@ for authority enforcement that replaces ASE's EconomicMetadata.
 Enhancements over ASE:
 - Focus on authority semantics only (no economic fields)
 - Integration with Caracal's mandate system
-- Support for delegation chains
+- Support for delegation paths
 - Audit trail linking
 """
 
@@ -34,7 +34,7 @@ class AuthorityMetadata:
     Improvements over ASE:
     - Focuses on authority enforcement metadata only
     - Integrates with Caracal's existing mandate system
-    - Supports delegation chains for complex authorization scenarios
+    - Supports delegation paths for complex authorization scenarios
     - Maintains audit trail linkage
     - No economic fields (budget, cost, charges)
     
@@ -44,7 +44,7 @@ class AuthorityMetadata:
         mandate_id: Optional link to Caracal mandate
         audit_reference: Optional reference to audit trail
         delegation_token: Optional JWT delegation token
-        delegation_chain: List of agent IDs in the delegation chain
+        delegation_path: List of agent IDs in the delegation path
         timestamp: When the metadata was created
         signature: Optional cryptographic signature
     """
@@ -53,7 +53,7 @@ class AuthorityMetadata:
     mandate_id: Optional[str] = None
     audit_reference: Optional[AuditReference] = None
     delegation_token: Optional[str] = None
-    delegation_chain: List[str] = field(default_factory=list)
+    delegation_path: List[str] = field(default_factory=list)
     timestamp: Optional[datetime] = None
     signature: Optional[str] = None
     
@@ -75,7 +75,7 @@ class AuthorityMetadata:
             "mandate_id": self.mandate_id,
             "audit_reference": self.audit_reference.to_dict() if self.audit_reference else None,
             "delegation_token": self.delegation_token,
-            "delegation_chain": self.delegation_chain,
+            "delegation_path": self.delegation_path,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "signature": self.signature
         }
@@ -110,7 +110,7 @@ class AuthorityMetadata:
             mandate_id=data.get("mandate_id"),
             audit_reference=audit_reference,
             delegation_token=data.get("delegation_token"),
-            delegation_chain=data.get("delegation_chain", []),
+            delegation_path=data.get("delegation_path", []),
             timestamp=timestamp,
             signature=data.get("signature")
         )
