@@ -772,7 +772,7 @@ def log_mandate_revocation(
     revoker_id: str,
     reason: str,
     cascade: bool = False,
-    child_mandates_revoked: Optional[int] = None,
+    target_mandates_revoked: Optional[int] = None,
     **kwargs: Any,
 ) -> None:
     """
@@ -784,7 +784,7 @@ def log_mandate_revocation(
         revoker_id: Revoker principal ID
         reason: Revocation reason
         cascade: Whether cascade revocation was used
-        child_mandates_revoked: Number of child mandates revoked (if cascade)
+        target_mandates_revoked: Number of target mandates revoked (if cascade)
         **kwargs: Additional context to log
         
     """
@@ -799,8 +799,8 @@ def log_mandate_revocation(
         "timestamp": structlog.processors.TimeStamper(fmt="iso")(None, None, {})["timestamp"],
     }
     
-    if child_mandates_revoked is not None:
-        log_data["child_mandates_revoked"] = child_mandates_revoked
+    if target_mandates_revoked is not None:
+        log_data["target_mandates_revoked"] = target_mandates_revoked
     if correlation_id is not None:
         log_data["correlation_id"] = correlation_id
     
