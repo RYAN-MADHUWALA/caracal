@@ -5,7 +5,7 @@
 # 2. Updating all version references
 # 3. Creating git tag
 # 4. Building Docker images
-# 5. Packaging Helm chart
+# 5. Publishing Python package artifacts
 
 set -e
 
@@ -66,29 +66,8 @@ else
 fi
 echo ""
 
-# Step 4: Package Helm chart
-echo "Step 4: Packaging Helm chart..."
-read -p "Package Helm chart? (y/n) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    cd "$ROOT_DIR/helm"
-    helm package caracal-v03
-    echo "✓ Helm chart packaged: caracal-v03-$VERSION.tgz"
-    
-    read -p "Push Helm chart to registry? (y/n) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        read -p "Enter Helm registry URL (e.g., oci://registry.example.com/charts): " HELM_REGISTRY
-        helm push "caracal-v03-$VERSION.tgz" "$HELM_REGISTRY"
-        echo "✓ Helm chart pushed to registry"
-    fi
-else
-    echo "⊘ Skipped Helm chart packaging"
-fi
-echo ""
-
-# Step 5: PyPI publication
-echo "Step 5: PyPI publication..."
+# Step 4: PyPI publication
+echo "Step 4: PyPI publication..."
 read -p "Build and publish to PyPI? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
