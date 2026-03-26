@@ -45,6 +45,8 @@ class ProviderRequest:
     provider: str
     method: str
     endpoint: str
+    resource: Optional[str] = None
+    action: Optional[str] = None
     params: Dict[str, Any] = field(default_factory=dict)
     headers: Dict[str, str] = field(default_factory=dict)
     body: Optional[Dict[str, Any]] = None
@@ -71,6 +73,9 @@ class ProviderInfo:
     version: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    provider_definition: Optional[str] = None
+    resources: List[str] = field(default_factory=list)
+    actions: List[str] = field(default_factory=list)
 
     @property
     def service_type(self) -> str:
@@ -398,27 +403,63 @@ class GatewayClient:
                 "Authorization": f"Bearer {token}",
                 **request.headers
             }
+            if request.resource:
+                headers["X-Caracal-Provider-Resource"] = request.resource
+            if request.action:
+                headers["X-Caracal-Provider-Action"] = request.action
             
             # Make request based on method
-            if request.method.upper() == "GET":
-                response = await client.get(
-                    url,
-                    params=request.params,
-                    headers=headers,
-                    timeout=30.0
+            try:
+                if request.method.upper() == "GET":
+                    response = await client.get(
+                        url,
+                        params=request.params,
+                        headers=headers,
+                        timeout=30.0
+                    )
+                elif request.method.upper() == "POST":
+                    response = await client.post(
+                        url,
+                        params=request.params,
+                        json=request.body,
+                        headers=headers,
+                        timeout=30.0
+                    )
+                else:
+                    raise GatewayConnectionError(
+                        f"Unsupported HTTP method: {request.method}"
+                    )
+            except httpx.TimeoutException as e:
+                logger.error(
+                    "gateway_call_timeout",
+                    provider=provider,
+                    endpoint=request.endpoint
                 )
-            elif request.method.upper() == "POST":
-                response = await client.post(
-                    url,
-                    params=request.params,
-                    json=request.body,
-                    headers=headers,
-                    timeout=30.0
+                raise GatewayTimeoutError(
+                    f"Gateway request timed out: {e}"
+                ) from e
+            except (httpx.ConnectError, httpx.NetworkError, httpx.HTTPError) as e:
+                logger.error(
+                    "gateway_connection_error",
+                    provider=provider,
+                    endpoint=request.endpoint,
+                    error=str(e)
                 )
-            else:
-                raise GatewayConnectionError(
-                    f"Unsupported HTTP method: {request.method}"
+                await self._queue_request(request, RequestPriority.NORMAL)
+                raise GatewayUnavailableError(
+                    f"Gateway unavailable, request queued: {e}"
+                ) from e
+            except Exception as e:
+                logger.error(
+                    "gateway_connection_error",
+                    provider=provider,
+                    endpoint=request.endpoint,
+                    error=str(e)
                 )
+                await self._queue_request(request, RequestPriority.NORMAL)
+                raise GatewayUnavailableError(
+                    f"Gateway unavailable, request queued: {e}"
+                ) from e
             
             latency_ms = (time.time() - start_time) * 1000
             
@@ -457,7 +498,7 @@ class GatewayClient:
                 latency_ms=latency_ms
             )
             
-        except (GatewayAuthenticationError, GatewayQuotaExceededError):
+        except (GatewayAuthenticationError, GatewayQuotaExceededError, GatewayUnavailableError):
             raise
         
         except httpx.TimeoutException as e:
@@ -532,15 +573,23 @@ class GatewayClient:
                 "Accept": "text/event-stream",
                 **request.headers
             }
+            if request.resource:
+                headers["X-Caracal-Provider-Resource"] = request.resource
+            if request.action:
+                headers["X-Caracal-Provider-Action"] = request.action
             
-            async with client.stream(
+            stream_context = client.stream(
                 request.method.upper(),
                 url,
                 params=request.params,
                 json=request.body if request.method.upper() == "POST" else None,
                 headers=headers,
                 timeout=None  # No timeout for streaming
-            ) as response:
+            )
+            if asyncio.iscoroutine(stream_context):
+                stream_context = await stream_context
+
+            async with stream_context as response:
                 if response.status_code == 401:
                     raise GatewayAuthenticationError(
                         "Gateway authentication failed during streaming"
@@ -647,6 +696,9 @@ class GatewayClient:
                     version=p.get("version"),
                     tags=p.get("tags", []),
                     metadata=p.get("metadata", {}),
+                    provider_definition=p.get("provider_definition"),
+                    resources=p.get("resources", []) or [],
+                    actions=p.get("actions", []) or [],
                 )
                 for p in data["providers"]
             ]
