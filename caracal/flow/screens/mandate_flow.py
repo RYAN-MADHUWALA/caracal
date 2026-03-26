@@ -154,7 +154,7 @@ class MandateFlow:
         
         try:
             from caracal.db.connection import get_db_manager
-            from caracal.db.models import Principal
+            from caracal.db.models import Principal, AuthorityPolicy
             from caracal.core.mandate import MandateManager
             
             db_manager = get_db_manager()
@@ -212,6 +212,22 @@ class MandateFlow:
                     default=3600,
                     min_value=60,
                 )
+
+                issuer_policy = db_session.query(AuthorityPolicy).filter(
+                    AuthorityPolicy.principal_id == issuer_id,
+                    AuthorityPolicy.active == True,
+                ).first()
+
+                policy_depth = 0
+                if issuer_policy and issuer_policy.allow_delegation:
+                    policy_depth = int(issuer_policy.max_delegation_depth)
+
+                delegation_depth = self.prompt.number(
+                    f"Delegation depth (0-{policy_depth})",
+                    default=policy_depth,
+                    min_value=0,
+                    max_value=policy_depth,
+                )
                 
                 # Summary
                 self.console.print()
@@ -221,6 +237,7 @@ class MandateFlow:
                 self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(resource_scope)} resources[/]")
                 self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(action_scope)} actions[/]")
                 self.console.print(f"    Validity: [{Colors.NEUTRAL}]{int(validity_seconds)}s[/]")
+                self.console.print(f"    Delegation Depth: [{Colors.NEUTRAL}]{int(delegation_depth)}[/]")
                 self.console.print()
                 
                 if not self.prompt.confirm("Issue this mandate?", default=True):
@@ -239,11 +256,13 @@ class MandateFlow:
                     resource_scope=resource_scope,
                     action_scope=action_scope,
                     validity_seconds=int(validity_seconds),
+                    delegation_depth=int(delegation_depth),
                 )
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Mandate issued![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Mandate ID: [{Colors.PRIMARY}]{mandate.mandate_id}[/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Valid Until: [{Colors.PRIMARY}]{mandate.valid_until}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Delegation Depth: [{Colors.PRIMARY}]{mandate.delegation_depth}[/]")
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
