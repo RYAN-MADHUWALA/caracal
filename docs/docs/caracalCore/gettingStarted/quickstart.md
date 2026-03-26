@@ -26,7 +26,9 @@ Every provider requires a provider definition.
 
 ```bash
 caracal provider add openai-main \
-  --provider-definition openai \
+  --service-type llm \
+  --resource chat.completions \
+  --action chat.completions:invoke:POST:/v1/chat/completions \
   --credential "$OPENAI_API_KEY"
 ```
 
