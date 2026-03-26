@@ -46,7 +46,6 @@ class MandateDelegationFlow:
                 title="Mandate Delegation",
                 items=[
                     ("graph", "Show Delegation Graph", "Visualize mandate delegation topology"),
-                    ("chain", "View Delegation Chain", "Detailed chain depth, branching, and validity"),
                     ("delegate", "Delegate Mandate", "Create a delegation edge"),
                     ("peer", "Peer Delegate", "Create peer-to-peer delegation"),
                     ("list", "View Delegation Edges", "List edges for a principal"),
@@ -62,8 +61,6 @@ class MandateDelegationFlow:
             
             if action == "graph":
                 self.show_delegation_graph()
-            elif action == "chain":
-                self.view_delegation_chain()
             elif action == "delegate":
                 self.delegate_mandate()
             elif action == "peer":
@@ -176,87 +173,6 @@ class MandateDelegationFlow:
         
         return tree
 
-    def view_delegation_chain(self) -> None:
-        """View detailed delegation chain for a root mandate."""
-        self.console.print(Panel(
-            f"[{Colors.NEUTRAL}]Detailed chain depth, branching, and validity[/]",
-            title=f"[bold {Colors.INFO}]Delegation Chain[/]",
-            border_style=Colors.PRIMARY,
-        ))
-        self.console.print()
-
-        try:
-            from caracal.db.connection import get_db_manager
-            from caracal.db.models import ExecutionMandate
-            from caracal.core.delegation_graph import DelegationGraph
-
-            db_manager = get_db_manager()
-
-            with db_manager.session_scope() as db_session:
-                mandates = db_session.query(ExecutionMandate).all()
-                if not mandates:
-                    self.console.print(f"  [{Colors.DIM}]No mandates exist.[/]")
-                    return
-
-                items = [(str(m.mandate_id), f"Subject {str(m.subject_id)[:8]}...") for m in mandates]
-                root_id_str = self.prompt.uuid("Root Mandate ID (Tab for suggestions)", items)
-                root_id = UUID(root_id_str)
-
-                graph = DelegationGraph(db_session)
-                details = graph.get_chain_details(root_mandate_id=root_id)
-                stats = details.get("stats", {})
-
-                self.console.print(f"  [{Colors.INFO}]Nodes: {stats.get('total_nodes', 0)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Edges: {stats.get('total_edges', 0)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Max Depth: {stats.get('max_depth', 0)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Branch Nodes: {stats.get('branch_nodes', 0)}[/]")
-                self.console.print(f"  [{Colors.INFO}]Leaf Nodes: {stats.get('leaf_nodes', 0)}[/]")
-                validity_style = Colors.SUCCESS if stats.get('is_valid', False) else Colors.ERROR
-                self.console.print(f"  [{validity_style}]Chain Valid: {stats.get('is_valid', False)}[/]")
-                self.console.print()
-
-                rows = details.get("chain", [])
-                if not rows:
-                    self.console.print(f"  [{Colors.DIM}]No chain rows available.[/]")
-                    return
-
-                table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
-                table.add_column("Depth", style=Colors.NEUTRAL)
-                table.add_column("Mandate", style=Colors.DIM)
-                table.add_column("Type", style=Colors.NEUTRAL)
-                table.add_column("Children", style=Colors.NEUTRAL)
-                table.add_column("Paths", style=Colors.NEUTRAL)
-                table.add_column("DelDepth", style=Colors.NEUTRAL)
-                table.add_column("Status", style=Colors.NEUTRAL)
-
-                for row in rows:
-                    status = "Active"
-                    status_style = Colors.SUCCESS
-                    if not row.get("active", False):
-                        status = "Revoked"
-                        status_style = Colors.ERROR
-                    elif row.get("expired", False):
-                        status = "Expired"
-                        status_style = Colors.WARNING
-
-                    table.add_row(
-                        str(row.get("depth", 0)),
-                        str(row.get("mandate_id", ""))[:8] + "...",
-                        str(row.get("principal_type", "unknown")),
-                        str(row.get("child_count", 0)),
-                        str(row.get("path_count", 0)),
-                        str(row.get("delegation_depth", 0)),
-                        f"[{status_style}]{status}[/]",
-                    )
-
-                self.console.print(table)
-
-            db_manager.close()
-
-        except Exception as e:
-            logger.error(f"Error viewing delegation chain: {e}")
-            self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Error: {e}[/]")
-    
     def delegate_mandate(self) -> None:
         """Delegate mandate with scope subset validation."""
         self.console.print(Panel(
@@ -310,24 +226,24 @@ class MandateDelegationFlow:
                 # Select target principal
                 principals = db_session.query(Principal).all()
                 principal_items = [(str(p.principal_id), p.name) for p in principals]
-                child_subject_id_str = self.prompt.uuid("Target Principal ID (Tab for suggestions)", principal_items)
-                child_subject_id = UUID(child_subject_id_str)
+                target_subject_id_str = self.prompt.uuid("Target Principal ID (Tab for suggestions)", principal_items)
+                target_subject_id = UUID(target_subject_id_str)
                 
                 # Child resource scope (must be subset)
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Enter target resource scope (subset of source):[/]")
                 self.console.print(f"  [{Colors.HINT}]Source resources: {', '.join(source_mandate.resource_scope)}[/]")
-                child_resources = []
+                target_resources = []
                 while True:
-                    resource = self.prompt.text(f"Resource {len(child_resources) + 1}", required=False)
+                    resource = self.prompt.text(f"Resource {len(target_resources) + 1}", required=False)
                     if not resource:
                         break
                     if resource not in source_mandate.resource_scope:
                         self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Resource not in source scope. Try again.[/]")
                         continue
-                    child_resources.append(resource)
+                    target_resources.append(resource)
                 
-                if not child_resources:
+                if not target_resources:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one resource is required.[/]")
                     return
                 
@@ -335,17 +251,17 @@ class MandateDelegationFlow:
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Enter target action scope (subset of source):[/]")
                 self.console.print(f"  [{Colors.HINT}]Source actions: {', '.join(source_mandate.action_scope)}[/]")
-                child_actions = []
+                target_actions = []
                 while True:
-                    action = self.prompt.text(f"Action {len(child_actions) + 1}", required=False)
+                    action = self.prompt.text(f"Action {len(target_actions) + 1}", required=False)
                     if not action:
                         break
                     if action not in source_mandate.action_scope:
                         self.console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Action not in source scope. Try again.[/]")
                         continue
-                    child_actions.append(action)
+                    target_actions.append(action)
                 
-                if not child_actions:
+                if not target_actions:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one action is required.[/]")
                     return
                 
@@ -380,9 +296,9 @@ class MandateDelegationFlow:
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Delegation Summary:[/]")
                 self.console.print(f"    Source Mandate: [{Colors.DIM}]{source_mandate_id_str[:8]}...[/]")
-                self.console.print(f"    Target Principal: [{Colors.DIM}]{child_subject_id_str[:8]}...[/]")
-                self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(child_resources)} resources[/]")
-                self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(child_actions)} actions[/]")
+                self.console.print(f"    Target Principal: [{Colors.DIM}]{target_subject_id_str[:8]}...[/]")
+                self.console.print(f"    Resources: [{Colors.NEUTRAL}]{len(target_resources)} resources[/]")
+                self.console.print(f"    Actions: [{Colors.NEUTRAL}]{len(target_actions)} actions[/]")
                 self.console.print(f"    Validity: [{Colors.NEUTRAL}]{int(validity_seconds)}s[/]")
                 self.console.print(f"    Child Delegation Depth: [{Colors.NEUTRAL}]{source_depth - 1}[/]")
                 if context_tags:
@@ -401,9 +317,9 @@ class MandateDelegationFlow:
                 
                 delegated_mandate = mandate_manager.delegate_mandate(
                     source_mandate_id=source_mandate_id,
-                    child_subject_id=child_subject_id,
-                    resource_scope=child_resources,
-                    action_scope=child_actions,
+                    target_subject_id=target_subject_id,
+                    resource_scope=target_resources,
+                    action_scope=target_actions,
                     validity_seconds=int(validity_seconds),
                     context_tags=context_tags if context_tags else None,
                 )
@@ -415,7 +331,7 @@ class MandateDelegationFlow:
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
                         "delegate_mandate",
-                        f"Delegated mandate to {child_subject_id_str[:8]}...",
+                        f"Delegated mandate to {target_subject_id_str[:8]}...",
                     ))
             
             db_manager.close()

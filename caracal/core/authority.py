@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from caracal.core.crypto import verify_mandate_signature
-from caracal.db.models import ExecutionMandate, Principal, DelegationEdgeModel
+from caracal.db.models import ExecutionMandate, Principal
 from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -505,30 +505,29 @@ class AuthorityEvaluator:
             )
             return decision
         
-        # Validate delegation chain if applicable (graph-based)
-        if self.delegation_graph:
-            chain_valid = self.delegation_graph.check_delegation_chain(mandate.mandate_id)
-            if not chain_valid:
-                reason = f"Delegation chain is invalid for mandate {mandate.mandate_id}"
-                logger.warning(reason)
-                decision = AuthorityDecision(
-                    allowed=False,
-                    reason=reason,
-                    mandate_id=mandate.mandate_id,
-                    principal_id=mandate.subject_id,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                self._record_ledger_event(
-                    event_type="denied",
-                    principal_id=mandate.subject_id,
-                    mandate_id=mandate.mandate_id,
-                    decision="denied",
-                    denial_reason=reason,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                return decision
+        # Validate delegation chain (always graph-based)
+        chain_valid = self.check_delegation_chain(mandate)
+        if not chain_valid:
+            reason = f"Delegation graph path is invalid for mandate {mandate.mandate_id}"
+            logger.warning(reason)
+            decision = AuthorityDecision(
+                allowed=False,
+                reason=reason,
+                mandate_id=mandate.mandate_id,
+                principal_id=mandate.subject_id,
+                requested_action=requested_action,
+                requested_resource=requested_resource
+            )
+            self._record_ledger_event(
+                event_type="denied",
+                principal_id=mandate.subject_id,
+                mandate_id=mandate.mandate_id,
+                decision="denied",
+                denial_reason=reason,
+                requested_action=requested_action,
+                requested_resource=requested_resource
+            )
+            return decision
         
         # All checks passed - allow the action
         reason = f"Mandate {mandate.mandate_id} is valid for action '{requested_action}' on resource '{requested_resource}'"
@@ -557,90 +556,20 @@ class AuthorityEvaluator:
         mandate: ExecutionMandate
     ) -> bool:
         """
-        Validate delegation chain via the graph.
-
-        Uses delegation_graph if available, otherwise checks inbound edges
-        directly.
-
-        Returns True if chain is valid, False otherwise.
+        Validate delegation graph path for a mandate.
 
         Args:
-            mandate: The mandate to check the delegation chain for
+            mandate: The mandate to validate against delegation graph topology
 
         Returns:
-            True if delegation chain is valid, False otherwise
+            True if delegation graph path is valid, False otherwise
         """
-        logger.info(f"Checking delegation chain for mandate {mandate.mandate_id}")
-        
-        if self.delegation_graph:
-            return self.delegation_graph.check_delegation_chain(mandate.mandate_id)
-        
-        # Fallback: check inbound edges directly
-        inbound_edges = self.db_session.query(DelegationEdgeModel).filter(
-            DelegationEdgeModel.target_mandate_id == mandate.mandate_id,
-            DelegationEdgeModel.revoked == False,
-        ).all()
-        
-        # No inbound edges means this is a root mandate — valid
-        if not inbound_edges:
-            logger.debug(f"Mandate {mandate.mandate_id} is a root mandate (no inbound edges)")
-            return True
-        
-        now = datetime.utcnow()
-        
-        for edge in inbound_edges:
-            # Check if edge is expired
-            if edge.expires_at and now > edge.expires_at:
-                logger.warning(f"Delegation edge {edge.edge_id} is expired")
-                return False
-            
-            # Check source mandate
-            source_mandate = self.db_session.query(ExecutionMandate).filter(
-                ExecutionMandate.mandate_id == edge.source_mandate_id
-            ).first()
-            
-            if not source_mandate:
-                logger.warning(f"Source mandate {edge.source_mandate_id} not found")
-                return False
-            
-            if source_mandate.revoked:
-                logger.warning(f"Source mandate {edge.source_mandate_id} is revoked")
-                return False
-            
-            if now > source_mandate.valid_until:
-                logger.warning(f"Source mandate {edge.source_mandate_id} is expired")
-                return False
-            
-            if now < source_mandate.valid_from:
-                logger.warning(f"Source mandate {edge.source_mandate_id} is not yet valid")
-                return False
-            
-            # Validate scope constraints
-            for child_resource in mandate.resource_scope:
-                match_found = False
-                for parent_resource in source_mandate.resource_scope:
-                    if self._match_pattern(child_resource, parent_resource):
-                        match_found = True
-                        break
-                if not match_found:
-                    logger.warning(
-                        f"Mandate {mandate.mandate_id} has resource '{child_resource}' "
-                        f"not in source scope {source_mandate.resource_scope}"
-                    )
-                    return False
-            
-            for child_action in mandate.action_scope:
-                match_found = False
-                for parent_action in source_mandate.action_scope:
-                    if self._match_pattern(child_action, parent_action):
-                        match_found = True
-                        break
-                if not match_found:
-                    logger.warning(
-                        f"Mandate {mandate.mandate_id} has action '{child_action}' "
-                        f"not in source scope {source_mandate.action_scope}"
-                    )
-                    return False
-        
-        logger.info(f"Delegation chain is valid for mandate {mandate.mandate_id}")
-        return True
+        logger.info(f"Checking delegation graph path for mandate {mandate.mandate_id}")
+
+        from caracal.core.delegation_graph import DelegationGraph
+
+        graph = self.delegation_graph or DelegationGraph(self.db_session)
+        is_valid = graph.check_delegation_chain(mandate.mandate_id)
+        if is_valid:
+            logger.info(f"Delegation graph path is valid for mandate {mandate.mandate_id}")
+        return is_valid
