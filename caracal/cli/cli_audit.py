@@ -89,15 +89,15 @@ def _workflow_gaps(root_command: click.Group) -> List[str]:
     gaps: List[str] = []
 
     for top_level, subcommand in _required_workflow_commands():
-        parent = root_command.commands.get(top_level)
-        if parent is None:
+        source = root_command.commands.get(top_level)
+        if source is None:
             gaps.append(f"Missing top-level command: {top_level}")
             continue
 
         if not subcommand:
             continue
 
-        if not isinstance(parent, click.Group) or subcommand not in parent.commands:
+        if not isinstance(source, click.Group) or subcommand not in source.commands:
             gaps.append(f"Missing workflow subcommand: {top_level} {subcommand}")
 
     return gaps
@@ -418,7 +418,7 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
         "caracal system db init-db",
         "caracal agent register --name ops-agent --email ops@example.com",
         "caracal policy create --principal-id <principal-uuid> --max-validity-seconds 3600 --resource-pattern 'api:*' --action 'api_call'",
-        "caracal delegation generate --source-id <parent-uuid> --target-id <child-uuid> --authority-scope 100",
+        "caracal delegation generate --source-id <source-uuid> --target-id <target-uuid> --authority-scope 100",
         "caracal authority issue --issuer-id <issuer-uuid> --subject-id <subject-uuid> --resource-scope 'api:*' --action-scope 'api_call' --validity-seconds 3600",
         "caracal authority validate --mandate-id <mandate-uuid> --action api_call --resource api:openai:gpt-4",
         "caracal audit export",

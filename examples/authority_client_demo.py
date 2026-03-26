@@ -52,15 +52,15 @@ def demo_synchronous_client():
         
         # 3. Delegate the mandate
         print("3. Delegating mandate to target agent...")
-        child_mandate = client.delegate_mandate(
-            parent_mandate_id=mandate['mandate_id'],
-            child_subject_id="child-agent-principal-id",
-            resource_scope=["api:openai:gpt-3.5"],  # Subset of parent
+        target_mandate = client.delegate_mandate(
+            source_mandate_id=mandate['mandate_id'],
+            target_subject_id="target-agent-principal-id",
+            resource_scope=["api:openai:gpt-3.5"],  # Subset of source
             action_scope=["api_call"],
             validity_seconds=1800  # 30 minutes
         )
-        print(f"   Child mandate ID: {child_mandate['mandate_id']}")
-        print(f"   Delegation depth: {child_mandate['delegation_depth']}\n")
+        print(f"   Target mandate ID: {target_mandate['mandate_id']}")
+        print(f"   Delegation depth: {target_mandate['network_distance']}\n")
         
         # 4. Query ledger events
         print("4. Querying authority ledger...")
@@ -84,7 +84,7 @@ def demo_synchronous_client():
             mandate_id=mandate['mandate_id'],
             revoker_id="admin-principal-id",
             reason="Demo completed",
-            cascade=True  # Revoke child mandates too
+            cascade=True  # Revoke target mandates too
         )
         print(f"   Revoked {revoke_result['revoked_count']} mandate(s)\n")
         
