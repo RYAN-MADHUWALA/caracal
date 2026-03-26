@@ -9,11 +9,11 @@ Modules kept here (real implementation logic used by TUI/gateway):
     - ``sync.py``          — EnterpriseSyncClient
     - ``exceptions.py``    — EnterpriseFeatureRequired
 
-Extension stubs (moved to ``caracal.sdk.enterprise``):
+Extension stubs (moved to ``caracal_sdk.enterprise``):
     - ComplianceExtension, AnalyticsExtension, WorkflowsExtension,
       SSOExtension, LicenseExtension, SyncExtension
 
-New code should import extensions from ``caracal.sdk.enterprise.*``.
+New code should import extensions from ``caracal_sdk.enterprise.*``.
 """
 
 import warnings
@@ -34,12 +34,12 @@ from caracal.enterprise.license import (
 
 def __getattr__(name: str):
     _redirected = {
-        "ComplianceExtension": "caracal.sdk.enterprise.compliance",
-        "AnalyticsExtension": "caracal.sdk.enterprise.analytics",
-        "WorkflowsExtension": "caracal.sdk.enterprise.workflows",
-        "SSOExtension": "caracal.sdk.enterprise.sso",
-        "LicenseExtension": "caracal.sdk.enterprise.license",
-        "SyncExtension": "caracal.sdk.enterprise.sync",
+        "ComplianceExtension": "caracal_sdk.enterprise.compliance",
+        "AnalyticsExtension": "caracal_sdk.enterprise.analytics",
+        "WorkflowsExtension": "caracal_sdk.enterprise.workflows",
+        "SSOExtension": "caracal_sdk.enterprise.sso",
+        "LicenseExtension": "caracal_sdk.enterprise.license",
+        "SyncExtension": "caracal_sdk.enterprise.sync",
     }
     if name in _redirected:
         import importlib
