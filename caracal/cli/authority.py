@@ -117,6 +117,13 @@ def get_authority_evaluator(config):
     help='Validity period in seconds',
 )
 @click.option(
+    '--delegation-depth',
+    '-d',
+    type=int,
+    default=None,
+    help='Delegation depth for this mandate (default: policy maximum)',
+)
+@click.option(
     '--format',
     '-f',
     type=click.Choice(['table', 'json'], case_sensitive=False),
@@ -131,6 +138,7 @@ def issue(
     resource_scope: tuple,
     action_scope: tuple,
     validity_seconds: int,
+    delegation_depth: Optional[int],
     format: str,
 ):
     """
@@ -176,6 +184,10 @@ def issue(
         if validity_seconds <= 0:
             click.echo(f"Error: Validity seconds must be positive, got {validity_seconds}", err=True)
             sys.exit(1)
+
+        if delegation_depth is not None and delegation_depth < 0:
+            click.echo(f"Error: Delegation depth cannot be negative, got {delegation_depth}", err=True)
+            sys.exit(1)
         
         # Convert tuples to lists
         resource_scope_list = list(resource_scope)
@@ -191,7 +203,8 @@ def issue(
                 subject_id=subject_uuid,
                 resource_scope=resource_scope_list,
                 action_scope=action_scope_list,
-                validity_seconds=validity_seconds
+                validity_seconds=validity_seconds,
+                delegation_depth=delegation_depth,
             )
             
             # Commit transaction
@@ -210,7 +223,8 @@ def issue(
                     'signature': mandate.signature,
                     'created_at': mandate.created_at.isoformat(),
                     'revoked': mandate.revoked,
-                    'delegation_type': mandate.delegation_type
+                    'delegation_type': mandate.delegation_type,
+                    'delegation_depth': mandate.delegation_depth,
                 }
                 click.echo(json.dumps(output, indent=2))
             else:
@@ -225,6 +239,7 @@ def issue(
                 click.echo(f"Resource Scope:   {', '.join(mandate.resource_scope)}")
                 click.echo(f"Action Scope:     {', '.join(mandate.action_scope)}")
                 click.echo(f"Delegation Type:  {mandate.delegation_type}")
+                click.echo(f"Delegation Depth: {mandate.delegation_depth}")
                 click.echo(f"Created:          {mandate.created_at}")
         
         finally:
@@ -603,6 +618,7 @@ def list_mandates(
                         'action_scope': m.action_scope,
                         'revoked': m.revoked,
                         'delegation_type': m.delegation_type,
+                        'delegation_depth': m.delegation_depth,
                         'created_at': m.created_at.isoformat()
                     }
                     for m in mandates
@@ -614,8 +630,8 @@ def list_mandates(
                 click.echo()
                 
                 # Print header
-                click.echo(f"{'Mandate ID':<38}  {'Subject ID':<38}  {'Valid Until':<20}  {'Status':<10}  Type")
-                click.echo("-" * 130)
+                click.echo(f"{'Mandate ID':<38}  {'Subject ID':<38}  {'Valid Until':<20}  {'Status':<10}  Type  Depth")
+                click.echo("-" * 140)
                 
                 # Print mandates
                 for m in mandates:
@@ -635,7 +651,8 @@ def list_mandates(
                         f"{str(m.subject_id):<38}  "
                         f"{valid_until_str:<20}  "
                         f"{status:<10}  "
-                        f"{m.delegation_type}"
+                        f"{m.delegation_type:<4}  "
+                        f"{(m.delegation_depth if m.delegation_depth is not None else 0)}"
                     )
         
         finally:
@@ -788,6 +805,7 @@ def delegate(
                     'resource_scope': child_mandate.resource_scope,
                     'action_scope': child_mandate.action_scope,
                     'delegation_type': child_mandate.delegation_type,
+                    'delegation_depth': child_mandate.delegation_depth,
                     'context_tags': child_mandate.context_tags,
                     'created_at': child_mandate.created_at.isoformat()
                 }
@@ -804,6 +822,7 @@ def delegate(
                 click.echo(f"Resource Scope:        {', '.join(child_mandate.resource_scope)}")
                 click.echo(f"Action Scope:          {', '.join(child_mandate.action_scope)}")
                 click.echo(f"Delegation Type:       {child_mandate.delegation_type}")
+                click.echo(f"Delegation Depth:      {child_mandate.delegation_depth}")
                 if child_mandate.context_tags:
                     click.echo(f"Context Tags:          {', '.join(child_mandate.context_tags)}")
         
