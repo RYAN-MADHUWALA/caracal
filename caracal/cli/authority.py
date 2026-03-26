@@ -943,6 +943,101 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
         sys.exit(1)
 
 
+@click.command('chain')
+@click.option(
+    '--root-mandate-id',
+    '-m',
+    required=True,
+    help='Root mandate ID to inspect delegation chain from (UUID)',
+)
+@click.option(
+    '--format',
+    '-f',
+    type=click.Choice(['table', 'json'], case_sensitive=False),
+    default='table',
+    help='Output format (default: table)',
+)
+@click.pass_context
+def chain(ctx, root_mandate_id: str, format: str):
+    """
+    Show detailed delegation chain metrics for a root mandate.
+
+    Includes depth, branching, path counts, per-node validity, and
+    delegation depth remaining.
+    """
+    try:
+        cli_ctx = ctx.obj
+
+        try:
+            root_uuid = UUID(root_mandate_id)
+        except ValueError as e:
+            click.echo(f"Error: Invalid mandate ID format: {e}", err=True)
+            sys.exit(1)
+
+        from caracal.db.connection import get_db_manager
+        from caracal.core.delegation_graph import DelegationGraph
+
+        db_manager = get_db_manager(cli_ctx.config)
+
+        try:
+            session = db_manager.get_session()
+            graph = DelegationGraph(session)
+            details = graph.get_chain_details(root_mandate_id=root_uuid)
+
+            if format.lower() == 'json':
+                click.echo(json.dumps(details, indent=2))
+            else:
+                stats = details.get('stats', {})
+                click.echo(
+                    "Delegation Chain "
+                    f"(nodes={stats.get('total_nodes', 0)}, "
+                    f"edges={stats.get('total_edges', 0)}, "
+                    f"max_depth={stats.get('max_depth', 0)}, "
+                    f"branches={stats.get('branch_nodes', 0)}, "
+                    f"leaves={stats.get('leaf_nodes', 0)}, "
+                    f"valid={'yes' if stats.get('is_valid') else 'no'})"
+                )
+                click.echo()
+
+                rows = details.get('chain', [])
+                if not rows:
+                    click.echo("No chain nodes found.")
+                    return
+
+                click.echo(
+                    f"{'Depth':<5}  {'Mandate ID':<38}  {'Type':<8}  {'Children':<8}  {'Paths':<5}  {'DelDepth':<8}  {'Status'}"
+                )
+                click.echo("-" * 110)
+
+                for row in rows:
+                    status = "active"
+                    if not row.get('active'):
+                        status = "revoked"
+                    elif row.get('expired'):
+                        status = "expired"
+
+                    click.echo(
+                        f"{row.get('depth', 0):<5}  "
+                        f"{row.get('mandate_id', ''):<38}  "
+                        f"{row.get('principal_type', 'unknown'):<8}  "
+                        f"{row.get('child_count', 0):<8}  "
+                        f"{row.get('path_count', 0):<5}  "
+                        f"{row.get('delegation_depth', 0):<8}  "
+                        f"{status}"
+                    )
+
+        finally:
+            db_manager.close()
+
+    except CaracalError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Unexpected error: {e}", err=True)
+        logger.error(f"Failed to show delegation chain: {e}", exc_info=True)
+        sys.exit(1)
+
+
 @click.command('peer-delegate')
 @click.option(
     '--source-mandate-id',
