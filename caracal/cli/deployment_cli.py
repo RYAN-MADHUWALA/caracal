@@ -387,6 +387,17 @@ def workspace_list(format: str):
     try:
         config_manager = ConfigManager()
         workspaces = config_manager.list_workspaces()
+
+        # Backward compatibility: Flow can register workspaces that don't yet
+        # have deployment metadata (workspace.toml).
+        flow_only_workspaces: List[Dict[str, Any]] = []
+        if not workspaces:
+            try:
+                from caracal.flow.workspace import WorkspaceManager
+
+                flow_only_workspaces = WorkspaceManager.list_workspaces()
+            except Exception:
+                flow_only_workspaces = []
         
         if format == "json":
             workspace_data = []
@@ -396,11 +407,24 @@ def workspace_list(format: str):
                     "name": ws,
                     "is_default": config.is_default,
                     "sync_enabled": config.sync_enabled,
-                    "created_at": config.created_at.isoformat()
+                    "created_at": config.created_at.isoformat(),
+                    "source": "deployment"
                 })
+
+            if not workspace_data and flow_only_workspaces:
+                for ws in flow_only_workspaces:
+                    workspace_data.append({
+                        "name": ws.get("name", "unknown"),
+                        "is_default": False,
+                        "sync_enabled": False,
+                        "created_at": None,
+                        "source": "flow_registry",
+                        "path": ws.get("path"),
+                    })
+
             click.echo(json.dumps({"workspaces": workspace_data}))
         else:
-            if not workspaces:
+            if not workspaces and not flow_only_workspaces:
                 console.print("No workspaces found.")
                 return
             
@@ -409,6 +433,7 @@ def workspace_list(format: str):
             table.add_column("Default", style="green")
             table.add_column("Sync", style="yellow")
             table.add_column("Created", style="blue")
+            table.add_column("Source", style="magenta")
             
             for ws in workspaces:
                 config = config_manager.get_workspace_config(ws)
@@ -416,8 +441,19 @@ def workspace_list(format: str):
                     ws,
                     "✓" if config.is_default else "",
                     "✓" if config.sync_enabled else "",
-                    config.created_at.strftime("%Y-%m-%d %H:%M")
+                    config.created_at.strftime("%Y-%m-%d %H:%M"),
+                    "deployment",
                 )
+
+            if not workspaces and flow_only_workspaces:
+                for ws in flow_only_workspaces:
+                    table.add_row(
+                        str(ws.get("name", "unknown")),
+                        "",
+                        "",
+                        "-",
+                        "flow registry",
+                    )
             
             console.print(table)
             
