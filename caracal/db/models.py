@@ -305,22 +305,22 @@ class ExecutionMandate(Base):
     
     # Graph-based delegation
     delegation_type = Column(
-        String(50), nullable=False, default="hierarchical",
-        server_default="hierarchical"
-    )  # hierarchical, peer
+        String(50), nullable=False, default="directed",
+        server_default="directed"
+    )  # directed, peer
     context_tags = Column(JSONB, nullable=True)  # Context tags for dynamic filtering
     
     # Intent constraint (optional)
     intent_hash = Column(String(64), nullable=True)  # SHA-256 hash of intent
     
     # Delegation hierarchy
-    parent_mandate_id = Column(
+    source_mandate_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("execution_mandates.mandate_id"),
         nullable=True,
         index=True,
     )
-    delegation_depth = Column(Integer, nullable=True, default=0)
+    network_distance = Column(Integer, nullable=True, default=0)
     
     # Relationships
     issuer = relationship("Principal", foreign_keys=[issuer_id], backref="issued_mandates")
@@ -365,8 +365,8 @@ class DelegationEdgeModel(Base):
     
     # Delegation metadata
     delegation_type = Column(
-        String(50), nullable=False, default="hierarchical"
-    )  # hierarchical, peer
+        String(50), nullable=False, default="directed"
+    )  # directed, peer
     context_tags = Column(JSONB, nullable=True)  # ["production", "read-only"]
     
     # Validity
@@ -504,7 +504,7 @@ class AuthorityPolicy(Base):
     
     # Delegation constraints
     allow_delegation = Column(Boolean, nullable=False, default=False)
-    max_delegation_depth = Column(Integer, nullable=False, default=0)
+    max_network_distance = Column(Integer, nullable=False, default=0)
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
