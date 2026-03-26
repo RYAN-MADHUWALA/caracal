@@ -441,7 +441,7 @@ class AuthorityClient:
             mandate_id: Mandate identifier to revoke
             revoker_id: Principal ID of the revoker
             reason: Reason for revocation
-            cascade: If True, revoke all child mandates (default: True)
+            cascade: If True, revoke all target mandates (default: True)
             
         Returns:
             Dictionary containing revocation confirmation with fields:
@@ -450,7 +450,7 @@ class AuthorityClient:
             - revoked_at: Revocation timestamp
             - revocation_reason: Reason for revocation
             - cascade: Whether cascade was applied
-            - revoked_count: Number of mandates revoked (including children if cascade=True)
+            - revoked_count: Number of mandates revoked (including targetren if cascade=True)
             
         Raises:
             ConnectionError: If request fails
@@ -628,31 +628,31 @@ class AuthorityClient:
     def delegate_mandate(
         self,
         source_mandate_id: str,
-        child_subject_id: str,
+        target_subject_id: str,
         resource_scope: List[str],
         action_scope: List[str],
         validity_seconds: int,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Create a delegated mandate from a parent mandate.
+        Create a delegated mandate from a source mandate.
         
-        Sends a POST request to /mandates/delegate endpoint to create a child mandate
-        with scope and validity constrained by the parent.
+        Sends a POST request to /mandates/delegate endpoint to create a target mandate
+        with scope and validity constrained by the source.
         
         Args:
             source_mandate_id: Source mandate identifier
-            child_subject_id: Principal ID for the child mandate subject
-            resource_scope: Resource scope for child (must be subset of parent)
-            action_scope: Action scope for child (must be subset of parent)
-            validity_seconds: Validity period for child (must be within parent validity)
+            target_subject_id: Principal ID for the target mandate subject
+            resource_scope: Resource scope for target (must be subset of source)
+            action_scope: Action scope for target (must be subset of source)
+            validity_seconds: Validity period for target (must be within source validity)
             metadata: Optional additional metadata
             
         Returns:
             Dictionary containing the delegated execution mandate with fields:
             - mandate_id: Unique mandate identifier
-            - issuer_id: Issuer principal ID (from parent)
-            - subject_id: Child subject principal ID
+            - issuer_id: Issuer principal ID (from source)
+            - subject_id: target subject principal ID
             - valid_from: Start of validity period
             - valid_until: End of validity period
             - resource_scope: List of resource patterns
@@ -668,20 +668,20 @@ class AuthorityClient:
         
         Example:
             >>> client = AuthorityClient(base_url="http://localhost:8000", api_key="secret")
-            >>> child_mandate = client.delegate_mandate(
-            ...     source_mandate_id="parent-uuid",
-            ...     child_subject_id="child-agent-uuid",
-            ...     resource_scope=["api:openai:gpt-3.5"],  # Subset of parent
+            >>> target_mandate = client.delegate_mandate(
+            ...     source_mandate_id="source-uuid",
+            ...     target_subject_id="target-agent-uuid",
+            ...     resource_scope=["api:openai:gpt-3.5"],  # Subset of source
             ...     action_scope=["api_call"],
             ...     validity_seconds=1800  # 30 minutes
             ... )
-            >>> print(f"Delegated mandate: {child_mandate['mandate_id']}")
+            >>> print(f"Delegated mandate: {target_mandate['mandate_id']}")
         """
         # Validate parameters
         if not source_mandate_id:
             raise SDKConfigurationError("source_mandate_id is required")
-        if not child_subject_id:
-            raise SDKConfigurationError("child_subject_id is required")
+        if not target_subject_id:
+            raise SDKConfigurationError("target_subject_id is required")
         if not resource_scope:
             raise SDKConfigurationError("resource_scope must not be empty")
         if not action_scope:
@@ -691,13 +691,13 @@ class AuthorityClient:
         
         logger.info(
             f"Delegating mandate: source={source_mandate_id}, "
-            f"child_subject={child_subject_id}, validity={validity_seconds}s"
+            f"target_subject={target_subject_id}, validity={validity_seconds}s"
         )
         
         # Prepare request data
         request_data = {
             "source_mandate_id": source_mandate_id,
-            "child_subject_id": child_subject_id,
+            "target_subject_id": target_subject_id,
             "resource_scope": resource_scope,
             "action_scope": action_scope,
             "validity_seconds": validity_seconds,
@@ -838,7 +838,7 @@ class AuthorityClient:
         allowed_resource_patterns: List[str],
         allowed_actions: List[str],
         max_validity_seconds: int = 86400,
-        delegation_depth: int = 0,
+        network_distance: int = 0,
     ) -> Dict[str, Any]:
         """
         Create an authority policy for a principal.
@@ -851,7 +851,7 @@ class AuthorityClient:
                 (e.g. ``["read", "write"]``).
             max_validity_seconds: Maximum mandate lifetime under this policy
                 (default 86400 = 24 h).
-            delegation_depth: How many levels of sub-delegation are allowed
+            network_distance: How many levels of sub-delegation are allowed
                 (default 0 = no delegation).
 
         Returns:
@@ -866,7 +866,7 @@ class AuthorityClient:
             ...     allowed_resource_patterns=["api:external/*"],
             ...     allowed_actions=["read", "write"],
             ...     max_validity_seconds=3600,
-            ...     delegation_depth=2,
+            ...     network_distance=2,
             ... )
             >>> print(policy["policy_id"])
         """
@@ -877,8 +877,8 @@ class AuthorityClient:
             "allowed_resource_patterns": allowed_resource_patterns,
             "allowed_actions": allowed_actions,
             "max_validity_seconds": max_validity_seconds,
-            "allow_delegation": delegation_depth > 0,
-            "max_delegation_depth": delegation_depth,
+            "allow_delegation": network_distance > 0,
+            "max_network_distance": network_distance,
         }
 
         response = self._make_request(

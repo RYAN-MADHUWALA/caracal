@@ -87,7 +87,7 @@ class AuthoritySessionData:
     selected_principal_id: Optional[str] = None
     selected_mandate_id: Optional[str] = None
     selected_policy_id: Optional[str] = None
-    current_delegation_chain: list[str] = field(default_factory=list)
+    current_delegation_path: list[str] = field(default_factory=list)
     
     def set_principal(self, principal_id: str) -> None:
         """Set the currently selected principal."""
@@ -101,16 +101,16 @@ class AuthoritySessionData:
         """Set the currently selected policy."""
         self.selected_policy_id = policy_id
     
-    def set_delegation_chain(self, chain: list[str]) -> None:
-        """Set the current delegation chain."""
-        self.current_delegation_chain = chain
+    def set_delegation_path(self, path: list[str]) -> None:
+        """Set the current delegation path."""
+        self.current_delegation_path = path
     
     def clear(self) -> None:
         """Clear all authority session data."""
         self.selected_principal_id = None
         self.selected_mandate_id = None
         self.selected_policy_id = None
-        self.current_delegation_chain = []
+        self.current_delegation_path = []
 
 
 @dataclass
@@ -188,7 +188,7 @@ class StatePersistence:
     def save(self, state: FlowState) -> None:
         """Save state to disk."""
         # Ensure directory exists
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.source.mkdir(sources=True, exist_ok=True)
         
         # Serialize and save (exclude session data)
         data = self._serialize(state)
