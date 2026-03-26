@@ -979,7 +979,16 @@ def _build_oss_broker(config_manager: ConfigManager, workspace: str):
 
 @provider_group.command(name="add")
 @click.argument("name")
-@click.option("--service-type", default="api", show_default=True, help="Service type (llm, api, database, infra, internal)")
+@click.option(
+    "--service-type",
+    default="api",
+    show_default=True,
+    help=(
+        "Service type hint (free-form; common values include application, ai, data, "
+        "identity, messaging, storage, payments, developer-tools, observability, "
+        "infrastructure, internal)"
+    ),
+)
 @click.option(
     "--provider-definition",
     default=None,
