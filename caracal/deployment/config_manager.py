@@ -631,6 +631,63 @@ class ConfigManager:
                 workspaces.append(item.name)
         
         return sorted(workspaces)
+
+    def get_workspace_path(self, name: str) -> Path:
+        """Return absolute path for a workspace directory.
+
+        Raises:
+            WorkspaceNotFoundError: If the workspace does not exist.
+        """
+        self._validate_workspace_name(name)
+        workspace_dir = self._get_workspace_dir(name)
+        if not workspace_dir.exists():
+            raise WorkspaceNotFoundError(f"Workspace not found: {name}")
+        return workspace_dir
+
+    def get_default_workspace_name(self) -> Optional[str]:
+        """Return the configured default workspace name.
+
+        If no workspace is explicitly marked default, returns the first
+        available workspace name (sorted), or None when no workspaces exist.
+        """
+        workspaces = self.list_workspaces()
+        if not workspaces:
+            return None
+
+        for workspace in workspaces:
+            try:
+                cfg = self.get_workspace_config(workspace)
+                if cfg.is_default:
+                    return workspace
+            except Exception:
+                continue
+
+        return workspaces[0]
+
+    def set_default_workspace(self, name: str) -> None:
+        """Mark exactly one workspace as default.
+
+        Args:
+            name: Workspace name to set as default.
+
+        Raises:
+            WorkspaceNotFoundError: If target workspace does not exist.
+            WorkspaceOperationError: If persisting updates fails.
+        """
+        self._validate_workspace_name(name)
+        workspaces = self.list_workspaces()
+        if name not in workspaces:
+            raise WorkspaceNotFoundError(f"Workspace not found: {name}")
+
+        try:
+            for workspace in workspaces:
+                cfg = self.get_workspace_config(workspace)
+                should_be_default = workspace == name
+                if cfg.is_default != should_be_default:
+                    cfg.is_default = should_be_default
+                    self.set_workspace_config(workspace, cfg)
+        except Exception as e:
+            raise WorkspaceOperationError(f"Failed to set default workspace: {e}") from e
     
     def create_workspace(self, name: str, template: Optional[str] = None) -> None:
         """

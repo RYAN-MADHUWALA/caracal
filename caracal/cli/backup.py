@@ -36,6 +36,10 @@ def get_backup_dir(config) -> Path:
     """Get backup directory from config, creating if needed."""
     backup_dir = Path(config.storage.backup_dir).expanduser()
     backup_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        backup_dir.chmod(0o700)
+    except Exception:
+        pass
     return backup_dir
 
 
@@ -54,6 +58,7 @@ def _run_pg_dump(config, output_file: Path) -> None:
         "-U", str(config.database.user),
         "-d", str(config.database.database),
         "-F", "c",
+        "-Z", "9",
         "-f", str(output_file),
         "--no-owner",
         "--no-privileges",
@@ -118,11 +123,13 @@ def backup_create(ctx, name: Optional[str]):
         archive_path = backup_dir / f"{backup_name}.dump"
 
         _run_pg_dump(config, archive_path)
+        archive_path.chmod(0o600)
         
         # Calculate archive hash for integrity verification
         archive_hash = calculate_file_hash(archive_path)
         hash_file = archive_path.with_suffix('.dump.sha256')
         hash_file.write_text(f"{archive_hash}  {archive_path.name}\n")
+        hash_file.chmod(0o600)
         
         # Get archive size
         archive_size = archive_path.stat().st_size
@@ -241,7 +248,7 @@ def backup_list(ctx, output_json: bool):
             has_hash = hash_file.exists()
             
             backups.append({
-                "name": archive_path.stem.replace('.tar', ''),
+                "name": archive_path.stem,
                 "path": str(archive_path),
                 "size": stat.st_size,
                 "size_human": _format_size(stat.st_size),
@@ -291,7 +298,7 @@ def _enforce_retention(backup_dir: Path, max_count: int):
     """Delete old backups to maintain retention count."""
     # Get all backup archives sorted by modification time
     backups = sorted(
-        backup_dir.glob("caracal_backup_*.tar.gz"),
+        backup_dir.glob("caracal_backup_*.dump"),
         key=lambda p: p.stat().st_mtime,
         reverse=True
     )
@@ -300,7 +307,7 @@ def _enforce_retention(backup_dir: Path, max_count: int):
     for old_backup in backups[max_count:]:
         old_backup.unlink()
         # Also delete hash file if exists
-        hash_file = old_backup.with_suffix('.tar.gz.sha256')
+        hash_file = old_backup.with_suffix('.dump.sha256')
         if hash_file.exists():
             hash_file.unlink()
         logger.info(f"Deleted old backup: {old_backup}")
