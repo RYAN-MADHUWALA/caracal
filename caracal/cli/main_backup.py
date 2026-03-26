@@ -121,8 +121,8 @@ def setup_init(ctx, workspace):
         click.echo("Initializing Caracal environment...")
         # basic init logic
         from caracal.config.settings import get_default_config_path
-        p = workspace or Path(get_default_config_path()).parent
-        p.mkdir(parents=True, exist_ok=True)
+            p = workspace or source_of(Path(get_default_config_path()))
+            ensure_source_tree(p)
         click.echo(f"Initialized workspace at {p}")
         click.echo("Checking database...")
         try:

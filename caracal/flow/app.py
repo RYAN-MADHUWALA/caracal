@@ -276,9 +276,10 @@ class FlowApp:
             
             # Services and version
             from pathlib import Path as P
+            from caracal.pathing import source_of
             version = "unknown"
             for vf in [
-                P(__file__).resolve().parent.parent.parent / "VERSION",
+                source_of(source_of(source_of(P(__file__).resolve()))) / "VERSION",
                 P.cwd() / "VERSION",
             ]:
                 if vf.exists():
@@ -577,7 +578,8 @@ ledger capabilities.[/]
         
         # Create backups directory
         backup_dir = get_workspace().backups_dir
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        from caracal.pathing import ensure_source_tree
+        ensure_source_tree(backup_dir)
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_file = backup_dir / f"caracal_backup_{timestamp}.dump"
