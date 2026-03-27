@@ -118,17 +118,12 @@ class MyExtension(CaracalExtension):
 
 Premium extensions in `caracal_sdk.enterprise`:
 
-- **ComplianceExtension** — SOC 2, ISO 27001, GDPR, HIPAA compliance reporting
+- **ComplianceExtension** — SOC 2, ISO 27001, GDPR compliance reporting
 - **AnalyticsExtension** — Advanced export + dashboard
 - **WorkflowsExtension** — Event-driven automation
 - **SSOExtension** — Single sign-on (SAML 2.0, OIDC, LDAP)
 - **LicenseExtension** — Enterprise license validation
 - **SyncExtension** — Multi-node state synchronization
-
-Regulated industry extensions in `caracal_sdk.enterprise.regulated`:
-
-- **HealthcareExtension** — HIPAA, HL7 FHIR compliance
-- **FinanceExtension** — PCI DSS, SOX compliance
 
 ## Error Handling
 

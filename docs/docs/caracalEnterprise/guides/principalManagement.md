@@ -23,7 +23,7 @@ A **Policy** defines what mandates can be issued to a Principal. It is the const
 ### Policy Structure
 
 A policy consists of:
--   **Resource Patterns**: Wildcard patterns for allowed resources (e.g., `api:finance/*`).
+-   **Resource Patterns**: Wildcard patterns for allowed resources (e.g., `api:billing/*`).
 -   **Actions**: List of allowed actions (e.g., `read`, `write`, `execute`).
 -   **Constraints**: Limits on mandate validity, delegation depth, etc.
 
