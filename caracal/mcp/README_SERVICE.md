@@ -79,14 +79,14 @@ export CARACAL_DB_PASSWORD=your_password
 #### With Configuration File
 
 ```bash
-caracal mcp-service start --config /etc/caracal/config.yaml
+caracal system integration mcp start --config /etc/caracal/config.yaml
 ```
 
 #### With Environment Variables
 
 ```bash
 export CARACAL_CONFIG_PATH=/etc/caracal/config.yaml
-caracal mcp-service start
+caracal system integration mcp start
 ```
 
 #### Direct Python Execution
@@ -100,7 +100,7 @@ python -m caracal.mcp.service
 Check if the service is running:
 
 ```bash
-caracal mcp-service health
+caracal system integration mcp health
 ```
 
 Or use curl:
@@ -128,7 +128,7 @@ Response:
 Get service statistics:
 
 ```bash
-caracal mcp-service stats
+caracal system integration mcp stats
 ```
 
 Or use curl:
