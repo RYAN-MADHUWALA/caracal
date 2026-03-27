@@ -1,7 +1,7 @@
 # Caracal SDK
 
 > Pre-execution authority enforcement SDK for AI agents.  
-> Part of `caracal-core` · License: AGPLv3
+> Standalone package: `caracal-sdk` · License: Apache-2.0
 
 ## Installation
 
@@ -144,5 +144,5 @@ except SDKConfigurationError as e:
 
 ## License
 
-AGPLv3 — see LICENSE in repository root.  
-Enterprise extensions (`sdk/enterprise/`) are proprietary.
+Apache-2.0 — see LICENSE in repository root.  
+Enterprise extensions (`caracal_sdk/enterprise/`) are proprietary.
