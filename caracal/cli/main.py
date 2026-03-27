@@ -20,7 +20,7 @@ from caracal._version import __version__
 from caracal.pathing import ensure_source_tree, source_of
 from caracal.config.settings import get_default_config_path, load_config
 from caracal.exceptions import CaracalError, InvalidConfigurationError
-from caracal.logging_config import setup_logging
+from caracal.logging_config import setup_runtime_logging
 from caracal.cli.context import CLIContext, pass_context
 
 
@@ -230,11 +230,15 @@ def cli(ctx, config: Optional[Path], workspace: Optional[str], log_level: str, v
     try:
         effective_log_level = log_level.upper() if log_level else ctx.obj['config'].logging.level
         log_file = Path(ctx.obj['config'].logging.file) if ctx.obj['config'].logging.file else None
-        json_format = ctx.obj['config'].logging.format == "json" if hasattr(ctx.obj['config'].logging, 'format') else False
-        setup_logging(
-            level=effective_log_level,
+        requested_json_format = (
+            ctx.obj['config'].logging.format == "json"
+            if hasattr(ctx.obj['config'].logging, 'format')
+            else None
+        )
+        setup_runtime_logging(
+            requested_level=effective_log_level,
+            requested_json_format=requested_json_format,
             log_file=log_file,
-            json_format=json_format,
         )
         
         if verbose:

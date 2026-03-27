@@ -24,6 +24,15 @@ const mandate = await client.mandates.create({
 });
 ```
 
+## Runtime Endpoint
+
+The SDK resolves the runtime endpoint from `CARACAL_API_URL` first, then
+falls back to `http://localhost:8000`.
+
+```bash
+export CARACAL_API_URL=http://localhost:8000
+```
+
 ## License
 
 AGPLv3 — see LICENSE.  
