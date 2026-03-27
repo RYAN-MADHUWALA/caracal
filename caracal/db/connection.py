@@ -45,19 +45,9 @@ _ENV_SCHEMA = f"{_ENV_PREFIX}SCHEMA"      # default: "" (public)
 def _env(name: str, fallback: str = "") -> str:
     """Read an environment variable, returning *fallback* when unset/empty.
 
-    Checks ``CARACAL_DB_*`` first, then falls back to the shorter ``DB_*``
-    prefix (used by docker-compose / .env files) for convenience.
+    Uses canonical ``CARACAL_DB_*`` variables only.
     """
-    value = os.environ.get(name, "")
-    if value:
-        return value
-    # Try the shorter DB_* prefix (e.g. CARACAL_DB_PASSWORD -> DB_PASSWORD)
-    if name.startswith(_ENV_PREFIX):
-        short = "DB_" + name[len(_ENV_PREFIX):]
-        value = os.environ.get(short, "")
-        if value:
-            return value
-    return fallback
+    return os.environ.get(name, "") or fallback
 
 
 def _ensure_dotenv_loaded() -> None:

@@ -6,14 +6,14 @@ storage:
   backup_count: 3
 
 database:
-  host: ${DB_HOST:localhost}
-  port: ${DB_PORT:5432}
-  database: ${DB_NAME:caracal}
-  user: ${DB_USER:caracal}
-  password: ${DB_PASSWORD:caracal}
-  pool_size: ${DB_POOL_SIZE:10}
-  max_overflow: ${DB_MAX_OVERFLOW:5}
-  pool_timeout: ${DB_POOL_TIMEOUT:30}
+  host: ${CARACAL_DB_HOST:localhost}
+  port: ${CARACAL_DB_PORT:5432}
+  database: ${CARACAL_DB_NAME:caracal}
+  user: ${CARACAL_DB_USER:caracal}
+  password: ${CARACAL_DB_PASSWORD:caracal}
+  pool_size: ${CARACAL_DB_POOL_SIZE:10}
+  max_overflow: ${CARACAL_DB_MAX_OVERFLOW:5}
+  pool_timeout: ${CARACAL_DB_POOL_TIMEOUT:30}
 
 redis:
   host: ${REDIS_HOST:localhost}
