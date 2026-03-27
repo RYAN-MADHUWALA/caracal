@@ -13,5 +13,3 @@ export { WorkflowsExtension } from './workflows';
 export { SSOExtension } from './sso';
 export { LicenseExtension } from './license';
 export { SyncExtension } from './sync';
-export { HealthcareExtension } from './regulated/healthcare';
-export { FinanceExtension } from './regulated/finance';

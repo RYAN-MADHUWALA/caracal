@@ -82,7 +82,7 @@ SERVICE_TYPE_GUIDANCE: Dict[str, Dict[str, str]] = {
     "payments": {
         "purpose": "Payment processors, billing systems, subscriptions, and invoicing APIs.",
         "examples": "charges, customers, invoices, refunds",
-        "caracal_use": "Separates sensitive financial actions such as charge, refund, and payout.",
+        "caracal_use": "Separates sensitive billing actions such as charge, refund, and payout.",
     },
     "developer-tools": {
         "purpose": "SCM, CI/CD, issue trackers, artifact registries, and engineering platforms.",

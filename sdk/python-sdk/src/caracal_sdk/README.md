@@ -117,10 +117,9 @@ class MyExtension(CaracalExtension):
 
 Premium extensions in `caracal_sdk.enterprise`:
 
-- **ComplianceExtension** — SOC 2, ISO 27001, GDPR, HIPAA
+- **ComplianceExtension** — SOC 2, ISO 27001, GDPR
 - **AnalyticsExtension** — Advanced export + dashboard
 - **WorkflowsExtension** — Event-driven automation
-- **HealthcareExtension** / **FinanceExtension** — Regulated industries
 
 ## Error Handling
 
