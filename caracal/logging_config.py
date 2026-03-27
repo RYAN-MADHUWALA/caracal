@@ -14,16 +14,46 @@ import sys
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import structlog
 from structlog.types import EventDict, Processor
 
 from caracal.pathing import ensure_source_tree, source_of
+from caracal.runtime.environment import (
+    MODE_DEV,
+    MODE_PROD,
+    MODE_STAGING,
+    get_runtime_mode_summary,
+)
 
 
 # Context variable for correlation ID
 correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+
+
+_SENSITIVE_TOKENS = (
+    "password",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "private_key",
+    "cookie",
+)
+
+
+@dataclass(frozen=True)
+class RuntimeLoggingPolicy:
+    """Computed logging policy from runtime mode and optional user overrides."""
+
+    mode: str
+    level: str
+    json_format: bool
+    redact_sensitive: bool
 
 
 def add_correlation_id(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
@@ -42,6 +72,62 @@ def add_correlation_id(logger: Any, method_name: str, event_dict: EventDict) -> 
     if correlation_id:
         event_dict["correlation_id"] = correlation_id
     return event_dict
+
+
+def _redact_sensitive_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for key, nested_value in value.items():
+            key_lower = str(key).lower()
+            if any(token in key_lower for token in _SENSITIVE_TOKENS):
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = _redact_sensitive_values(nested_value)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_values(item) for item in value)
+    return value
+
+
+def redact_sensitive_fields(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
+    """Redact sensitive log fields before rendering structured output."""
+    return _redact_sensitive_values(event_dict)
+
+
+def resolve_runtime_logging_policy(
+    *,
+    mode: Optional[str] = None,
+    requested_level: Optional[str] = None,
+    requested_json_format: Optional[bool] = None,
+) -> RuntimeLoggingPolicy:
+    """Resolve environment-aware logging behavior.
+
+    Rules:
+    - ``dev``: debug logs allowed only when ``CARACAL_DEBUG_LOGS=true``.
+    - ``staging``/``prod``: structured JSON, redacted fields, and no DEBUG.
+    """
+    summary = get_runtime_mode_summary(mode)
+
+    if summary.mode == MODE_DEV:
+        default_level = "DEBUG" if summary.debug_logs else "INFO"
+        level = (requested_level or default_level).upper()
+        json_format = summary.json_logs if requested_json_format is None else requested_json_format
+        redact_sensitive = False
+    else:
+        level = (requested_level or "INFO").upper()
+        if level == "DEBUG":
+            level = "INFO"
+        json_format = True if requested_json_format is None else bool(requested_json_format)
+        redact_sensitive = summary.mode in {MODE_STAGING, MODE_PROD}
+
+    return RuntimeLoggingPolicy(
+        mode=summary.mode,
+        level=level,
+        json_format=bool(json_format),
+        redact_sensitive=redact_sensitive,
+    )
 
 
 def set_correlation_id(correlation_id: Optional[str] = None) -> str:
@@ -79,6 +165,7 @@ def setup_logging(
     level: str = "INFO",
     log_file: Optional[Path] = None,
     json_format: bool = True,
+    redact_sensitive: bool = False,
 ) -> None:
     """
     Configure structured logging for Caracal Core.
@@ -87,6 +174,7 @@ def setup_logging(
         level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
         log_file: Optional path to log file. If None, logs only to stdout.
         json_format: If True, use JSON format. If False, use human-readable format.
+        redact_sensitive: If True, redact sensitive fields from event payloads.
     """
     # Convert string level to logging constant
     numeric_level = getattr(logging, level.upper(), logging.INFO)
@@ -124,6 +212,8 @@ def setup_logging(
         structlog.processors.TimeStamper(fmt="iso"),
         # Add correlation ID if present
         add_correlation_id,
+        # Optionally redact secrets and credentials before rendering
+        redact_sensitive_fields if redact_sensitive else (lambda _l, _m, e: e),
         # Add stack info for exceptions
         structlog.processors.StackInfoRenderer(),
         # Format exceptions
@@ -148,6 +238,28 @@ def setup_logging(
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+
+def setup_runtime_logging(
+    *,
+    mode: Optional[str] = None,
+    requested_level: Optional[str] = None,
+    requested_json_format: Optional[bool] = None,
+    log_file: Optional[Path] = None,
+) -> RuntimeLoggingPolicy:
+    """Apply runtime-aware logging policy and return the resolved policy."""
+    policy = resolve_runtime_logging_policy(
+        mode=mode,
+        requested_level=requested_level,
+        requested_json_format=requested_json_format,
+    )
+    setup_logging(
+        level=policy.level,
+        log_file=log_file,
+        json_format=policy.json_format,
+        redact_sensitive=policy.redact_sensitive,
+    )
+    return policy
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

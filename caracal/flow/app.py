@@ -34,7 +34,7 @@ class FlowApp:
 
     def _configure_workspace_logging(self) -> None:
         """Configure Flow logging to workspace log files."""
-        from caracal.logging_config import get_logger, setup_logging
+        from caracal.logging_config import get_logger, setup_runtime_logging
 
         try:
             from caracal.flow.workspace import get_workspace
@@ -46,11 +46,11 @@ class FlowApp:
             (ws.logs_dir / "sync.log").touch(exist_ok=True)
 
             # File-only logging prevents log output from polluting the TUI.
-            setup_logging(level="INFO", log_file=ws.log_path, json_format=True)
+            setup_runtime_logging(log_file=ws.log_path)
             get_logger(__name__).info("flow_logging_configured", workspace=str(ws.root))
         except Exception:
             # Fallback: keep TUI usable even if workspace logging setup fails.
-            setup_logging(level="WARNING", json_format=False)
+            setup_runtime_logging(requested_level="WARNING", requested_json_format=False)
     
     def start(self) -> None:
         """Start the application."""
