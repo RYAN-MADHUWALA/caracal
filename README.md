@@ -63,127 +63,79 @@ More coming soon
 
 ## Installation & Setup
 
-Caracal runtime is container-first. CLI, TUI, and API use one runtime image and one shared workspace volume.
+Caracal uses a two-layer command model.
 
-### Quickstart (Docker Only, No Repository)
+- Host `caracal`: orchestration only (`up`, `down`, `cli`, `flow`, `logs`, `reset`)
+- Container `caracal`: full interactive Caracal CLI
 
-Use this path for fastest setup.
+This keeps host usage simple and avoids command collisions.
 
-```bash
-# Image and shared runtime resources
-export CARACAL_RUNTIME_IMAGE=ghcr.io/garudex-labs/caracal-runtime:latest
-docker pull "$CARACAL_RUNTIME_IMAGE"
-docker network create caracal-runtime || true
-docker volume create caracal_state
-docker volume create caracal_postgres_data
-docker volume create caracal_redis_data
-
-# PostgreSQL
-docker run -d --name caracal-postgres \
-  --network caracal-runtime \
-  -e POSTGRES_DB=caracal \
-  -e POSTGRES_USER=caracal \
-  -e POSTGRES_PASSWORD=caracal \
-  -v caracal_postgres_data:/var/lib/postgresql/data \
-  postgres:16-alpine
-
-# Redis
-docker run -d --name caracal-redis \
-  --network caracal-runtime \
-  -v caracal_redis_data:/data \
-  redis:7-alpine redis-server --appendonly yes
-
-# Runtime API (MCP)
-docker run -d --name caracal-mcp \
-  --network caracal-runtime \
-  -p 8000:8080 \
-  -v caracal_state:/home/caracal/.caracal \
-  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
-  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
-  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
-  -e CARACAL_MCP_LISTEN_ADDRESS=0.0.0.0:8080 \
-  -e CARACAL_DB_HOST=caracal-postgres \
-  -e CARACAL_DB_PORT=5432 \
-  -e CARACAL_DB_NAME=caracal \
-  -e CARACAL_DB_USER=caracal \
-  -e CARACAL_DB_PASSWORD=caracal \
-  -e REDIS_HOST=caracal-redis \
-  -e REDIS_PORT=6379 \
-  -e CARACAL_ENV_MODE=dev \
-  "$CARACAL_RUNTIME_IMAGE" python -m caracal.mcp.service
-```
-
-### Run CLI and TUI on the Same Workspace
-
-Both commands mount the same volume, so state/config/data stay in sync.
+### Quickstart
 
 ```bash
-# CLI
-docker run --rm -it \
-  --network caracal-runtime \
-  -v caracal_state:/home/caracal/.caracal \
-  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
-  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
-  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
-  -e CARACAL_API_URL=http://caracal-mcp:8080 \
-  "$CARACAL_RUNTIME_IMAGE" caracal
-
-# TUI
-docker run --rm -it \
-  --network caracal-runtime \
-  -v caracal_state:/home/caracal/.caracal \
-  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
-  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
-  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
-  -e CARACAL_API_URL=http://caracal-mcp:8080 \
-  "$CARACAL_RUNTIME_IMAGE" caracal-flow
+caracal up
+caracal cli
+caracal flow
 ```
 
-### Other Run Methods
-
-If you cloned the repository:
+### Command Reference
 
 ```bash
-# Build locally
-docker compose -f deploy/docker-compose.yml up -d mcp
-
-# Pull image only
-docker compose -f deploy/docker-compose.image.yml pull
-docker compose -f deploy/docker-compose.image.yml up -d mcp
+caracal up         # Pull images, create network/volumes, start postgres+redis+mcp
+caracal down       # Stop stack and remove services
+caracal cli        # Run full Caracal CLI inside container
+caracal flow       # Run TUI inside container
+caracal logs -f    # Tail runtime logs
+caracal reset      # Down + remove volumes (full local reset)
 ```
+
+### Host vs Container Help
+
+- `caracal --help` on host: orchestration commands only
+- `caracal cli -- --help`: full in-container CLI help
+
+### Shared Workspace Behavior
+
+`caracal cli` and `caracal flow` both mount the same Docker volume (`caracal_state`) at `/home/caracal/.caracal`.
+
+Result:
+
+- same config
+- same state
+- same data
+- seamless switch between CLI and TUI
+
+### Runtime Ports
+
+Open-source runtime (default):
+
+- MCP API: `8000` (host)
+- PostgreSQL: internal only
+- Redis: internal only
+
+Enterprise runtime defaults (separate host range):
+
+- Web UI: `9000`
+- Enterprise API: `9001`
+- Gateway: `9443`
+- Gateway metrics: `9909`
 
 ### Environment Modes and Logging
 
 Set `CARACAL_ENV_MODE` to `dev`, `staging`, or `prod`.
 
-- `dev`: debug allowed only when `CARACAL_DEBUG_LOGS=true`
-- `staging`: JSON logs, sensitive-field redaction, no debug output
-- `prod`: JSON logs, sensitive-field redaction, no debug output
+- `dev`: debug enabled only when `CARACAL_DEBUG_LOGS=true`
+- `staging`: JSON logs + sensitive-field redaction
+- `prod`: JSON logs + sensitive-field redaction
 
-Useful flags:
+Optional controls:
 
-- `CARACAL_JSON_LOGS=true` (force JSON in dev)
-- `LOG_LEVEL=INFO|WARNING|ERROR` (debug is downgraded outside dev)
+- `CARACAL_JSON_LOGS=true`
+- `LOG_LEVEL=INFO|WARNING|ERROR`
 
-### Persistence, Migration, and Deletion
+### Advanced Configuration (Optional)
 
-- `.caracal` data is persisted in `caracal_state`
-- old runtime artifacts are migrated to workspace-local paths on startup
-- repository-to-package migration:
-
-```bash
-caracal migrate repo-to-package
-```
-
-- safe workspace deletion with backup:
-
-```bash
-caracal workspace delete <workspace-name> --force
-```
-
-### Enterprise Gateway and Web Integration
-
-For enterprise routing, enable gateway variables in runtime:
+No env setup is required for default use. For advanced routing:
 
 ```bash
 export CARACAL_GATEWAY_URL=http://gateway:8443
@@ -191,11 +143,13 @@ export CARACAL_GATEWAY_ENDPOINT=http://gateway:8443
 export CARACAL_GATEWAY_ENABLED=true
 ```
 
-For enterprise stack integration, align:
+### Migration and Cleanup
 
-- `GATEWAY_URL` for gateway admin/status calls
-- `CARACAL_RUNTIME_NETWORK` shared network to reach `caracal-mcp`
-- `CARACAL_MODE` as `dev`, `staging`, or `prod`
+```bash
+caracal migrate repo-to-package
+caracal workspace delete <workspace-name> --force
+caracal reset
+```
 
 ### SDK Endpoint Contract
 
