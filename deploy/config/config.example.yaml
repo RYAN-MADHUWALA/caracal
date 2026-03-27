@@ -1,191 +1,67 @@
-# Caracal Core v0.3 Configuration Example
-# This file demonstrates all available configuration options for v0.3
-#
-# v0.3 introduces:
-# - Merkle tree ledger for cryptographic tamper-evidence
-# - Policy versioning for complete audit trails
-# - Resource allowlists for fine-grained access control
-# - Extended time windows for flexible budgeting
-# - Redis caching for performance optimization
-# - Ledger snapshots for fast recovery
-# - Event replay for state reconstruction
+# Caracal OSS deployment configuration.
+# This example matches the current broker-only open-source architecture.
 
-# ============================================================================
-# STORAGE CONFIGURATION (v0.1 compatibility - file-based storage)
-# ============================================================================
 storage:
-  agent_registry: ~/.caracal/agents.json
-  policy_store: ~/.caracal/policies.json
-  ledger: ~/.caracal/ledger.jsonl
-
-  backup_dir: ~/.caracal/backups
+  backup_dir: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/backups
   backup_count: 3
 
-# ============================================================================
-# DATABASE CONFIGURATION (v0.2 - PostgreSQL backend)
-# ============================================================================
 database:
-  host: ${DATABASE_HOST:localhost}
-  port: ${DATABASE_PORT:5432}
-  database: ${DATABASE_NAME:caracal}
-  user: ${DATABASE_USER:caracal}
-  password: ${DATABASE_PASSWORD}
-  pool_size: ${DATABASE_POOL_SIZE:10}
-  max_overflow: ${DATABASE_MAX_OVERFLOW:5}
-  pool_timeout: ${DATABASE_POOL_TIMEOUT:30}
+  host: ${DB_HOST:localhost}
+  port: ${DB_PORT:5432}
+  database: ${DB_NAME:caracal}
+  user: ${DB_USER:caracal}
+  password: ${DB_PASSWORD:caracal}
+  pool_size: ${DB_POOL_SIZE:10}
+  max_overflow: ${DB_MAX_OVERFLOW:5}
+  pool_timeout: ${DB_POOL_TIMEOUT:30}
 
-# ============================================================================
-# REDIS CONFIGURATION (Caching and metrics)
-# ============================================================================
 redis:
   host: ${REDIS_HOST:localhost}
   port: ${REDIS_PORT:6379}
-  password: ${REDIS_PASSWORD}
+  password: ${REDIS_PASSWORD:}
   db: ${REDIS_DB:0}
+  ssl: false
+  metrics_cache_ttl: 3600
+  allowlist_cache_ttl: 60
 
-  # SSL/TLS configuration
-  ssl: ${REDIS_SSL:true}
-  ssl_ca_certs: ${REDIS_SSL_CA_CERTS:/etc/caracal/redis/ca-cert.pem}
-  ssl_certfile: ${REDIS_SSL_CERTFILE:/etc/caracal/redis/client-cert.pem}
-  ssl_keyfile: ${REDIS_SSL_KEYFILE:/etc/caracal/redis/client-key.pem}
-
-  # Cache TTL settings (in seconds)
-  metrics_cache_ttl: ${REDIS_METRICS_CACHE_TTL:3600} # 1 hour
-  allowlist_cache_ttl: ${REDIS_ALLOWLIST_CACHE_TTL:60} # 1 minute
-
-# ============================================================================
-# MERKLE TREE CONFIGURATION (Cryptographic ledger)
-# ============================================================================
-merkle:
-  # Batch thresholds - batch closes when EITHER threshold is reached
-  batch_size_limit: ${MERKLE_BATCH_SIZE_LIMIT:1000} # Max events per batch
-  batch_timeout_seconds: ${MERKLE_BATCH_TIMEOUT_SECONDS:300} # 5 minutes
-
-  # Signing configuration
-  signing_algorithm: ES256 # ECDSA P-256 (only supported algorithm)
-  signing_backend: software # Options: software (OSS), hsm (Enterprise)
-
-  # Software signing configuration (when signing_backend=software)
-  private_key_path: ${MERKLE_PRIVATE_KEY_PATH:/etc/caracal/merkle/signing-key.pem}
-  key_encryption_passphrase: ${MERKLE_KEY_PASSPHRASE}
-
-  # Key rotation configuration
-  key_rotation_enabled: ${MERKLE_KEY_ROTATION_ENABLED:false}
-  key_rotation_days: ${MERKLE_KEY_ROTATION_DAYS:90}
-
-  # HSM configuration (Enterprise only, ignored if signing_backend=software)
-  hsm_config: {}
-
-# ============================================================================
-# SNAPSHOT CONFIGURATION (Ledger snapshots)
-# ============================================================================
-snapshot:
-  enabled: ${SNAPSHOT_ENABLED:true}
-
-  # Snapshot schedule (cron format: minute hour day month weekday)
-  schedule_cron: ${SNAPSHOT_SCHEDULE_CRON:0 0 * * *} # Daily at midnight UTC
-
-  # Retention policy
-  retention_days: ${SNAPSHOT_RETENTION_DAYS:90} # Retain for 90 days
-
-  # Storage configuration
-  storage_path: ${SNAPSHOT_STORAGE_PATH:~/.caracal/snapshots}
-  compression_enabled: ${SNAPSHOT_COMPRESSION_ENABLED:true}
-  auto_cleanup_enabled: ${SNAPSHOT_AUTO_CLEANUP_ENABLED:true}
-
-# ============================================================================
-# ALLOWLIST CONFIGURATION (Resource access control)
-# ============================================================================
-allowlist:
-  enabled: ${ALLOWLIST_ENABLED:true}
-
-  # Default behavior when no allowlist is defined for an agent
-  # Options: allow (permit all resources), deny (deny all resources)
-  default_behavior: ${ALLOWLIST_DEFAULT_BEHAVIOR:allow}
-
-  # Cache configuration
-  cache_ttl: ${ALLOWLIST_CACHE_TTL:60} # Cache compiled patterns for 60 seconds
-  max_patterns_per_agent: ${ALLOWLIST_MAX_PATTERNS_PER_AGENT:1000}
-
-# ============================================================================
-# EVENT REPLAY CONFIGURATION (State reconstruction)
-# ============================================================================
-event_replay:
-  batch_size: ${EVENT_REPLAY_BATCH_SIZE:1000} # Events per batch
-  parallelism: ${EVENT_REPLAY_PARALLELISM:4} # Parallel workers
-  max_replay_duration_hours: ${EVENT_REPLAY_MAX_DURATION_HOURS:24}
-  validation_enabled: ${EVENT_REPLAY_VALIDATION_ENABLED:true}
-
-# ============================================================================
-# MCP ADAPTER CONFIGURATION
-# ============================================================================
 mcp_adapter:
-  enabled: ${MCP_ADAPTER_ENABLED:false}
-  listen_address: ${MCP_ADAPTER_LISTEN_ADDRESS:0.0.0.0:8080}
-  health_check_enabled: ${MCP_ADAPTER_HEALTH_CHECK_ENABLED:true}
+  enabled: true
+  listen_address: ${CARACAL_MCP_LISTEN_ADDRESS:0.0.0.0:8080}
+  mcp_server_urls: []
+  health_check_enabled: true
 
-  # MCP server URLs (list of MCP servers to connect to)
-  mcp_server_urls:
-    - http://localhost:3000
-    - http://localhost:3001
+merkle:
+  batch_size_limit: 1000
+  batch_timeout_seconds: 300
+  signing_algorithm: ES256
+  signing_backend: software
+  private_key_path: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/keys/merkle_signing_key.pem
+  key_rotation_enabled: false
 
-# ============================================================================
-# COMPATIBILITY CONFIGURATION (Backward compatibility)
-# ============================================================================
-compatibility:
-  mode: ${COMPATIBILITY_MODE:v0.3}
+snapshot:
+  enabled: true
+  schedule_cron: "0 0 * * *"
+  retention_days: 90
+  storage_path: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/snapshots
+  compression_enabled: true
+  auto_cleanup_enabled: true
 
-  # Feature flags
-  enable_merkle: ${COMPATIBILITY_ENABLE_MERKLE:true}
-  enable_redis: ${COMPATIBILITY_ENABLE_REDIS:true}
+allowlist:
+  enabled: true
+  default_behavior: allow
+  cache_ttl: 60
+  max_patterns_per_agent: 1000
 
-  # Logging
-  warn_on_v02_mode: ${COMPATIBILITY_WARN_ON_V02_MODE:true}
-
-# ============================================================================
-# DEFAULT VALUES
-# ============================================================================
 defaults:
-  currency: USD
-  time_window: daily # Options: hourly, daily, weekly, monthly
+  time_window: daily
 
-# ============================================================================
-# LOGGING CONFIGURATION
-# ============================================================================
 logging:
-  level: ${LOG_LEVEL:INFO} # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
-  file: ${LOG_FILE:~/.caracal/caracal.log}
+  level: ${LOG_LEVEL:INFO}
+  file: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/logs/caracal.log
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-# ============================================================================
-# PERFORMANCE TUNING
-# ============================================================================
 performance:
   policy_eval_timeout_ms: 100
   ledger_write_timeout_ms: 10
   file_lock_timeout_s: 5
   max_retries: 3
-
-# ============================================================================
-# CONFIGURATION NOTES
-# ============================================================================
-#
-# Environment Variable Substitution:
-#   Use ${VAR_NAME} to substitute environment variables
-#   Use ${VAR_NAME:default} to provide default values
-#
-# Encrypted Values:
-#   Use ENC[base64_encoded_ciphertext] for encrypted values
-#   Requires CARACAL_MASTER_PASSWORD environment variable
-#
-# Production Recommendations:
-#   - Enable Redis SSL/TLS
-#   - Use exactly_once processing guarantee
-#   - Enable Merkle tree signing
-#   - Configure appropriate batch thresholds based on compliance needs
-#   - Set up regular snapshots for fast recovery
-#
-# Batch Threshold Recommendations:
-#   - High-compliance: 1000 events / 300 seconds (5 minutes)
-#   - Standard: 10000 events / 3600 seconds (1 hour)
-#   - Low-volume: 50000 events / 86400 seconds (24 hours)
