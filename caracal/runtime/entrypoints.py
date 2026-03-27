@@ -323,7 +323,11 @@ def _host_up(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
     compose_cmd = _compose_cmd(compose_file)
     if not namespace.no_pull:
-        pull_result = subprocess.run(compose_cmd + ["pull", "mcp", "postgres", "redis"], check=False)
+        pull_services = ["postgres", "redis"]
+        if not _service_uses_local_build(compose_file, "mcp"):
+            pull_services.insert(0, "mcp")
+
+        pull_result = subprocess.run(compose_cmd + ["pull", *pull_services], check=False)
         if pull_result.returncode != 0:
             return pull_result.returncode
 
@@ -440,6 +444,49 @@ def _compose_supports_runtime_services(compose_file: Path) -> bool:
         return False
 
     return all(marker in data for marker in ("mcp:", "cli:", "flow:"))
+
+
+def _service_uses_local_build(compose_file: Path, service_name: str) -> bool:
+    try:
+        data = compose_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    lines = data.splitlines()
+    in_services = False
+    services_indent = 0
+    target_header = f"{service_name}:"
+    in_target_service = False
+    target_indent = 0
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+
+        if not in_services:
+            if stripped == "services:":
+                in_services = True
+                services_indent = indent
+            continue
+
+        if indent <= services_indent and stripped.endswith(":"):
+            break
+
+        if not in_target_service and indent == services_indent + 2 and stripped == target_header:
+            in_target_service = True
+            target_indent = indent
+            continue
+
+        if in_target_service:
+            if indent <= target_indent and stripped.endswith(":"):
+                return False
+            if stripped.startswith("build:"):
+                return True
+
+    return False
 
 
 def _compose_cmd(compose_file: Path) -> list[str]:

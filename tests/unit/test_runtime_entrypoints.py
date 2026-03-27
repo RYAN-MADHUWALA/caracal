@@ -68,6 +68,29 @@ def test_host_up_starts_full_stack(monkeypatch):
     assert commands == [["docker", "compose", "-f", "/tmp/compose.yml", "up", "-d", "postgres", "redis", "mcp"]]
 
 
+def test_host_up_skips_mcp_pull_for_local_build(monkeypatch):
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda compose_file=None: Path("/tmp/compose.yml"))
+    monkeypatch.setattr(entrypoints, "_compose_cmd", lambda _: ["docker", "compose", "-f", "/tmp/compose.yml"])
+    monkeypatch.setattr(entrypoints, "_service_uses_local_build", lambda *_args, **_kwargs: True)
+
+    def _fake_run(cmd, check=False):
+        commands.append(list(cmd))
+        return _Result(0)
+
+    monkeypatch.setattr(entrypoints.subprocess, "run", _fake_run)
+
+    namespace = argparse.Namespace(compose_file=None, no_pull=False)
+    code = entrypoints._host_up(namespace)
+
+    assert code == 0
+    assert commands == [
+        ["docker", "compose", "-f", "/tmp/compose.yml", "pull", "postgres", "redis"],
+        ["docker", "compose", "-f", "/tmp/compose.yml", "up", "-d", "postgres", "redis", "mcp"],
+    ]
+
+
 def test_host_cli_runs_container_cli_and_strips_separator(monkeypatch):
     commands: list[list[str]] = []
 
