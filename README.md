@@ -105,21 +105,6 @@ Result:
 - same data
 - seamless switch between CLI and TUI
 
-### Runtime Ports
-
-Open-source runtime (default):
-
-- MCP API: `8000` (host)
-- PostgreSQL: internal only
-- Redis: internal only
-
-Enterprise runtime defaults (separate host range):
-
-- Web UI: `9000`
-- Enterprise API: `9001`
-- Gateway: `9443`
-- Gateway metrics: `9909`
-
 ### Environment Modes and Logging
 
 Set `CARACAL_ENV_MODE` to `dev`, `staging`, or `prod`.
