@@ -1,19 +1,20 @@
-"""Container-first command entrypoints for Caracal CLI and Flow.
+"""Host/container command entrypoints for Caracal runtime.
 
-Host invocations default to Docker Compose services to keep runtime state
-inside container-managed volumes and avoid host-local drift.
+Host command (``caracal``): orchestration-only UX.
+Container command (``caracal``): full interactive Caracal CLI.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
-LOCAL_EXECUTION_ENV = "CARACAL_LOCAL_EXECUTION"
 COMPOSE_FILE_ENV = "CARACAL_DOCKER_COMPOSE_FILE"
 IN_CONTAINER_ENV = "CARACAL_RUNTIME_IN_CONTAINER"
 
@@ -30,8 +31,6 @@ services:
             POSTGRES_INITDB_ARGS: --encoding=UTF8
         volumes:
             - postgres_data:/var/lib/postgresql/data
-        ports:
-            - ${CARACAL_DB_PORT:-5432}:5432
         healthcheck:
             test:
                 - CMD-SHELL
@@ -61,8 +60,6 @@ services:
             - "10000"
         volumes:
             - redis_data:/data
-        ports:
-            - ${REDIS_PORT:-6379}:6379
         healthcheck:
             test:
                 - CMD
@@ -91,6 +88,8 @@ services:
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
+            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
+            CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
             CARACAL_JSON_LOGS: ${CARACAL_JSON_LOGS:-false}
@@ -141,6 +140,8 @@ services:
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
+            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
+            CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
             CARACAL_JSON_LOGS: ${CARACAL_JSON_LOGS:-false}
@@ -178,6 +179,8 @@ services:
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
+            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
+            CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
             CARACAL_JSON_LOGS: ${CARACAL_JSON_LOGS:-false}
@@ -213,102 +216,198 @@ networks:
 
 
 def caracal_entrypoint() -> None:
-    """Entrypoint for the `caracal` command."""
-    _dispatch(
-        command_name="caracal",
-        service_name="cli",
-        local_runner=_run_local_caracal,
-        service_ports=False,
-    )
+    """Entrypoint for host orchestrator / container CLI."""
+    args = tuple(sys.argv[1:])
+    if _in_container_runtime():
+        _run_local_caracal(args)
+        return
+
+    exit_code = _run_host_orchestrator(args)
+    raise SystemExit(exit_code)
 
 
 def caracal_flow_entrypoint() -> None:
-    """Entrypoint for the `caracal-flow` command."""
-    _dispatch(
-        command_name="caracal-flow",
-        service_name="flow",
-        local_runner=_run_local_flow,
-        service_ports=True,
+    """Compatibility entrypoint.
+
+    On host, ``caracal-flow`` behaves like ``caracal flow``.
+    Inside container, it runs the full Flow command directly.
+    """
+    args = tuple(sys.argv[1:])
+    if _in_container_runtime():
+        _run_local_flow(args)
+        return
+
+    exit_code = _run_host_orchestrator(("flow", *args))
+    raise SystemExit(exit_code)
+
+
+def _run_host_orchestrator(args: Sequence[str]) -> int:
+    os_name = platform.system()
+    parser = argparse.ArgumentParser(
+        prog="caracal",
+        description=(
+            "Caracal host orchestrator.\n"
+            "Use this command to manage Docker runtime services.\n"
+            "For the full Caracal CLI, run: caracal cli -- --help"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            f"Detected OS: {os_name}\n"
+            "Examples:\n"
+            "  caracal up\n"
+            "  caracal cli -- principal list\n"
+            "  caracal flow"
+        ),
     )
 
+    subparsers = parser.add_subparsers(dest="command")
 
-def _dispatch(
-    command_name: str,
-    service_name: str,
-    local_runner: Callable[[Sequence[str]], None],
-    service_ports: bool,
-) -> None:
-    args = tuple(sys.argv[1:])
+    up_parser = subparsers.add_parser("up", help="Start full stack (postgres, redis, mcp)")
+    up_parser.add_argument("--no-pull", action="store_true", help="Skip docker compose pull")
+    up_parser.set_defaults(handler=_host_up)
 
-    if _should_delegate_to_docker():
-        exit_code = _run_in_docker(
-            service_name=service_name,
-            command_name=command_name,
-            args=args,
-            service_ports=service_ports,
+    down_parser = subparsers.add_parser("down", help="Stop stack and remove services")
+    down_parser.set_defaults(handler=_host_down)
+
+    reset_parser = subparsers.add_parser("reset", help="Stop stack and remove volumes")
+    reset_parser.set_defaults(handler=_host_reset)
+
+    logs_parser = subparsers.add_parser("logs", help="Show runtime logs")
+    logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log output")
+    logs_parser.add_argument(
+        "services",
+        nargs="*",
+        default=["mcp", "postgres", "redis"],
+        help="Optional service names",
+    )
+    logs_parser.set_defaults(handler=_host_logs)
+
+    cli_parser = subparsers.add_parser(
+        "cli",
+        help="Run full Caracal CLI inside runtime container",
+    )
+    cli_parser.add_argument("cli_args", nargs=argparse.REMAINDER, help="Arguments passed to in-container caracal")
+    cli_parser.set_defaults(handler=_host_cli)
+
+    flow_parser = subparsers.add_parser("flow", help="Launch Flow (TUI) inside runtime container")
+    flow_parser.add_argument("flow_args", nargs=argparse.REMAINDER, help="Arguments passed to caracal-flow")
+    flow_parser.set_defaults(handler=_host_flow)
+
+    for command_parser in (up_parser, down_parser, reset_parser, logs_parser, cli_parser, flow_parser):
+        command_parser.add_argument(
+            "--compose-file",
+            default=None,
+            help=(
+                "Advanced: override compose file path. "
+                "Default: auto-detect image compose, then fallback to embedded compose."
+            ),
         )
-        raise SystemExit(exit_code)
 
-    local_runner(args)
+    if not args:
+        parser.print_help()
+        return 0
 
-
-def _should_delegate_to_docker() -> bool:
-    if _is_truthy(os.environ.get(LOCAL_EXECUTION_ENV)):
-        return False
-
-    if _is_truthy(os.environ.get(IN_CONTAINER_ENV)):
-        return False
-
-    if Path("/.dockerenv").exists():
-        return False
-
-    return True
-
-
-def _run_in_docker(
-    service_name: str,
-    command_name: str,
-    args: Sequence[str],
-    service_ports: bool,
-) -> int:
-    compose_file = _resolve_compose_file()
-    compose_cmd = _resolve_compose_command()
-
-    boot_cmd = compose_cmd + ["-f", str(compose_file), "up", "-d", "mcp"]
-    boot = subprocess.run(boot_cmd, check=False)
-    if boot.returncode != 0:
-        return boot.returncode
-
-    run_cmd = compose_cmd + ["-f", str(compose_file), "run", "--rm"]
-    if service_ports:
-        run_cmd.append("--service-ports")
-    run_cmd.extend([service_name, command_name, *args])
-
-    run_result = subprocess.run(run_cmd, check=False)
-    return run_result.returncode
+    try:
+        namespace = parser.parse_args(list(args))
+        handler = getattr(namespace, "handler", None)
+        if handler is None:
+            parser.print_help()
+            return 2
+        return int(handler(namespace))
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
 
-def _resolve_compose_file() -> Path:
-    env_path = os.environ.get(COMPOSE_FILE_ENV)
+def _host_up(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    compose_cmd = _compose_cmd(compose_file)
+    if not namespace.no_pull:
+        pull_result = subprocess.run(compose_cmd + ["pull", "mcp", "postgres", "redis"], check=False)
+        if pull_result.returncode != 0:
+            return pull_result.returncode
+
+    up_result = subprocess.run(compose_cmd + ["up", "-d", "mcp"], check=False)
+    return up_result.returncode
+
+
+def _host_down(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    compose_cmd = _compose_cmd(compose_file)
+    result = subprocess.run(compose_cmd + ["down", "--remove-orphans"], check=False)
+    return result.returncode
+
+
+def _host_reset(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    compose_cmd = _compose_cmd(compose_file)
+    result = subprocess.run(compose_cmd + ["down", "-v", "--remove-orphans"], check=False)
+    return result.returncode
+
+
+def _host_logs(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    compose_cmd = _compose_cmd(compose_file)
+    cmd = compose_cmd + ["logs"]
+    if namespace.follow:
+        cmd.append("-f")
+    cmd.extend(namespace.services)
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
+
+
+def _host_cli(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    start_code = _host_up(argparse.Namespace(compose_file=namespace.compose_file, no_pull=True))
+    if start_code != 0:
+        return start_code
+
+    compose_cmd = _compose_cmd(compose_file)
+    cli_args = list(namespace.cli_args or [])
+    if cli_args and cli_args[0] == "--":
+        cli_args = cli_args[1:]
+    cmd = compose_cmd + ["run", "--rm", "cli", "caracal", *cli_args]
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
+
+
+def _host_flow(namespace: argparse.Namespace) -> int:
+    compose_file = _resolve_compose_file(namespace.compose_file)
+    start_code = _host_up(argparse.Namespace(compose_file=namespace.compose_file, no_pull=True))
+    if start_code != 0:
+        return start_code
+
+    compose_cmd = _compose_cmd(compose_file)
+    flow_args = list(namespace.flow_args or [])
+    if flow_args and flow_args[0] == "--":
+        flow_args = flow_args[1:]
+    cmd = compose_cmd + ["run", "--rm", "--service-ports", "flow", "caracal-flow", *flow_args]
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
+
+
+def _resolve_compose_file(override_path: str | None = None) -> Path:
+    env_path = override_path or os.environ.get(COMPOSE_FILE_ENV)
     if env_path:
         candidate = Path(env_path).expanduser().resolve()
-        if candidate.exists():
+        if candidate.exists() and _compose_supports_runtime_services(candidate):
             return candidate
-        raise RuntimeError(
-            f"{COMPOSE_FILE_ENV} points to a missing file: {candidate}"
-        )
+        raise RuntimeError(f"{COMPOSE_FILE_ENV} points to a missing or invalid file: {candidate}")
 
     candidates: list[Path] = []
 
-    # Also search up from this installed package location.
+    # Prefer image-only compose, then fallback to build compose.
     package_root = Path(__file__).resolve()
     for root in (package_root, *package_root.parents):
+        candidates.append(root / "deploy" / "docker-compose.image.yml")
+        candidates.append(root / "docker-compose.image.yml")
         candidates.append(root / "deploy" / "docker-compose.yml")
         candidates.append(root / "docker-compose.yml")
 
-    # Search up from current working directory second.
     current = Path.cwd().resolve()
     for root in (current, *current.parents):
+        candidates.append(root / "deploy" / "docker-compose.image.yml")
+        candidates.append(root / "docker-compose.image.yml")
         candidates.append(root / "deploy" / "docker-compose.yml")
         candidates.append(root / "docker-compose.yml")
 
@@ -320,10 +419,7 @@ def _resolve_compose_file() -> Path:
     if embedded.exists():
         return embedded
 
-    raise RuntimeError(
-        "Unable to locate Docker Compose file for Caracal runtime. "
-        "Set CARACAL_DOCKER_COMPOSE_FILE to a valid compose path."
-    )
+    raise RuntimeError("Unable to locate runtime compose file for Caracal.")
 
 
 def _ensure_embedded_compose_file() -> Path:
@@ -340,6 +436,10 @@ def _compose_supports_runtime_services(compose_file: Path) -> bool:
         return False
 
     return all(marker in data for marker in ("mcp:", "cli:", "flow:"))
+
+
+def _compose_cmd(compose_file: Path) -> list[str]:
+    return _resolve_compose_command() + ["-f", str(compose_file)]
 
 
 def _resolve_compose_command() -> list[str]:
@@ -359,8 +459,8 @@ def _resolve_compose_command() -> list[str]:
         return [legacy]
 
     raise RuntimeError(
-        "Docker Compose is required but not available. Install Docker Compose or "
-        "set CARACAL_LOCAL_EXECUTION=1 to run directly on the host."
+        "Docker Compose is required but not available. "
+        "Install Docker Compose plugin or docker-compose."
     )
 
 
@@ -378,3 +478,7 @@ def _run_local_flow(args: Sequence[str]) -> None:
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _in_container_runtime() -> bool:
+    return _is_truthy(os.environ.get(IN_CONTAINER_ENV)) or Path("/.dockerenv").exists()
