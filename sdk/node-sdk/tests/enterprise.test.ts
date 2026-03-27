@@ -7,8 +7,6 @@ import { EnterpriseFeatureRequired } from '../src/enterprise/exceptions';
 import { ComplianceExtension } from '../src/enterprise/compliance';
 import { AnalyticsExtension } from '../src/enterprise/analytics';
 import { WorkflowsExtension } from '../src/enterprise/workflows';
-import { HealthcareExtension } from '../src/enterprise/regulated/healthcare';
-import { FinanceExtension } from '../src/enterprise/regulated/finance';
 import { HookRegistry } from '../src/hooks';
 
 describe('Enterprise Stubs', () => {
@@ -45,8 +43,6 @@ describe('Enterprise Stubs', () => {
       new ComplianceExtension(),
       new AnalyticsExtension(),
       new WorkflowsExtension(),
-      new HealthcareExtension(),
-      new FinanceExtension(),
     ];
 
     for (const ext of extensions) {
