@@ -27,7 +27,7 @@ pip install caracal-core
 ```bash
 git clone https://github.com/Garudex-Labs/Caracal.git
 cd Caracal
-docker-compose up -d
+docker compose -f deploy/docker-compose.yml up -d postgres redis mcp
 ```
 
 ### Option 3: From Source
