@@ -63,7 +63,11 @@ except Exception:
 
     def get_gateway_features() -> GatewayFeatureFlags:
         deployment = os.getenv("CARACAL_DEPLOYMENT_TYPE", "oss").strip().lower()
-        endpoint = os.getenv("CARACAL_GATEWAY_ENDPOINT", "").strip() or None
+        endpoint = (
+            os.getenv("CARACAL_GATEWAY_ENDPOINT", "").strip()
+            or os.getenv("CARACAL_GATEWAY_URL", "").strip()
+            or None
+        )
         api_key = os.getenv("CARACAL_GATEWAY_API_KEY", "").strip() or None
         enabled = os.getenv("CARACAL_GATEWAY_ENABLED", "").strip().lower() in {
             "1",

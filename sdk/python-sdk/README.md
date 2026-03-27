@@ -29,3 +29,16 @@ pip install "caracal-sdk[core]"
 - Preserve parity with the Node SDK in `sdk/node-sdk/`
 - Support CLI/TUI integrations with stable core abstractions
 - Ship as a standalone package independent of core internals
+
+## Runtime Endpoint
+
+By default, the SDK targets `http://localhost:8000`.
+
+To target a different containerized runtime endpoint (broker or enterprise),
+set:
+
+```bash
+export CARACAL_API_URL=http://localhost:8000
+```
+
+or pass `base_url` directly when constructing `CaracalClient`.
