@@ -31,7 +31,7 @@ from caracal.mcp.adapter import MCPAdapter, MCPContext, MCPResult
 from caracal.core.authority import AuthorityEvaluator
 from caracal.core.metering import MeteringCollector
 from caracal.exceptions import CaracalError
-from caracal.logging_config import get_logger
+from caracal.logging_config import get_logger, setup_runtime_logging
 
 logger = get_logger(__name__)
 
@@ -70,6 +70,7 @@ class MCPServiceConfig:
     max_request_size_mb: int = 10
     enable_health_check: bool = True
     health_check_path: str = "/health"
+    log_level: str = "info"
     
     def __post_init__(self):
         if self.mcp_servers is None:
@@ -473,7 +474,7 @@ class MCPAdapterService:
             app=self.app,
             host=host,
             port=port,
-            log_level="info",
+            log_level=self.config.log_level,
         )
         
         server = uvicorn.Server(config)
@@ -506,6 +507,17 @@ async def main(config_path: Optional[str] = None, listen_address: Optional[str] 
     from caracal.core.authority_ledger import AuthorityLedgerWriter
     from caracal.core.ledger import LedgerWriter
     
+    runtime_policy = setup_runtime_logging(
+        requested_level=os.environ.get("LOG_LEVEL"),
+    )
+    logger.info(
+        "runtime_logging_configured",
+        mode=runtime_policy.mode,
+        level=runtime_policy.level,
+        json_format=runtime_policy.json_format,
+        redact_sensitive=runtime_policy.redact_sensitive,
+    )
+
     logger.info("Initializing Caracal Core components...")
     
     # Load production config
@@ -538,7 +550,8 @@ async def main(config_path: Optional[str] = None, listen_address: Optional[str] 
         or os.environ.get("CARACAL_MCP_LISTEN_ADDRESS")
         or core_config.mcp_adapter.listen_address,
         mcp_servers=mcp_servers,
-        enable_health_check=core_config.mcp_adapter.health_check_enabled
+        enable_health_check=core_config.mcp_adapter.health_check_enabled,
+        log_level=runtime_policy.level.lower(),
     )
     
     # Initialize database connection via standard manager

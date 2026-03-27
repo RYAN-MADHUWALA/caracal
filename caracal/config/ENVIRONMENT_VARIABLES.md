@@ -75,6 +75,15 @@ database:
 |----------|-------------|---------|----------|
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO | No |
 | `LOG_FILE` | Path to log file | ~/.caracal/caracal.log | No |
+| `CARACAL_ENV_MODE` | Runtime mode (`dev`, `staging`, `prod`) | dev | No |
+| `CARACAL_DEBUG_LOGS` | Enable debug logs (effective only in `dev`) | false | No |
+| `CARACAL_JSON_LOGS` | Force JSON logs in `dev` mode | false | No |
+
+### Runtime Mode Logging Rules
+
+- `dev`: human-readable logs by default; DEBUG allowed only when `CARACAL_DEBUG_LOGS=true`.
+- `staging`: JSON logs with sensitive-field redaction; DEBUG automatically downgraded.
+- `prod`: JSON logs with sensitive-field redaction; DEBUG automatically downgraded.
 
 ## Example Configuration File
 
