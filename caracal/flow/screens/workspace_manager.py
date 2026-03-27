@@ -203,6 +203,7 @@ def _create_workspace(console: Console, state: FlowState) -> None:
 def _switch_workspace(console: Console, state: FlowState) -> None:
     """Switch active workspace."""
     from caracal.deployment.config_manager import ConfigManager
+    from caracal.flow.state import StatePersistence
     
     console.clear()
     console.print(Panel(
@@ -239,9 +240,19 @@ def _switch_workspace(console: Console, state: FlowState) -> None:
         result = menu.run()
         
         if result and result.key != "back":
+            # Persist the current workspace state before switching away.
+            StatePersistence().save(state)
+
             # Switch to selected workspace
             set_default_workspace(config_mgr, result.key)
             set_workspace(config_mgr.get_workspace_path(result.key))
+
+            # Replace persisted state with the selected workspace's state.
+            active_state = StatePersistence().load()
+            state.onboarding = active_state.onboarding
+            state.preferences = active_state.preferences
+            state.recent_actions = active_state.recent_actions
+            state.favorite_commands = active_state.favorite_commands
             
             console.print()
             console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Switched to workspace: {result.key}[/]")
@@ -251,6 +262,7 @@ def _switch_workspace(console: Console, state: FlowState) -> None:
                 f"Switched to workspace: {result.key}",
                 success=True
             ))
+            StatePersistence().save(state)
             
             console.print()
             console.print(f"  [{Colors.HINT}]Press Enter to continue...[/]")

@@ -132,6 +132,7 @@ def _build_activity_info(state: FlowState) -> Table:
     """Build activity information table."""
     from caracal.deployment.sync_engine import SyncEngine
     from caracal.deployment.config_manager import ConfigManager
+    from caracal.flow.workspace import get_workspace
     
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Info", style=Colors.DIM)
@@ -157,11 +158,17 @@ def _build_activity_info(state: FlowState) -> Table:
         else:
             table.add_row(f"[{Colors.DIM}]Sync not enabled[/]")
         
-        # Recent actions
-        if state.recent_actions:
+        # Recent actions are workspace-scoped.
+        active_workspace = str(get_workspace().root.resolve())
+        workspace_actions = [
+            action for action in state.recent_actions
+            if action.get("workspace") == active_workspace
+        ]
+
+        if workspace_actions:
             table.add_row("")
             table.add_row(f"[{Colors.INFO}]Recent Actions:[/]")
-            for action in state.recent_actions[:3]:
+            for action in workspace_actions[:3]:
                 icon = Icons.SUCCESS if action.get('success', True) else Icons.ERROR
                 color = Colors.SUCCESS if action.get('success', True) else Colors.ERROR
                 table.add_row(f"  [{color}]{icon}[/] {action.get('description', 'Unknown')}")

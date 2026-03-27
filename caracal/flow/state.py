@@ -123,15 +123,25 @@ class RecentAction:
     description: str
     timestamp: str
     success: bool = True
+    workspace: Optional[str] = None
     
     @classmethod
     def create(cls, action: str, description: str, success: bool = True) -> "RecentAction":
         """Create a new action record."""
+        workspace = None
+        try:
+            from caracal.flow.workspace import get_workspace
+
+            workspace = str(get_workspace().root.resolve())
+        except Exception:
+            pass
+
         return cls(
             action=action,
             description=description,
             timestamp=datetime.utcnow().isoformat(),
             success=success,
+            workspace=workspace,
         )
 
 
@@ -169,12 +179,23 @@ class StatePersistence:
     """Handles loading and saving state to disk."""
     
     def __init__(self, path: Optional[Path] = None, workspace: "Optional[WorkspaceManager]" = None):
-        if path:
-            self.path = path
-        else:
-            from caracal.flow.workspace import get_workspace
-            ws = workspace or get_workspace()
-            self.path = ws.state_path
+        self._path = path
+        self._workspace = workspace
+
+    @property
+    def path(self) -> Path:
+        """Return the current state file path.
+
+        When no explicit path was provided, resolve it lazily from the active
+        workspace so workspace switches are reflected immediately.
+        """
+        if self._path is not None:
+            return self._path
+
+        from caracal.flow.workspace import get_workspace
+
+        ws = self._workspace or get_workspace()
+        return ws.state_path
     
     def load(self) -> FlowState:
         """Load state from disk, or return defaults."""

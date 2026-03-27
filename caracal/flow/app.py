@@ -99,6 +99,7 @@ class FlowApp:
 
             # Reconfigure logs after onboarding in case workspace changed.
             self._configure_workspace_logging()
+            self.state = self.persistence.load()
             
             # Main loop
             self._run_main_loop()
