@@ -184,7 +184,7 @@ class EnterpriseFlow:
             ("SSO Integration", "SAML, OIDC, Okta, Azure AD, Google Workspace"),
             ("Advanced Analytics", "Real-time dashboard, anomaly detection, usage patterns"),
             ("Workflow Automation", "Event-driven automation, custom workflows"),
-            ("Compliance Reporting", "SOC 2, ISO 27001, GDPR, HIPAA reports"),
+            ("Compliance Reporting", "SOC 2, ISO 27001, GDPR reports"),
             ("Multi-Tenancy", "Tenant isolation, per-tenant configuration"),
             ("Priority Support", "24/7 support, dedicated engineer, SLA guarantees"),
         ]
@@ -245,7 +245,7 @@ class EnterpriseFlow:
             ),
             (
                 "Compliance Reporting",
-                "SOC 2, ISO 27001, GDPR, HIPAA compliance reports, automated compliance checks",
+                "SOC 2, ISO 27001, GDPR compliance reports, automated compliance checks",
                 "docs.garudexlabs.com/enterprise/compliance",
             ),
             (
