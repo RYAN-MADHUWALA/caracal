@@ -76,44 +76,159 @@ Caracal Core implements a robust enforcement engine using the following cryptogr
 
 ## Installation & Setup
 
-Choose the setup path that best matches your workflow.
+Caracal runtime is container-first.
 
-### 1\. End-User Installation (No-Repo)
+- CLI and TUI run from the same runtime image.
+- Both mount the same `.caracal` workspace volume.
+- MCP API, CLI, TUI, and SDK clients all target the same runtime endpoint contract.
 
-For operators and users who want to run Caracal directly without cloning the repository.
+This gives identical behavior in local and cloud environments: same image, same environment variables, same volume-backed workspace semantics.
 
-```bash
-# Install the core package
-pip install caracal-core # npm install @caracal/core
+### 1\. Docker-Only (No Repository Required)
 
-# Initialize the base configuration
-caracal init
-
-# Launch the Terminal User Interface (TUI)
-caracal-flow
-```
-
-### 2\. Local Bootstrap (Development & Infrastructure)
-
-For contributors or users needing a full local stack. This uses the included Makefile to install Python dependencies via `uv` and spin up required infrastructure (PostgreSQL + Redis).
+Use this when you want to start Caracal by pulling and running images directly.
 
 ```bash
-# Navigate to the repository root
-cd Caracal/
+# Runtime image used by API + CLI + TUI
+export CARACAL_RUNTIME_IMAGE=ghcr.io/garudex-labs/caracal-runtime:latest
+docker pull "$CARACAL_RUNTIME_IMAGE"
 
-# Standard setup for users
-make setup-user
+# Shared runtime network + persistent volumes
+docker network create caracal-runtime || true
+docker volume create caracal_state
+docker volume create caracal_postgres_data
+docker volume create caracal_redis_data
 
-# Setup for contributors (includes dev tools and test dependencies)
-make setup-dev
+# Infrastructure services
+docker run -d --name caracal-postgres \
+  --network caracal-runtime \
+  -e POSTGRES_DB=caracal \
+  -e POSTGRES_USER=caracal \
+  -e POSTGRES_PASSWORD=caracal \
+  -v caracal_postgres_data:/var/lib/postgresql/data \
+  postgres:16-alpine
+
+docker run -d --name caracal-redis \
+  --network caracal-runtime \
+  -v caracal_redis_data:/data \
+  redis:7-alpine redis-server --appendonly yes
+
+# Runtime API
+docker run -d --name caracal-mcp \
+  --network caracal-runtime \
+  -p 8000:8080 \
+  -v caracal_state:/home/caracal/.caracal \
+  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
+  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
+  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
+  -e CARACAL_MCP_LISTEN_ADDRESS=0.0.0.0:8080 \
+  -e CARACAL_DB_HOST=caracal-postgres \
+  -e CARACAL_DB_PORT=5432 \
+  -e CARACAL_DB_NAME=caracal \
+  -e CARACAL_DB_USER=caracal \
+  -e CARACAL_DB_PASSWORD=caracal \
+  -e REDIS_HOST=caracal-redis \
+  -e REDIS_PORT=6379 \
+  -e CARACAL_ENV_MODE=dev \
+  "$CARACAL_RUNTIME_IMAGE" python -m caracal.mcp.service
 ```
 
-Once bootstrapped, you can use Caracal directly from your shell:
+Run CLI and TUI against the same workspace volume:
 
 ```bash
-caracal
-caracal-flow
+# CLI
+docker run --rm -it \
+  --network caracal-runtime \
+  -v caracal_state:/home/caracal/.caracal \
+  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
+  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
+  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
+  -e CARACAL_API_URL=http://caracal-mcp:8080 \
+  "$CARACAL_RUNTIME_IMAGE" caracal
+
+# TUI
+docker run --rm -it \
+  --network caracal-runtime \
+  -v caracal_state:/home/caracal/.caracal \
+  -e CARACAL_RUNTIME_IN_CONTAINER=1 \
+  -e CARACAL_WORKSPACE_ROOT=/home/caracal/.caracal \
+  -e CARACAL_CONFIG_PATH=/home/caracal/.caracal/config.yaml \
+  -e CARACAL_API_URL=http://caracal-mcp:8080 \
+  "$CARACAL_RUNTIME_IMAGE" caracal-flow
 ```
+
+CLI and TUI now operate on one workspace (`caracal_state` volume), so switching between interfaces never duplicates or diverges state.
+
+### 2\. Repository Compose Workflows (Optional)
+
+If you do have the repository, use either compose file:
+
+```bash
+# Local build workflow
+docker compose -f deploy/docker-compose.yml up -d mcp
+
+# Image-only workflow (pulls CARACAL_RUNTIME_IMAGE)
+docker compose -f deploy/docker-compose.image.yml pull
+docker compose -f deploy/docker-compose.image.yml up -d mcp
+```
+
+### Environment Modes and Logging
+
+Caracal supports three environment modes via `CARACAL_ENV_MODE`:
+
+- `dev`: interactive logs, debug logging available only when `CARACAL_DEBUG_LOGS=true`
+- `staging`: minimal structured JSON logs, sensitive field redaction enabled
+- `prod`: minimal structured JSON logs, sensitive field redaction enabled
+
+Additional controls:
+
+- `CARACAL_JSON_LOGS=true` forces JSON logging in `dev`
+- `LOG_LEVEL` sets requested level, but `DEBUG` is automatically downgraded outside `dev`
+
+### Data Persistence, Migration, and Deletion
+
+- Runtime workspace data persists in the mounted `.caracal` volume.
+- Existing legacy workspace/runtime artifacts are migrated into workspace-local paths during initialization.
+- Repository-to-package migration remains available via:
+
+```bash
+caracal migrate repo-to-package
+```
+
+- Workspace deletion is backup-first and schema-aware:
+
+```bash
+caracal workspace delete <workspace-name> --force
+```
+
+For full environment reset, remove runtime volumes explicitly.
+
+### Enterprise Integration (Gateway + Web UI)
+
+For enterprise mode, point runtime traffic through gateway:
+
+```bash
+export CARACAL_GATEWAY_URL=http://gateway:8443
+export CARACAL_GATEWAY_ENDPOINT=http://gateway:8443
+export CARACAL_GATEWAY_ENABLED=true
+```
+
+This ensures provider execution, policy enforcement, mandate checks, and credential-mediated calls route through the gateway path consistently.
+
+In `caracalEnterprise`, backend and web UI integration should include:
+
+- `GATEWAY_URL` for gateway admin/status routing
+- shared `CARACAL_RUNTIME_NETWORK` so enterprise services can reach `caracal-mcp`
+- `CARACAL_MODE` set to `dev`, `staging`, or `prod` for environment behavior parity
+
+### SDK Runtime Contract
+
+Node and Python SDKs both resolve endpoint consistently:
+
+1. `CARACAL_API_URL`
+2. fallback `http://localhost:8000`
+
+This keeps SDK integrations stable across local runtime, broker mode, and gateway-backed deployments.
 
 -----
 

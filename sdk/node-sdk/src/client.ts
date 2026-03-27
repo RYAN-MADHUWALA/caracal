@@ -15,6 +15,11 @@ import { MandateOperations } from './mandates';
 import { DelegationOperations } from './delegation';
 import { LedgerOperations } from './ledger';
 
+const DEFAULT_BASE_URL = (() => {
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  return proc?.env?.CARACAL_API_URL ?? 'http://localhost:8000';
+})();
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -51,7 +56,7 @@ export class CaracalClient {
 
     this._hooks = new HookRegistry();
     this._adapter = options.adapter ?? new HttpAdapter({
-      baseUrl: options.baseUrl ?? 'http://localhost:8000',
+      baseUrl: options.baseUrl ?? DEFAULT_BASE_URL,
       apiKey: options.apiKey,
     });
 
@@ -106,7 +111,7 @@ export class CaracalClient {
 
 export class CaracalBuilder {
   private _apiKey?: string;
-  private _baseUrl = 'http://localhost:8000';
+  private _baseUrl = DEFAULT_BASE_URL;
   private _adapter?: BaseAdapter;
   private _extensions: CaracalExtension[] = [];
 
