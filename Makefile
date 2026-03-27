@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help ensure-uv check-tools deps deps-dev infra-up infra-down infra-logs infra-status setup-user setup-dev
+.PHONY: help ensure-uv check-tools deps deps-dev infra-up infra-down infra-logs infra-status setup-user setup-dev runtime-up runtime-down runtime-logs runtime-reset runtime-cli runtime-flow
 
 # Auto-detect Docker Compose command.
 DOCKER_COMPOSE := $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo ""; fi)
@@ -13,7 +13,7 @@ help:
 	@echo "  make setup-user  End-user setup (deps + infra + CLI install)"
 	@echo "  make setup-dev   Developer setup (dev deps + infra + CLI install)"
 	@echo ""
-	@echo "After setup, run directly: caracal or caracal-flow"
+	@echo "After setup, use host orchestrator: caracal up | caracal cli | caracal flow"
 	@echo ""
 	@echo "Optional utility targets:"
 	@echo "  make deps        Install runtime Python deps from uv.lock"
@@ -22,6 +22,12 @@ help:
 	@echo "  make infra-down  Stop infra containers"
 	@echo "  make infra-logs  Tail PostgreSQL + Redis logs"
 	@echo "  make infra-status Show infra container status"
+	@echo "  make runtime-up   Wrapper for 'caracal up'"
+	@echo "  make runtime-down Wrapper for 'caracal down'"
+	@echo "  make runtime-logs Wrapper for 'caracal logs -f'"
+	@echo "  make runtime-reset Wrapper for 'caracal reset'"
+	@echo "  make runtime-cli  Wrapper for 'caracal cli'"
+	@echo "  make runtime-flow Wrapper for 'caracal flow'"
 
 ensure-uv:
 	@if ! command -v uv >/dev/null 2>&1; then \
@@ -81,8 +87,26 @@ infra-status: check-tools
 
 setup-user: deps infra-up
 	uv tool install --force --from . caracal-core
-	@echo "Setup complete. Run: caracal or caracal-flow"
+	@echo "Setup complete. Run: caracal up"
 
 setup-dev: deps-dev infra-up
 	uv tool install --force --from . caracal-core
-	@echo "Developer setup complete. Run: caracal or caracal-flow"
+	@echo "Developer setup complete. Run: caracal up"
+
+runtime-up:
+	caracal up
+
+runtime-down:
+	caracal down
+
+runtime-logs:
+	caracal logs -f
+
+runtime-reset:
+	caracal reset
+
+runtime-cli:
+	caracal cli
+
+runtime-flow:
+	caracal flow

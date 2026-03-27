@@ -10,6 +10,9 @@ This guide is focused on fast setup, clean changes, and predictable review.
 git clone https://github.com/Garudex-Labs/Caracal.git
 cd Caracal
 make setup-dev
+
+# Start runtime stack
+caracal up
 ```
 
 What this does:
@@ -33,6 +36,28 @@ make infra-up
 
 # Verify
 caracal --version
+
+# Start runtime stack
+caracal up
+```
+
+## Runtime Commands
+
+Host `caracal` is orchestration-only.
+
+```bash
+caracal up
+caracal down
+caracal cli
+caracal flow
+caracal logs -f
+caracal reset
+```
+
+Full interactive CLI runs inside container:
+
+```bash
+caracal cli -- --help
 ```
 
 ## Infrastructure Commands
@@ -50,6 +75,16 @@ make infra-down
 - `tests/`: test suite
 - `docs/`: docs and architecture notes
 - `scripts/`: helper scripts
+
+## Build and Packaging File Roles
+
+These files are active and should be kept:
+
+- `Makefile`: developer wrapper and setup helpers
+- `MANIFEST.in`: source distribution include/exclude rules
+- `setup.py`: compatibility entrypoint for legacy build tools
+- `uv.lock`: locked dependency graph for reproducible `uv sync`
+- `alembic.ini`: Alembic configuration for migration commands only
 
 ## Development Workflow
 
