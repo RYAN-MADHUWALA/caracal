@@ -144,19 +144,13 @@ storage:
         assert result.exit_code == 0
         assert 'backup' in result.output.lower()
     
-    def test_init_command(self):
-        """Test init command."""
+    def test_init_command_is_not_available(self):
+        """Top-level init should not be exposed anymore."""
         runner = CliRunner()
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = runner.invoke(cli, ['setup', 'init', '--workspace', tmpdir])
+        result = runner.invoke(cli, ['init'])
 
-            assert result.exit_code == 0
-            assert 'Initialized workspace' in result.output
-
-            # Check that files were created in the provided workspace.
-            caracal_dir = Path(tmpdir)
-            assert caracal_dir.exists()
+        assert result.exit_code != 0
+        assert "No such command 'init'" in result.output
 
         def test_doctor_detects_workspace_database_config(self, tmp_path, monkeypatch):
                 """Doctor reports PostgreSQL as configured when active YAML has a database section."""

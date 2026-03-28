@@ -35,7 +35,9 @@ def get_workspace_from_ctx(ctx: click.Context) -> str:
 
     workspaces = config_manager.list_workspaces()
     if not workspaces:
-        raise click.ClickException("No workspaces found. Create one first with 'caracal init'.")
+        raise click.ClickException(
+            "No workspaces found. Create one first with 'caracal workspace create <name>'."
+        )
     return workspaces[0]
 
 
