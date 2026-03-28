@@ -173,7 +173,7 @@ class GatewayConfig:
     """Gateway proxy configuration."""
     
     enabled: bool = False
-    listen_address: str = "0.0.0.0:8443"
+    listen_address: str = ""
     tls: TLSConfig = field(default_factory=TLSConfig)
     auth_mode: str = "mtls"  # "mtls", "jwt", or "api_key"
     jwt_public_key: str = ""

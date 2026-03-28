@@ -226,14 +226,14 @@ def config_edition(edition_value: Optional[str], gateway_url: Optional[str], gat
             if edition == Edition.ENTERPRISE:
                 detected_gateway_url = edition_manager.get_gateway_url()
                 if detected_gateway_url:
-                    result["gateway_url"] = detected_gateway_url
+                    result["enterprise_url"] = detected_gateway_url
             click.echo(json.dumps(result))
         else:
             console.print(f"Current edition: [bold]{edition.value}[/bold] [dim](auto)[/dim]")
             if edition == Edition.ENTERPRISE:
                 detected_gateway_url = edition_manager.get_gateway_url()
                 if detected_gateway_url:
-                    console.print(f"  Gateway URL: {detected_gateway_url}")
+                    console.print(f"  Enterprise URL: {detected_gateway_url}")
                         
     except Exception as e:
         logger.error("config_edition_failed", error=str(e))
@@ -1064,7 +1064,11 @@ def provider_add(
         )
         effective_service_type = service_type.strip().lower() if service_type else "api"
 
-        gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+        gateway_url = (
+            edition_manager.get_gateway_url()
+            or os.environ.get("CARACAL_ENTERPRISE_URL")
+            or os.environ.get("CARACAL_GATEWAY_URL")
+        )
         if edition_manager.is_enterprise() and gateway_url:
             raise click.ClickException(
                 "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
@@ -1145,7 +1149,11 @@ def provider_list(workspace: Optional[str], format: str):
         if edition_manager.is_enterprise():
             from caracal.deployment.gateway_client import GatewayClient
 
-            gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+            gateway_url = (
+                edition_manager.get_gateway_url()
+                or os.environ.get("CARACAL_ENTERPRISE_URL")
+                or os.environ.get("CARACAL_GATEWAY_URL")
+            )
             if gateway_url:
                 gateway_client = GatewayClient(
                     gateway_url=gateway_url,
@@ -1273,7 +1281,11 @@ def provider_test(name: str, workspace: Optional[str]):
             if edition_manager.is_enterprise():
                 from caracal.deployment.gateway_client import GatewayClient
 
-                gateway_url = edition_manager.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+                gateway_url = (
+                    edition_manager.get_gateway_url()
+                    or os.environ.get("CARACAL_ENTERPRISE_URL")
+                    or os.environ.get("CARACAL_GATEWAY_URL")
+                )
                 if gateway_url:
                     gateway_client = GatewayClient(
                         gateway_url=gateway_url,
