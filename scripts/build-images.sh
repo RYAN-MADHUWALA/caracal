@@ -27,7 +27,6 @@ docker build -t caracal-runtime:v$VERSION -f "$DOCKER_DIR/Dockerfile.runtime" "$
 # Backward-compatible tags for existing workflows.
 docker tag caracal-runtime:v$VERSION caracal-mcp-adapter:v$VERSION
 docker tag caracal-runtime:v$VERSION caracal-cli:v$VERSION
-docker tag caracal-runtime:v$VERSION caracal-flow:v$VERSION
 
 echo ""
 echo "Docker images built successfully!"
@@ -35,4 +34,3 @@ echo "Images:"
 echo "  - caracal-runtime:v$VERSION"
 echo "  - caracal-mcp-adapter:v$VERSION"
 echo "  - caracal-cli:v$VERSION"
-echo "  - caracal-flow:v$VERSION"

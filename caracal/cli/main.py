@@ -100,7 +100,7 @@ class WorkspaceAwareGroup(click.Group):
         commands = self.list_commands(ctx)
         if commands:
             # Group commands by category
-            core_commands = ['init', 'workspace', 'principal', 'policy', 'authority']
+            core_commands = ['init', 'workspace', 'principal', 'policy', 'authority', 'flow']
             enterprise_commands = ['sync', 'delegation', 'audit']
             system_commands = ['config', 'provider', 'doctor', 'version', 'completion']
             
@@ -534,6 +534,11 @@ authority.add_command(revoke)
 authority.add_command(list_mandates, name='list')
 authority.add_command(delegate)
 authority.add_command(graph)
+
+
+# Flow (interactive TUI)
+from caracal.flow.main import main as flow_main
+cli.add_command(flow_main, name='flow')
 
 
 # =============================================================================
