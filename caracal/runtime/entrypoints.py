@@ -337,8 +337,8 @@ def _host_down(namespace: argparse.Namespace) -> int:
         capture_output=True,
         text=True,
     )
-    _emit_compose_teardown_output(result.stdout, result.stderr)
-    return result.returncode
+    network_in_use = _emit_compose_teardown_output(result.stdout, result.stderr)
+    return _finalize_teardown_result(result.returncode, network_in_use)
 
 
 def _host_reset(namespace: argparse.Namespace) -> int:
@@ -350,11 +350,42 @@ def _host_reset(namespace: argparse.Namespace) -> int:
         capture_output=True,
         text=True,
     )
-    _emit_compose_teardown_output(result.stdout, result.stderr)
-    return result.returncode
+    network_in_use = _emit_compose_teardown_output(result.stdout, result.stderr)
+    return _finalize_teardown_result(result.returncode, network_in_use)
 
 
-def _emit_compose_teardown_output(stdout: str | None, stderr: str | None) -> None:
+def _finalize_teardown_result(returncode: int, network_in_use: bool) -> int:
+    if not network_in_use:
+        return returncode
+
+    network_name = os.environ.get("CARACAL_RUNTIME_NETWORK", "caracal-runtime")
+    removed_blockers, remaining_blockers, network_removed = _reconcile_shared_runtime_network(network_name)
+
+    if removed_blockers:
+        print(
+            f"Removed shared runtime blocker container(s): {', '.join(removed_blockers)}."
+        )
+
+    if network_removed:
+        print(f"Removed shared Docker network '{network_name}'.")
+        return returncode
+
+    if remaining_blockers:
+        print(
+            f"Error: shared Docker network '{network_name}' is still attached to: "
+            f"{', '.join(remaining_blockers)}.",
+            file=sys.stderr,
+        )
+        return returncode or 1
+
+    print(
+        f"Error: failed to remove shared Docker network '{network_name}'.",
+        file=sys.stderr,
+    )
+    return returncode or 1
+
+
+def _emit_compose_teardown_output(stdout: str | None, stderr: str | None) -> bool:
     filtered_stdout, stdout_network_in_use = _filter_compose_teardown_stream(stdout)
     filtered_stderr, stderr_network_in_use = _filter_compose_teardown_stream(stderr)
     filtered_network_in_use = stdout_network_in_use or stderr_network_in_use
@@ -365,20 +396,7 @@ def _emit_compose_teardown_output(stdout: str | None, stderr: str | None) -> Non
     if filtered_stderr:
         print(filtered_stderr, file=sys.stderr, end="" if filtered_stderr.endswith("\n") else "\n")
 
-    if filtered_network_in_use:
-        network_name = os.environ.get("CARACAL_RUNTIME_NETWORK", "caracal-runtime")
-        attached_containers = _list_network_container_names(network_name)
-        if attached_containers:
-            container_list = ", ".join(attached_containers)
-            print(
-                f"Note: shared Docker network '{network_name}' is still attached to: "
-                f"{container_list}. It was left intact."
-            )
-            return
-
-        print(
-            f"Note: shared Docker network '{network_name}' is still in use by other containers and was left intact."
-        )
+    return filtered_network_in_use
 
 
 def _filter_compose_teardown_stream(output: str | None) -> tuple[str, bool]:
@@ -430,14 +448,121 @@ def _list_network_container_names(network_name: str) -> list[str]:
     return sorted(name for name in names if name)
 
 
+def _reconcile_shared_runtime_network(network_name: str) -> tuple[list[str], list[str], bool]:
+    attached_containers = _list_network_container_names(network_name)
+    removed_blockers: list[str] = []
+
+    for container_name in attached_containers:
+        if not _is_caracal_managed_shared_container(container_name):
+            continue
+        if _remove_container(container_name):
+            removed_blockers.append(container_name)
+
+    remaining_blockers = _list_network_container_names(network_name)
+    if remaining_blockers:
+        return removed_blockers, remaining_blockers, False
+
+    return removed_blockers, [], _remove_network(network_name)
+
+
+def _is_caracal_managed_shared_container(container_name: str) -> bool:
+    labels = _inspect_container_labels(container_name)
+    project = labels.get("com.docker.compose.project", "")
+
+    if project.startswith("caracal"):
+        return True
+
+    return False
+
+
+def _inspect_container_labels(container_name: str) -> dict[str, str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return {}
+
+    result = subprocess.run(
+        [docker, "inspect", container_name, "--format", "{{json .Config.Labels}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return {}
+
+    raw_payload = (result.stdout or "").strip()
+    if not raw_payload or raw_payload == "null":
+        return {}
+
+    try:
+        labels = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(labels, dict):
+        return {}
+
+    return {
+        str(key): str(value)
+        for key, value in labels.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _remove_container(container_name: str) -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+
+    result = subprocess.run(
+        [docker, "rm", "-f", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _remove_network(network_name: str) -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+
+    result = subprocess.run(
+        [docker, "network", "rm", network_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def _host_logs(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
     compose_cmd = _compose_cmd(compose_file)
     cmd = compose_cmd + ["logs"]
     if namespace.follow:
         cmd.append("-f")
+        cmd.extend(namespace.services)
+        result = subprocess.run(cmd, check=False)
+        return result.returncode
+
     cmd.extend(namespace.services)
-    result = subprocess.run(cmd, check=False)
+    result = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
+
+    if not (result.stdout or "").strip() and not (result.stderr or "").strip():
+        print("No runtime logs are available. Start the stack with 'caracal up' first.")
+
     return result.returncode
 
 

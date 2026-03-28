@@ -157,23 +157,17 @@ def test_host_cli_rejects_passthrough_arguments(capsys):
     assert "unrecognized arguments" in error_output
 
 
-def test_emit_compose_teardown_output_filters_network_warning_from_stderr(monkeypatch, capsys):
-    monkeypatch.setattr(
-        entrypoints,
-        "_list_network_container_names",
-        lambda network_name: ["caracal-gateway-dev"] if network_name == "caracal-runtime" else [],
-    )
-
-    entrypoints._emit_compose_teardown_output(
+def test_emit_compose_teardown_output_filters_network_warning_from_stderr(capsys):
+    network_in_use = entrypoints._emit_compose_teardown_output(
         stdout="",
         stderr=" Network caracal-runtime Removing \n Network caracal-runtime Resource is still in use \n",
     )
 
     captured = capsys.readouterr()
+    assert network_in_use is True
     assert "Network caracal-runtime Removing" in captured.err
     assert "Resource is still in use" not in captured.err
     assert "Resource is still in use" not in captured.out
-    assert "caracal-gateway-dev" in captured.out
 
 
 def test_list_network_container_names_parses_docker_inspect(monkeypatch):
@@ -202,3 +196,66 @@ def test_list_network_container_names_parses_docker_inspect(monkeypatch):
         "caracal-gateway-dev",
         "caracal-mcp",
     ]
+
+
+def test_finalize_teardown_result_removes_caracal_managed_blockers(monkeypatch, capsys):
+    monkeypatch.setattr(
+        entrypoints,
+        "_reconcile_shared_runtime_network",
+        lambda network_name: (["caracal-gateway-dev"], [], True),
+    )
+
+    code = entrypoints._finalize_teardown_result(0, True)
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "caracal-gateway-dev" in captured.out
+    assert "Removed shared Docker network 'caracal-runtime'." in captured.out
+
+
+def test_finalize_teardown_result_fails_when_non_caracal_blockers_remain(capsys):
+    def _fake_reconcile(network_name):
+        return [], ["someone-elses-container"], False
+
+    from caracal.runtime import entrypoints as runtime_entrypoints
+
+    original = runtime_entrypoints._reconcile_shared_runtime_network
+    runtime_entrypoints._reconcile_shared_runtime_network = _fake_reconcile
+    try:
+        code = runtime_entrypoints._finalize_teardown_result(0, True)
+    finally:
+        runtime_entrypoints._reconcile_shared_runtime_network = original
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "someone-elses-container" in captured.err
+
+
+def test_host_logs_reports_when_no_runtime_logs(monkeypatch, capsys):
+    monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda compose_file=None: Path("/tmp/compose.yml"))
+    monkeypatch.setattr(entrypoints, "_compose_cmd", lambda _: ["docker", "compose", "-f", "/tmp/compose.yml"])
+
+    def _fake_run(cmd, check=False, capture_output=False, text=False):
+        assert cmd == [
+            "docker",
+            "compose",
+            "-f",
+            "/tmp/compose.yml",
+            "logs",
+            "mcp",
+            "postgres",
+            "redis",
+        ]
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return _Result(0, stdout="", stderr="")
+
+    monkeypatch.setattr(entrypoints.subprocess, "run", _fake_run)
+
+    namespace = argparse.Namespace(compose_file=None, follow=False, services=["mcp", "postgres", "redis"])
+    code = entrypoints._host_logs(namespace)
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "No runtime logs are available." in captured.out
