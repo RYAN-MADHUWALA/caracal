@@ -52,6 +52,27 @@ def test_caracal_entrypoint_uses_local_cli_in_container(monkeypatch):
     assert calls == [("principal", "list")]
 
 
+def test_run_local_caracal_uses_restricted_runtime(monkeypatch):
+    calls: list[list[str]] = []
+
+    def _fake_run(args):
+        calls.append(list(args))
+        return 0
+
+    monkeypatch.setattr(
+        "caracal.runtime.restricted_shell.run_restricted_command",
+        _fake_run,
+    )
+
+    try:
+        entrypoints._run_local_caracal(("workspace", "list"))
+        assert False, "Expected SystemExit"
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    assert calls == [["workspace", "list"]]
+
+
 def test_host_up_starts_full_stack(monkeypatch):
     commands: list[list[str]] = []
 
@@ -94,7 +115,7 @@ def test_host_up_skips_mcp_pull_for_local_build(monkeypatch):
     ]
 
 
-def test_host_cli_opens_interactive_shell_in_running_container(monkeypatch):
+def test_host_cli_opens_restricted_cli_in_running_container(monkeypatch):
     commands: list[list[str]] = []
 
     monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda compose_file=None: Path("/tmp/compose.yml"))
@@ -111,7 +132,7 @@ def test_host_cli_opens_interactive_shell_in_running_container(monkeypatch):
     code = entrypoints._host_cli(namespace)
 
     assert code == 0
-    assert commands == [["docker", "compose", "-f", "/tmp/compose.yml", "exec", "-u", "caracal", "mcp", "/bin/bash"]]
+    assert commands == [["docker", "compose", "-f", "/tmp/compose.yml", "exec", "-u", "caracal", "mcp", "caracal"]]
 
 
 def test_host_flow_runs_inside_runtime_container(monkeypatch):

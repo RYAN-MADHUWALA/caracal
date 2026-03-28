@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --shell /bin/bash caracal
+RUN useradd --create-home --shell /usr/sbin/nologin caracal
 
 WORKDIR /home/caracal
 
