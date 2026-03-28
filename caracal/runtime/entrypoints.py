@@ -1,7 +1,7 @@
 """Host/container command entrypoints for Caracal runtime.
 
 Host command (``caracal``): orchestration-only UX.
-Container command (``caracal``): full interactive Caracal CLI.
+Container command (``caracal``): restricted interactive Caracal CLI.
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
         description=(
             "Caracal host orchestrator.\n"
             "Use this command to manage Docker runtime services.\n"
-            "Use 'caracal cli' to open an in-container shell session."
+            "Use 'caracal cli' to open an in-container Caracal session."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
@@ -285,7 +285,7 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
 
     cli_parser = subparsers.add_parser(
         "cli",
-        help="Open an interactive shell session inside the runtime container",
+        help="Open a restricted interactive Caracal session inside the runtime container",
     )
     cli_parser.set_defaults(handler=_host_cli)
 
@@ -1047,7 +1047,7 @@ def _host_cli(namespace: argparse.Namespace) -> int:
         return start_code
 
     compose_cmd = _compose_cmd(compose_file)
-    cmd = compose_cmd + ["exec", "-u", "caracal", "mcp", "/bin/bash"]
+    cmd = compose_cmd + ["exec", "-u", "caracal", "mcp", "caracal"]
     result = subprocess.run(cmd, check=False)
     return result.returncode
 
@@ -1199,9 +1199,9 @@ def _resolve_compose_command() -> list[str]:
 
 
 def _run_local_caracal(args: Sequence[str]) -> None:
-    from caracal.cli.main import cli
+    from caracal.runtime.restricted_shell import run_restricted_command
 
-    cli.main(args=list(args), prog_name="caracal", standalone_mode=True)
+    raise SystemExit(run_restricted_command(list(args)))
 
 
 def _is_truthy(value: str | None) -> bool:

@@ -58,7 +58,7 @@ Full interactive CLI runs inside container:
 
 ```bash
 caracal cli
-# then inside the container shell:
+# then inside the restricted Caracal session:
 caracal --help
 ```
 
