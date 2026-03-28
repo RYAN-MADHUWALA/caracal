@@ -152,6 +152,30 @@ storage:
         assert result.exit_code != 0
         assert "No such command 'init'" in result.output
 
+    def test_cli_suggests_close_top_level_command(self):
+        """Unknown commands should provide a close-match suggestion."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ['principl'])
+
+        assert result.exit_code != 0
+        assert "Command not found: principl. Did you mean 'principal'?" in result.output
+
+    def test_cli_suggests_close_subcommand(self):
+        """Unknown subcommands should provide a close-match suggestion."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ['workspace', 'lst'])
+
+        assert result.exit_code != 0
+        assert "Command not found: lst. Did you mean 'list'?" in result.output
+
+    def test_cli_blocks_non_caracal_command_with_clear_message(self):
+        """Non-Caracal commands should fail with a restricted-environment hint."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ['ls'])
+
+        assert result.exit_code != 0
+        assert "Command not found: ls. Only Caracal CLI commands are available here." in result.output
+
         def test_doctor_detects_workspace_database_config(self, tmp_path, monkeypatch):
                 """Doctor reports PostgreSQL as configured when active YAML has a database section."""
                 runner = CliRunner()

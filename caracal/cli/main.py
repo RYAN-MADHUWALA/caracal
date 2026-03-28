@@ -8,6 +8,7 @@ Industry-standard CLI with workspace-centric design.
 Follows patterns from git, docker, kubectl for familiarity.
 """
 
+import difflib
 import logging
 import sys
 from pathlib import Path
@@ -79,9 +80,41 @@ def get_workspace_from_context_or_arg(ctx, workspace_arg: Optional[str] = None) 
     return ctx.obj.get('workspace', get_active_workspace())
 
 
-class WorkspaceAwareGroup(click.Group):
+class SuggestingGroup(click.Group):
+    """Click group that suggests close command names for unknown commands."""
+
+    group_class = type
+
+    def resolve_command(self, ctx: Context, args: list[str]):  # type: ignore[override]
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as exc:
+            if not args:
+                raise
+
+            command_name = click.utils.make_str(args[0])
+            suggestion = self._suggest_command(ctx, command_name)
+            if suggestion:
+                hint = f"Command not found: {command_name}. Did you mean '{suggestion}'?"
+            else:
+                hint = (
+                    f"Command not found: {command_name}. "
+                    "Only Caracal CLI commands are available here."
+                )
+
+            raise click.UsageError(hint, ctx=ctx) from exc
+
+    def _suggest_command(self, ctx: Context, command_name: str) -> str | None:
+        commands = self.list_commands(ctx)
+        matches = difflib.get_close_matches(command_name, commands, n=1, cutoff=0.5)
+        return matches[0] if matches else None
+
+
+class WorkspaceAwareGroup(SuggestingGroup):
     """Custom Group that shows active workspace in help."""
-    
+
+    group_class = SuggestingGroup
+
     def format_help(self, ctx: Context, formatter: click.HelpFormatter) -> None:
         """Format help with active workspace displayed at top."""
         # Get active workspace

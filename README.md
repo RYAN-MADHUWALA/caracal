@@ -66,7 +66,7 @@ More coming soon
 Caracal uses a two-layer command model.
 
 - Host `caracal`: orchestration only (`up`, `down`, `cli`, `flow`, `logs`, `reset`, `purge`)
-- Container `caracal`: full interactive Caracal CLI
+- Container `caracal`: restricted interactive Caracal CLI
 
 This keeps host usage simple and avoids command collisions.
 
@@ -93,8 +93,8 @@ caracal purge      # Completely remove Caracal containers, data, networks, image
 ### Host vs Container Help
 
 - `caracal --help` on host: orchestration commands only
-- `caracal cli`: opens an interactive shell inside the runtime container
-- inside that shell, run `caracal --help` for full in-container CLI help
+- `caracal cli`: opens a restricted interactive Caracal session inside the runtime container
+- inside that session, run `help` or `caracal --help` for full in-container CLI help
 
 Host `caracal` does not pass command arguments through to the container.
 
