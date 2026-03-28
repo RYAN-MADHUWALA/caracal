@@ -29,16 +29,19 @@ class SchemaVersionManager:
     detecting pending migrations, and validating schema state.
     """
     
-    def __init__(self, engine: Engine, alembic_ini_path: str = "alembic.ini"):
+    def __init__(self, engine: Engine, alembic_ini_path: str | Config = "alembic.ini"):
         """
         Initialize schema version manager.
         
         Args:
             engine: SQLAlchemy engine
-            alembic_ini_path: Path to alembic.ini configuration file
+            alembic_ini_path: Path to alembic.ini configuration file, or an Alembic Config
         """
         self.engine = engine
-        self.alembic_config = Config(alembic_ini_path)
+        if isinstance(alembic_ini_path, Config):
+            self.alembic_config = alembic_ini_path
+        else:
+            self.alembic_config = Config(alembic_ini_path)
     
     def get_current_revision(self) -> Optional[str]:
         """
@@ -182,7 +185,7 @@ class SchemaVersionManager:
         }
 
 
-def check_schema_version_on_startup(engine: Engine, alembic_ini_path: str = "alembic.ini") -> None:
+def check_schema_version_on_startup(engine: Engine, alembic_ini_path: str | Config = "alembic.ini") -> None:
     """
     Check schema version on application startup.
     

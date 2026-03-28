@@ -18,6 +18,7 @@ from click.testing import CliRunner
 from caracal._version import __version__
 from caracal.cli.main import (
     cli,
+    format_workspace_status,
     validate_non_negative_decimal,
     validate_positive_decimal,
     validate_resource_type,
@@ -49,6 +50,21 @@ class TestCLIMain:
         
         assert result.exit_code == 0
         assert __version__ in result.output
+
+    def test_cli_help_warns_when_no_workspace(self, monkeypatch):
+        """Help should show a warning instead of a fake default workspace."""
+        runner = CliRunner()
+        monkeypatch.setattr("caracal.cli.main.get_active_workspace", lambda: None)
+
+        result = runner.invoke(cli, ['--help'])
+
+        assert result.exit_code == 0
+        assert "WARNING: No workspace configured" in result.output
+
+    def test_format_workspace_status_warns_without_workspace(self):
+        """Workspace banner helper should render warning state cleanly."""
+        rendered = format_workspace_status(None)
+        assert "WARNING: No workspace configured" in rendered
     
     def test_cli_with_config_path(self):
         """Test CLI with custom config path."""
