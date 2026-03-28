@@ -65,7 +65,7 @@ More coming soon
 
 Caracal uses a two-layer command model.
 
-- Host `caracal`: orchestration only (`up`, `down`, `cli`, `flow`, `logs`, `reset`)
+- Host `caracal`: orchestration only (`up`, `down`, `cli`, `flow`, `logs`, `reset`, `purge`)
 - Container `caracal`: full interactive Caracal CLI
 
 This keeps host usage simple and avoids command collisions.
@@ -87,6 +87,7 @@ caracal cli        # Run full Caracal CLI inside container
 caracal flow       # Run TUI inside container
 caracal logs -f    # Tail runtime logs
 caracal reset      # Down + remove volumes (full local reset)
+caracal purge      # Completely remove Caracal containers, data, networks, images, and local state
 ```
 
 ### Host vs Container Help
@@ -137,6 +138,7 @@ export CARACAL_GATEWAY_ENABLED=true
 caracal migrate repo-to-package
 caracal workspace delete <workspace-name> --force
 caracal reset
+caracal purge --force
 ```
 
 ### SDK Endpoint Contract

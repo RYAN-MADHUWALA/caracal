@@ -19,6 +19,7 @@ from typing import Sequence
 COMPOSE_FILE_ENV = "CARACAL_DOCKER_COMPOSE_FILE"
 IN_CONTAINER_ENV = "CARACAL_RUNTIME_IN_CONTAINER"
 NETWORK_IN_USE_MARKER = "Resource is still in use"
+PURGE_CONFIRMATION_TEXT = "purge"
 
 _EMBEDDED_COMPOSE_FILE = Path.home() / ".caracal" / "runtime" / "docker-compose.image.yml"
 _EMBEDDED_COMPOSE_CONTENT = """name: caracal
@@ -261,6 +262,17 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
     reset_parser = subparsers.add_parser("reset", help="Stop stack and remove volumes")
     reset_parser.set_defaults(handler=_host_reset)
 
+    purge_parser = subparsers.add_parser(
+        "purge",
+        help="Completely remove all Caracal resources, data, and dependencies from the system",
+    )
+    purge_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip interactive confirmation and permanently purge Caracal resources",
+    )
+    purge_parser.set_defaults(handler=_host_purge)
+
     logs_parser = subparsers.add_parser("logs", help="Show runtime logs")
     logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log output")
     logs_parser.add_argument(
@@ -280,7 +292,7 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
     flow_parser = subparsers.add_parser("flow", help="Launch Flow (TUI) inside runtime container")
     flow_parser.set_defaults(handler=_host_flow)
 
-    for command_parser in (up_parser, down_parser, reset_parser, logs_parser, cli_parser, flow_parser):
+    for command_parser in (up_parser, down_parser, reset_parser, purge_parser, logs_parser, cli_parser, flow_parser):
         command_parser.add_argument(
             "--compose-file",
             default=None,
@@ -352,6 +364,102 @@ def _host_reset(namespace: argparse.Namespace) -> int:
     )
     network_in_use = _emit_compose_teardown_output(result.stdout, result.stderr)
     return _finalize_teardown_result(result.returncode, network_in_use)
+
+
+def _host_purge(namespace: argparse.Namespace) -> int:
+    if not _confirm_purge(force=bool(namespace.force)):
+        return 2
+
+    compose_file = None
+    compose_override = getattr(namespace, "compose_file", None)
+    if compose_override:
+        try:
+            compose_file = _resolve_compose_file(compose_override)
+        except RuntimeError:
+            compose_file = None
+
+    containers = _list_caracal_container_names()
+    volumes = _list_caracal_volume_names()
+    networks = _list_caracal_network_names()
+    images = _list_caracal_image_refs(compose_file)
+    paths = _list_caracal_purge_paths()
+
+    removed: dict[str, list[str]] = {
+        "containers": [],
+        "volumes": [],
+        "networks": [],
+        "images": [],
+        "paths": [],
+        "keyring": [],
+    }
+    failures: list[str] = []
+
+    for container_name in containers:
+        if _remove_container(container_name):
+            removed["containers"].append(container_name)
+        else:
+            failures.append(f"container:{container_name}")
+
+    for volume_name in volumes:
+        if _remove_volume(volume_name):
+            removed["volumes"].append(volume_name)
+        else:
+            failures.append(f"volume:{volume_name}")
+
+    for network_name in networks:
+        if _remove_network(network_name):
+            removed["networks"].append(network_name)
+        else:
+            failures.append(f"network:{network_name}")
+
+    for image_ref in images:
+        if _remove_image(image_ref):
+            removed["images"].append(image_ref)
+        else:
+            failures.append(f"image:{image_ref}")
+
+    for path in paths:
+        if _delete_path(path):
+            removed["paths"].append(str(path))
+        else:
+            failures.append(f"path:{path}")
+
+    if _purge_keyring_credentials():
+        removed["keyring"].append("caracal/encryption_key")
+
+    _print_purge_summary(removed)
+
+    if failures:
+        print(
+            "Error: Caracal purge left behind resources that could not be removed: "
+            + ", ".join(failures),
+            file=sys.stderr,
+        )
+        return 1
+
+    print("Caracal purge completed. The system is now clean.")
+    return 0
+
+
+def _confirm_purge(*, force: bool) -> bool:
+    if force:
+        return True
+
+    if not sys.stdin.isatty():
+        print(
+            "Error: 'caracal purge' is destructive. Re-run with '--force' in non-interactive environments.",
+            file=sys.stderr,
+        )
+        return False
+
+    print("This will permanently remove all Caracal Docker resources and local data.")
+    print("It deletes Caracal containers, volumes, networks, images, workspaces, and ~/.caracal state.")
+    response = input(f"Type '{PURGE_CONFIRMATION_TEXT}' to continue: ").strip().lower()
+    if response != PURGE_CONFIRMATION_TEXT:
+        print("Purge cancelled.")
+        return False
+
+    return True
 
 
 def _finalize_teardown_result(returncode: int, network_in_use: bool) -> int:
@@ -448,6 +556,43 @@ def _list_network_container_names(network_name: str) -> list[str]:
     return sorted(name for name in names if name)
 
 
+def _list_caracal_container_names() -> list[str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return []
+
+    result = subprocess.run(
+        [docker, "ps", "-a", "--format", "{{.Names}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    names = []
+    for raw_name in result.stdout.splitlines():
+        container_name = raw_name.strip()
+        if not container_name:
+            continue
+        if _is_caracal_managed_container(container_name):
+            names.append(container_name)
+    return sorted(set(names))
+
+
+def _is_caracal_managed_container(container_name: str) -> bool:
+    labels = _inspect_container_labels(container_name)
+    project = labels.get("com.docker.compose.project", "").lower()
+    if project.startswith("caracal"):
+        return True
+
+    image_ref = _inspect_container_image(container_name).lower()
+    if "caracal" in image_ref:
+        return True
+
+    return container_name.lower().startswith("caracal")
+
+
 def _reconcile_shared_runtime_network(network_name: str) -> tuple[list[str], list[str], bool]:
     attached_containers = _list_network_container_names(network_name)
     removed_blockers: list[str] = []
@@ -466,13 +611,7 @@ def _reconcile_shared_runtime_network(network_name: str) -> tuple[list[str], lis
 
 
 def _is_caracal_managed_shared_container(container_name: str) -> bool:
-    labels = _inspect_container_labels(container_name)
-    project = labels.get("com.docker.compose.project", "")
-
-    if project.startswith("caracal"):
-        return True
-
-    return False
+    return _is_caracal_managed_container(container_name)
 
 
 def _inspect_container_labels(container_name: str) -> dict[str, str]:
@@ -508,6 +647,23 @@ def _inspect_container_labels(container_name: str) -> dict[str, str]:
     }
 
 
+def _inspect_container_image(container_name: str) -> str:
+    docker = shutil.which("docker")
+    if docker is None:
+        return ""
+
+    result = subprocess.run(
+        [docker, "inspect", container_name, "--format", "{{.Config.Image}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return ""
+
+    return (result.stdout or "").strip()
+
+
 def _remove_container(container_name: str) -> bool:
     docker = shutil.which("docker")
     if docker is None:
@@ -515,6 +671,195 @@ def _remove_container(container_name: str) -> bool:
 
     result = subprocess.run(
         [docker, "rm", "-f", container_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _list_caracal_volume_names() -> list[str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return []
+
+    result = subprocess.run(
+        [docker, "volume", "ls", "--format", "{{.Name}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    names = []
+    for raw_name in result.stdout.splitlines():
+        volume_name = raw_name.strip()
+        if not volume_name:
+            continue
+        if _is_caracal_managed_volume(volume_name):
+            names.append(volume_name)
+    return sorted(set(names))
+
+
+def _is_caracal_managed_volume(volume_name: str) -> bool:
+    labels = _inspect_volume_labels(volume_name)
+    project = labels.get("com.docker.compose.project", "").lower()
+    if project.startswith("caracal"):
+        return True
+
+    return volume_name.lower().startswith("caracal")
+
+
+def _inspect_volume_labels(volume_name: str) -> dict[str, str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return {}
+
+    result = subprocess.run(
+        [docker, "volume", "inspect", volume_name, "--format", "{{json .Labels}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return {}
+
+    return _parse_string_dict(result.stdout)
+
+
+def _remove_volume(volume_name: str) -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+
+    result = subprocess.run(
+        [docker, "volume", "rm", "-f", volume_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _list_caracal_network_names() -> list[str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return []
+
+    result = subprocess.run(
+        [docker, "network", "ls", "--format", "{{.Name}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    names = []
+    for raw_name in result.stdout.splitlines():
+        network_name = raw_name.strip()
+        if not network_name:
+            continue
+        if _is_caracal_managed_network(network_name):
+            names.append(network_name)
+    return sorted(set(names))
+
+
+def _is_caracal_managed_network(network_name: str) -> bool:
+    if network_name in {"bridge", "host", "none"}:
+        return False
+
+    labels = _inspect_network_labels(network_name)
+    project = labels.get("com.docker.compose.project", "").lower()
+    if project.startswith("caracal"):
+        return True
+
+    return network_name.lower().startswith("caracal")
+
+
+def _inspect_network_labels(network_name: str) -> dict[str, str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return {}
+
+    result = subprocess.run(
+        [docker, "network", "inspect", network_name, "--format", "{{json .Labels}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return {}
+
+    return _parse_string_dict(result.stdout)
+
+
+def _list_caracal_image_refs(compose_file: Path | None = None) -> list[str]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return []
+
+    image_refs: set[str] = set()
+    result = subprocess.run(
+        [docker, "images", "--format", "{{.Repository}}\t{{.Tag}}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            repo, _, tag = line.partition("\t")
+            repo = repo.strip()
+            tag = tag.strip()
+            if not repo or repo == "<none>" or tag == "<none>":
+                continue
+            image_ref = f"{repo}:{tag}"
+            if "caracal" in image_ref.lower():
+                image_refs.add(image_ref)
+
+    if compose_file is not None:
+        image_refs.update(_compose_runtime_image_refs(compose_file))
+
+    return sorted(image_refs)
+
+
+def _compose_runtime_image_refs(compose_file: Path) -> set[str]:
+    try:
+        data = compose_file.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+
+    image_refs: set[str] = set()
+    for line in data.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("image:"):
+            continue
+        _, _, image_value = stripped.partition(":")
+        image_value = image_value.strip()
+        if not image_value:
+            continue
+        if "${CARACAL_RUNTIME_IMAGE:-" in image_value and image_value.endswith("}"):
+            default_ref = image_value.split("${CARACAL_RUNTIME_IMAGE:-", 1)[1][:-1]
+            if default_ref:
+                image_refs.add(default_ref)
+            env_ref = os.environ.get("CARACAL_RUNTIME_IMAGE")
+            if env_ref:
+                image_refs.add(env_ref)
+            continue
+        if "caracal" in image_value.lower():
+            image_refs.add(image_value)
+
+    return image_refs
+
+
+def _remove_image(image_ref: str) -> bool:
+    docker = shutil.which("docker")
+    if docker is None:
+        return False
+
+    result = subprocess.run(
+        [docker, "image", "rm", "-f", image_ref],
         check=False,
         capture_output=True,
         text=True,
@@ -534,6 +879,135 @@ def _remove_network(network_name: str) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+def _list_caracal_purge_paths() -> list[Path]:
+    caracal_home = _caracal_home_dir()
+    paths: set[Path] = set()
+
+    for workspace_path in _load_registered_workspace_paths():
+        if workspace_path == caracal_home or caracal_home in workspace_path.parents:
+            continue
+        paths.add(workspace_path)
+
+    paths.add(caracal_home)
+    paths.update(_completion_artifact_paths())
+
+    return sorted(paths, key=lambda path: len(path.parts), reverse=True)
+
+
+def _caracal_home_dir() -> Path:
+    return Path.home() / ".caracal"
+
+
+def _completion_artifact_paths() -> set[Path]:
+    home = Path.home()
+    return {
+        home / ".caracal-completion.bash",
+        home / ".caracal-completion.zsh",
+        home / ".caracal-completion.fish",
+        home / ".config" / "fish" / "completions" / "caracal.fish",
+    }
+
+
+def _load_registered_workspace_paths() -> list[Path]:
+    registry_path = _caracal_home_dir() / "workspaces.json"
+    if not registry_path.exists():
+        return []
+
+    try:
+        payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    workspaces = payload.get("workspaces", [])
+    if not isinstance(workspaces, list):
+        return []
+
+    paths: list[Path] = []
+    for workspace in workspaces:
+        if not isinstance(workspace, dict):
+            continue
+        raw_path = workspace.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        paths.append(Path(raw_path).expanduser())
+    return paths
+
+
+def _delete_path(path: Path) -> bool:
+    if not path.exists() and not path.is_symlink():
+        return True
+
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, onerror=_handle_remove_readonly)
+        else:
+            path.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _handle_remove_readonly(func, path: str, exc_info) -> None:
+    del exc_info
+    os.chmod(path, 0o700)
+    func(path)
+
+
+def _purge_keyring_credentials() -> bool:
+    try:
+        import keyring
+    except Exception:
+        return False
+
+    try:
+        keyring.delete_password("caracal", "encryption_key")
+        return True
+    except Exception:
+        return False
+
+
+def _print_purge_summary(removed: dict[str, list[str]]) -> None:
+    labels = {
+        "containers": "containers",
+        "volumes": "volumes",
+        "networks": "networks",
+        "images": "images",
+        "paths": "paths",
+        "keyring": "keyring entries",
+    }
+
+    found_any = False
+    for key in ("containers", "volumes", "networks", "images", "paths", "keyring"):
+        values = removed.get(key, [])
+        if not values:
+            continue
+        found_any = True
+        print(f"Removed {labels[key]}: {', '.join(values)}")
+
+    if not found_any:
+        print("No Caracal runtime resources were found to purge.")
+
+
+def _parse_string_dict(raw_payload: str | None) -> dict[str, str]:
+    raw_payload = (raw_payload or "").strip()
+    if not raw_payload or raw_payload == "null":
+        return {}
+
+    try:
+        data = json.loads(raw_payload)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    return {
+        str(key): str(value)
+        for key, value in data.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
 
 
 def _host_logs(namespace: argparse.Namespace) -> int:

@@ -26,6 +26,7 @@ def test_host_help_lists_orchestrator_commands(capsys):
     assert "flow" in output
     assert "logs" in output
     assert "reset" in output
+    assert "purge" in output
 
 
 def test_caracal_entrypoint_uses_host_orchestrator(monkeypatch):
@@ -259,3 +260,76 @@ def test_host_logs_reports_when_no_runtime_logs(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert code == 0
     assert "No runtime logs are available." in captured.out
+
+
+def test_host_purge_requires_force_in_noninteractive_mode(monkeypatch, capsys):
+    class _Stdin:
+        @staticmethod
+        def isatty():
+            return False
+
+    monkeypatch.setattr(entrypoints.sys, "stdin", _Stdin())
+
+    namespace = argparse.Namespace(force=False, compose_file=None)
+    code = entrypoints._host_purge(namespace)
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "--force" in captured.err
+
+
+def test_host_purge_removes_caracal_resources(monkeypatch, capsys):
+    monkeypatch.setattr(entrypoints, "_confirm_purge", lambda force: True)
+    monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda compose_file=None: Path("/tmp/compose.yml"))
+    monkeypatch.setattr(entrypoints, "_list_caracal_container_names", lambda: ["caracal-mcp"])
+    monkeypatch.setattr(entrypoints, "_list_caracal_volume_names", lambda: ["caracal_caracal_state"])
+    monkeypatch.setattr(entrypoints, "_list_caracal_network_names", lambda: ["caracal-runtime"])
+    monkeypatch.setattr(
+        entrypoints,
+        "_list_caracal_image_refs",
+        lambda compose_file=None: ["caracal-runtime:latest"],
+    )
+    monkeypatch.setattr(
+        entrypoints,
+        "_list_caracal_purge_paths",
+        lambda: [Path("/tmp/.caracal"), Path("/tmp/.caracal-completion.bash")],
+    )
+
+    removals: list[tuple[str, str]] = []
+    monkeypatch.setattr(entrypoints, "_remove_container", lambda name: removals.append(("container", name)) or True)
+    monkeypatch.setattr(entrypoints, "_remove_volume", lambda name: removals.append(("volume", name)) or True)
+    monkeypatch.setattr(entrypoints, "_remove_network", lambda name: removals.append(("network", name)) or True)
+    monkeypatch.setattr(entrypoints, "_remove_image", lambda ref: removals.append(("image", ref)) or True)
+    monkeypatch.setattr(entrypoints, "_delete_path", lambda path: removals.append(("path", str(path))) or True)
+    monkeypatch.setattr(entrypoints, "_purge_keyring_credentials", lambda: True)
+
+    namespace = argparse.Namespace(force=True, compose_file=None)
+    code = entrypoints._host_purge(namespace)
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert ("container", "caracal-mcp") in removals
+    assert ("volume", "caracal_caracal_state") in removals
+    assert ("network", "caracal-runtime") in removals
+    assert ("image", "caracal-runtime:latest") in removals
+    assert ("path", "/tmp/.caracal") in removals
+    assert "Removed keyring entries: caracal/encryption_key" in captured.out
+    assert "Caracal purge completed." in captured.out
+
+
+def test_host_purge_reports_failures(monkeypatch, capsys):
+    monkeypatch.setattr(entrypoints, "_confirm_purge", lambda force: True)
+    monkeypatch.setattr(entrypoints, "_list_caracal_container_names", lambda: ["caracal-mcp"])
+    monkeypatch.setattr(entrypoints, "_list_caracal_volume_names", lambda: [])
+    monkeypatch.setattr(entrypoints, "_list_caracal_network_names", lambda: [])
+    monkeypatch.setattr(entrypoints, "_list_caracal_image_refs", lambda compose_file=None: [])
+    monkeypatch.setattr(entrypoints, "_list_caracal_purge_paths", lambda: [])
+    monkeypatch.setattr(entrypoints, "_remove_container", lambda name: False)
+    monkeypatch.setattr(entrypoints, "_purge_keyring_credentials", lambda: False)
+
+    namespace = argparse.Namespace(force=True, compose_file=None)
+    code = entrypoints._host_purge(namespace)
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "container:caracal-mcp" in captured.err
