@@ -69,7 +69,7 @@ def _lint_command_surface(surface: Dict[str, Dict[str, object]]) -> List[str]:
 def _required_workflow_commands() -> List[Tuple[str, str]]:
     """Required command chain for the core CLI workflow."""
     return [
-        ("setup", "init"),
+        ("workspace", "create"),
         ("system", "db"),
         ("agent", "register"),
         ("agent", "list"),
@@ -161,8 +161,8 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
 
         command_steps = [
             {
-                "name": "init",
-                "args": ["init", "--workspace", str(workspace)],
+                "name": "workspace-create",
+                "args": ["workspace", "create", "audit-workspace"],
                 "expected_success": True,
             },
             {
@@ -282,7 +282,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
             "connect" in output.lower() or "database" in output.lower()
         ):
             insights.append(
-                "Authority/delegation runtime commands require a reachable PostgreSQL setup that is not provisioned by `caracal setup init`."
+                "Authority/delegation runtime commands require a reachable PostgreSQL setup beyond simple workspace creation."
             )
 
     # Keep insight messages unique while preserving order.
@@ -414,7 +414,7 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
     execution_probe = _run_workflow_execution_probe(root) if execute else None
 
     workflow_steps = [
-        "caracal setup init",
+        "caracal workspace create <name>",
         "caracal system db init-db",
         "caracal agent register --name ops-agent --email ops@example.com",
         "caracal policy create --principal-id <principal-uuid> --max-validity-seconds 3600 --resource-pattern 'api:*' --action 'api_call'",

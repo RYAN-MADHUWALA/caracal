@@ -13,11 +13,11 @@ provider actions directly using provider definitions.
 - Python 3.11+
 - PostgreSQL accessible from your machine
 
-## 1. Install and Initialize
+## 1. Install and Create a Workspace
 
 ```bash
 pip install caracal-core
-caracal init
+caracal workspace create default
 ```
 
 ## 2. Configure a Provider
