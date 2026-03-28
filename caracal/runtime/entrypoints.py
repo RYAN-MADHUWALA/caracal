@@ -112,7 +112,7 @@ services:
         volumes:
             - caracal_state:/home/caracal/.caracal
         ports:
-            - ${MCP_ADAPTER_PORT:-8000}:8080
+            - ${CARACAL_API_PORT:-8000}:8080
         healthcheck:
             test:
                 - CMD
