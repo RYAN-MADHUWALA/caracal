@@ -444,7 +444,7 @@ class EnterpriseSyncClient:
                 success=False,
                 message=(
                     "Enterprise sync not configured. "
-                    "Run 'caracal-flow' → Enterprise → Connect License first."
+                    "Run 'caracal flow' → Enterprise → Connect License first."
                 ),
             )
 

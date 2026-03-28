@@ -75,7 +75,7 @@ caracal authority enforce \
 ## 6. Use the TUI
 
 ```bash
-caracal-flow
+caracal flow
 ```
 
 In Flow, policy, mandate, and delegation screens now use provider-based
