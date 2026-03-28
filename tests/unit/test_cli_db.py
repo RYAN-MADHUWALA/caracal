@@ -10,6 +10,7 @@ Tests the caracal db commands for database initialization, migrations, and statu
 import pytest
 from click.testing import CliRunner
 
+from caracal.cli import db as cli_db
 from caracal.cli.main import cli
 
 
@@ -156,3 +157,16 @@ class TestCLIDatabase:
         # Should fail with clear error message about missing config
         assert result.exit_code != 0
         assert "Database configuration not found" in result.output
+
+    def test_get_alembic_config_falls_back_without_repo_ini(self, monkeypatch, tmp_path):
+        """Installed-package layout should work without a repo-root alembic.ini."""
+        migrations_dir = tmp_path / "migrations"
+        migrations_dir.mkdir()
+
+        monkeypatch.setattr(cli_db, "_resolve_migrations_path", lambda: migrations_dir)
+        monkeypatch.setattr(cli_db, "_resolve_alembic_ini_path", lambda: None)
+
+        alembic_config = cli_db.get_alembic_config()
+
+        assert alembic_config.config_file_name is None
+        assert alembic_config.get_main_option("script_location") == str(migrations_dir)

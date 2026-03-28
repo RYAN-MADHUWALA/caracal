@@ -69,6 +69,22 @@ class TestConfigManagerBasics:
         workspaces = manager.list_workspaces()
         
         assert workspaces == []
+
+    def test_list_workspaces_ignores_reserved_internal_dirs(self, temp_config_dir, monkeypatch):
+        """Internal bookkeeping folders must never appear as user workspaces."""
+        monkeypatch.setattr(
+            "caracal.flow.workspace.WorkspaceManager.list_workspaces",
+            lambda registry_path=None: [],
+        )
+
+        manager = ConfigManager()
+        internal_dir = temp_config_dir / "workspaces" / "_deleted_backups"
+        internal_dir.mkdir(parents=True)
+        (internal_dir / "workspace.toml").write_text("is_default = true\n", encoding="utf-8")
+
+        workspaces = manager.list_workspaces()
+
+        assert workspaces == []
     
     def test_create_workspace_basic(self, temp_config_dir):
         """Test creating a basic workspace."""
