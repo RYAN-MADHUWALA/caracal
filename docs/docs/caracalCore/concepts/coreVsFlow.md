@@ -89,8 +89,8 @@ Best for:
 <summary>Launch commands</summary>
 
 ```bash
-caracal-flow           # Start Flow
-caracal-flow --reset   # Reset and re-run onboarding
+caracal flow           # Start Flow from host orchestrator
+caracal cli            # Open container shell, then run: caracal flow --reset
 ```
 
 </details>

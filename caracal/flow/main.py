@@ -31,7 +31,7 @@ from caracal._version import __version__
     is_flag=True,
     help="Skip onboarding even on first run",
 )
-@click.version_option(version=__version__, prog_name="caracal-flow")
+@click.version_option(version=__version__, prog_name="caracal flow")
 def main(reset: bool, compact: bool, no_onboarding: bool) -> None:
     """
     Caracal Flow - Interactive CLI for Caracal.
@@ -48,13 +48,13 @@ def main(reset: bool, compact: bool, no_onboarding: bool) -> None:
     Examples:
     
         # Start Caracal Flow
-        caracal-flow
+        caracal flow
         
-        # Reset state and restart onboarding
-        caracal-flow --reset
+        # Inside a container shell, reset state and restart onboarding
+        caracal flow --reset
         
-        # Use compact mode for small terminals
-        caracal-flow --compact
+        # Inside a container shell, use compact mode for small terminals
+        caracal flow --compact
     """
     try:
         # Lazy imports to speed up --help
