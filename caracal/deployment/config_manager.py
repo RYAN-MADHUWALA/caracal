@@ -43,6 +43,7 @@ from caracal.deployment.exceptions import (
     WorkspaceNotFoundError,
     WorkspaceOperationError,
 )
+from caracal.runtime.environment import debug_logs_enabled
 
 logger = structlog.get_logger(__name__)
 
@@ -151,10 +152,11 @@ class ConfigManager:
             # Root-level cache/log directories are deprecated.
             # Runtime artifacts are stored under each workspace directory.
             
-            logger.debug(
-                "config_dir_ensured",
-                config_dir=str(self.CONFIG_DIR)
-            )
+            if debug_logs_enabled():
+                logger.debug(
+                    "config_dir_ensured",
+                    config_dir=str(self.CONFIG_DIR)
+                )
         except OSError as e:
             logger.error(
                 "config_dir_creation_failed",
