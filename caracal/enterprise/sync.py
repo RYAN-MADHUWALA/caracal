@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -421,14 +422,16 @@ class EnterpriseSyncClient:
         license_key: Optional[str] = None,
     ):
         cfg = load_enterprise_config()
-        default_enterprise_url = (
-            f"http://localhost:{os.environ.get('CARACAL_ENTERPRISE_API_PORT', '9000')}"
-        )
+        env_mode = (os.environ.get("CARACAL_ENV_MODE") or "dev").strip().lower()
+        dev_url = os.environ.get("CARACAL_ENTERPRISE_DEV_URL") if env_mode == "dev" else None
         self._api_url = (
             api_url
             or cfg.get("enterprise_api_url")
+            or os.environ.get("CARACAL_ENTERPRISE_URL")
+            or dev_url
             or os.environ.get("CARACAL_ENTERPRISE_API_URL")
-            or default_enterprise_url
+            or os.environ.get("CARACAL_GATEWAY_URL")
+            or ""
         ).rstrip("/")
         self._sync_api_key = sync_api_key or cfg.get("sync_api_key")
         self._license_key = license_key or cfg.get("license_key")
@@ -453,6 +456,15 @@ class EnterpriseSyncClient:
                 message=(
                     "Enterprise sync not configured. "
                     "Run 'caracal flow' → Enterprise → Connect License first."
+                ),
+            )
+
+        if not self._api_url:
+            return SyncResult(
+                success=False,
+                message=(
+                    "Enterprise sync URL is not configured. "
+                    "Set CARACAL_ENTERPRISE_URL (or CARACAL_ENTERPRISE_DEV_URL in dev mode)."
                 ),
             )
 

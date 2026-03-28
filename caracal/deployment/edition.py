@@ -135,11 +135,11 @@ class EditionManager:
             except (toml.TomlDecodeError, OSError):
                 pass
 
-        # Check for enterprise-specific environment variables
-        if os.environ.get("CARACAL_GATEWAY_URL"):
+        # Check for enterprise connectivity environment variables.
+        if os.environ.get("CARACAL_ENTERPRISE_URL") or os.environ.get("CARACAL_GATEWAY_URL"):
             logger.debug(
                 "edition_detected_env_var",
-                env_var="CARACAL_GATEWAY_URL"
+                env_var="CARACAL_ENTERPRISE_URL"
             )
             return Edition.ENTERPRISE
 
@@ -336,10 +336,14 @@ class EditionManager:
         edition = self.get_edition()
         
         if edition == Edition.ENTERPRISE:
-            gateway_url = self.get_gateway_url() or os.environ.get("CARACAL_GATEWAY_URL")
+            gateway_url = (
+                self.get_gateway_url()
+                or os.environ.get("CARACAL_ENTERPRISE_URL")
+                or os.environ.get("CARACAL_GATEWAY_URL")
+            )
             if not gateway_url:
                 raise EditionConfigurationError(
-                    "Gateway URL is required for Enterprise provider client"
+                    "Enterprise URL is required for Enterprise provider client"
                 )
             logger.debug(
                 "provider_client_created",
