@@ -90,6 +90,7 @@ services:
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
+            CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
             CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
@@ -142,6 +143,7 @@ services:
             CARACAL_WORKSPACE_ROOT: /home/caracal/.caracal
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
             CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
@@ -181,6 +183,7 @@ services:
             CARACAL_WORKSPACE_ROOT: /home/caracal/.caracal
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
             CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}

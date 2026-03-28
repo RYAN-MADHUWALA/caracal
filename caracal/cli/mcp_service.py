@@ -55,7 +55,7 @@ def start_service(config, listen_address):
         
         # Start with environment variables
         export CARACAL_MCP_LISTEN_ADDRESS="0.0.0.0:8080"
-        export CARACAL_MCP_SERVERS='[{"name":"filesystem","url":"http://localhost:9000"}]'
+        export CARACAL_MCP_SERVERS='[{"name":"filesystem","url":"http://localhost:8100"}]'
         caracal system integration mcp start
     """
     from caracal.mcp.service import main as service_main
