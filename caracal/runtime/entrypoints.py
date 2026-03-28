@@ -324,17 +324,24 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
 def _host_up(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
     compose_cmd = _compose_cmd(compose_file)
+    uses_local_build = _service_uses_local_build(compose_file, "mcp")
+
     if not namespace.no_pull:
         pull_services = ["postgres", "redis"]
-        if not _service_uses_local_build(compose_file, "mcp"):
+        if not uses_local_build:
             pull_services.insert(0, "mcp")
 
         pull_result = subprocess.run(compose_cmd + ["pull", *pull_services], check=False)
         if pull_result.returncode != 0:
             return pull_result.returncode
 
+    up_cmd = [*compose_cmd, "up", "-d"]
+    if uses_local_build:
+        # Ensure source changes are reflected in the runtime image during local development.
+        up_cmd.append("--build")
+
     up_result = subprocess.run(
-        compose_cmd + ["up", "-d", "postgres", "redis", "mcp"],
+        [*up_cmd, "postgres", "redis", "mcp"],
         check=False,
     )
     return up_result.returncode
