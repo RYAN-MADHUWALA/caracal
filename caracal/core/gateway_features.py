@@ -9,7 +9,7 @@ OSS default: broker mode (policy check → signed mandate, client routes directl
 Enterprise opt-in: network-level enforcement via gateway proxy.
 
 Feature flags are resolved in priority order:
-  1. Environment variables (CARACAL_GATEWAY_*)
+    1. Environment variables (CARACAL_ENTERPRISE_URL, CARACAL_GATEWAY_*)
   2. Workspace config file (~/.caracal/config.yaml)
   3. Compile-time defaults (all disabled)
 """
@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 
 # ── Environment variable names ──────────────────────────────────────────────
 _ENV_GATEWAY_ENABLED = "CARACAL_GATEWAY_ENABLED"
+_ENV_ENTERPRISE_URL = "CARACAL_ENTERPRISE_URL"
 _ENV_GATEWAY_ENDPOINT = "CARACAL_GATEWAY_ENDPOINT"
 _ENV_GATEWAY_URL = "CARACAL_GATEWAY_URL"
 _ENV_GATEWAY_API_KEY = "CARACAL_GATEWAY_API_KEY"
@@ -140,7 +141,11 @@ def load_gateway_features() -> GatewayFeatureFlags:
         flags.gateway_enabled = True
         flags._source = "environment"
 
-    endpoint = os.getenv(_ENV_GATEWAY_ENDPOINT) or os.getenv(_ENV_GATEWAY_URL)
+    endpoint = (
+        os.getenv(_ENV_ENTERPRISE_URL)
+        or os.getenv(_ENV_GATEWAY_ENDPOINT)
+        or os.getenv(_ENV_GATEWAY_URL)
+    )
     if endpoint:
         flags.gateway_endpoint = endpoint.rstrip("/")
         flags.gateway_enabled = True

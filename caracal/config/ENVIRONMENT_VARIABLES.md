@@ -28,20 +28,15 @@ database:
 | `DATABASE_MAX_OVERFLOW` | Max overflow connections | 5 | No |
 | `DATABASE_POOL_TIMEOUT` | Pool timeout in seconds | 30 | No |
 
-## Gateway Proxy Configuration
+## External Enterprise Connection
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `GATEWAY_ENABLED` | Enable gateway proxy | false | No |
-| `GATEWAY_LISTEN_ADDRESS` | Gateway listen address | 0.0.0.0:8443 | No |
-| `GATEWAY_AUTH_MODE` | Authentication mode (mtls, jwt, api_key) | mtls | No |
-| `GATEWAY_TLS_ENABLED` | Enable TLS | true | No |
-| `GATEWAY_TLS_CERT_FILE` | Path to TLS certificate file | (empty) | Yes if TLS enabled |
-| `GATEWAY_TLS_KEY_FILE` | Path to TLS key file | (empty) | Yes if TLS enabled |
-| `GATEWAY_TLS_CA_FILE` | Path to CA certificate file | (empty) | Yes if mTLS enabled |
-| `GATEWAY_JWT_PUBLIC_KEY` | Path to JWT public key file | (empty) | Yes if JWT auth |
-| `GATEWAY_REPLAY_PROTECTION_ENABLED` | Enable replay protection | true | No |
-| `GATEWAY_NONCE_CACHE_TTL` | Nonce cache TTL in seconds | 300 | No |
+| `CARACAL_ENTERPRISE_URL` | Hosted enterprise endpoint URL | (empty) | No |
+| `CARACAL_ENTERPRISE_DEV_URL` | Dev-only local enterprise override URL | (empty) | No |
+| `CARACAL_GATEWAY_ENABLED` | Enable enterprise gateway enforcement | false | No |
+| `CARACAL_GATEWAY_ENDPOINT` | Legacy endpoint alias (compatibility) | (empty) | No |
+| `CARACAL_GATEWAY_URL` | Legacy URL alias (compatibility) | (empty) | No |
 
 ## Policy Cache Configuration
 
@@ -101,17 +96,8 @@ database:
   pool_timeout: ${DATABASE_POOL_TIMEOUT:30}
 
 gateway:
-  enabled: ${GATEWAY_ENABLED:false}
-  listen_address: ${GATEWAY_LISTEN_ADDRESS:0.0.0.0:8443}
-  auth_mode: ${GATEWAY_AUTH_MODE:mtls}
-  tls:
-    enabled: ${GATEWAY_TLS_ENABLED:true}
-    cert_file: ${GATEWAY_TLS_CERT_FILE}
-    key_file: ${GATEWAY_TLS_KEY_FILE}
-    ca_file: ${GATEWAY_TLS_CA_FILE}
-  jwt_public_key: ${GATEWAY_JWT_PUBLIC_KEY}
-  replay_protection_enabled: ${GATEWAY_REPLAY_PROTECTION_ENABLED:true}
-  nonce_cache_ttl: ${GATEWAY_NONCE_CACHE_TTL:300}
+  enabled: ${CARACAL_GATEWAY_ENABLED:false}
+  endpoint: ${CARACAL_ENTERPRISE_URL:${CARACAL_GATEWAY_ENDPOINT:${CARACAL_GATEWAY_URL}}}
 
 policy_cache:
   enabled: ${POLICY_CACHE_ENABLED:true}
