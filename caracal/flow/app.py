@@ -75,7 +75,7 @@ class FlowApp:
             if not onboarding_result.get("workspace_configured", False):
                 self.console.print()
                 self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Setup incomplete. Workspace configuration is required.[/]")
-                self.console.print(f"  [{Colors.INFO}]{Icons.INFO} Please run 'caracal-flow' again to set up your workspace.[/]")
+                self.console.print(f"  [{Colors.INFO}]{Icons.INFO} Please run 'caracal flow' again to set up your workspace.[/]")
                 self.console.print()
                 self._goodbye()
                 return
@@ -519,7 +519,7 @@ ledger capabilities.[/]
     def _goodbye(self) -> None:
         """Show goodbye message."""
         self.console.print()
-        self.console.print(f"  [{Colors.INFO}]{Icons.SUCCESS} Goodbye! Use 'caracal-flow' to return.[/]")
+        self.console.print(f"  [{Colors.INFO}]{Icons.SUCCESS} Goodbye! Use 'caracal flow' to return.[/]")
         self.console.print()
     
     
