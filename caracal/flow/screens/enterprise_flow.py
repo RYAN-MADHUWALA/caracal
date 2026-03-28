@@ -12,6 +12,7 @@ Displays:
 - Connection status & API key display
 """
 
+import os
 from typing import Optional
 
 from rich.console import Console
@@ -307,7 +308,7 @@ class EnterpriseFlow:
         # Prompt for Enterprise API URL (with default)
         enterprise_url = Prompt.ask(
             f"[{Colors.PRIMARY}]Enterprise API URL[/]",
-            default="http://localhost:8000",
+            default=f"http://localhost:{os.environ.get('CARACAL_ENTERPRISE_API_PORT', '9000')}",
         )
         
         # Prompt for license token

@@ -17,7 +17,8 @@ import { LedgerOperations } from './ledger';
 
 const DEFAULT_BASE_URL = (() => {
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
-  return proc?.env?.CARACAL_API_URL ?? 'http://localhost:8000';
+  const defaultPort = proc?.env?.CARACAL_API_PORT ?? '8000';
+  return proc?.env?.CARACAL_API_URL ?? `http://localhost:${defaultPort}`;
 })();
 
 // ---------------------------------------------------------------------------
