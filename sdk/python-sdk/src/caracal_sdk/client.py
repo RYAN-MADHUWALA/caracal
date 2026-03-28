@@ -49,7 +49,8 @@ class CaracalClient:
     Args:
         api_key: API key for authentication.
         base_url: Root URL of the Caracal API.
-            Defaults to ``CARACAL_API_URL`` when set, else ``http://localhost:8000``.
+            Defaults to ``CARACAL_API_URL`` when set, else
+            ``http://localhost:${CARACAL_API_PORT:-8000}``.
         adapter: Optional custom transport adapter (overrides base_url/api_key based default).
 
     """
@@ -67,7 +68,10 @@ class CaracalClient:
                 "CaracalClient requires either api_key or a custom adapter."
             )
 
-        resolved_base_url = base_url or os.environ.get("CARACAL_API_URL", "http://localhost:8000")
+        resolved_base_url = base_url or os.environ.get(
+            "CARACAL_API_URL",
+            f"http://localhost:{os.environ.get('CARACAL_API_PORT', '8000')}",
+        )
 
         self._hooks = HookRegistry()
         self._adapter = adapter or HttpAdapter(
@@ -161,7 +165,10 @@ class CaracalBuilder:
 
     def __init__(self) -> None:
         self._api_key: Optional[str] = None
-        self._base_url: str = os.environ.get("CARACAL_API_URL", "http://localhost:8000")
+        self._base_url: str = os.environ.get(
+            "CARACAL_API_URL",
+            f"http://localhost:{os.environ.get('CARACAL_API_PORT', '8000')}",
+        )
         self._adapter: Optional[BaseAdapter] = None
         self._extensions: List[CaracalExtension] = []
 

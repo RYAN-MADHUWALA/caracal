@@ -146,7 +146,7 @@ caracal purge --force
 Python and Node SDKs resolve endpoint in this order:
 
 1. `CARACAL_API_URL`
-2. `http://localhost:8000`
+2. `http://localhost:${CARACAL_API_PORT:-8000}`
 
 -----
 
