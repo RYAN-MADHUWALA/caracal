@@ -15,6 +15,6 @@ Both SDKs keep a parallel structure:
 Both SDKs resolve the runtime endpoint with the same rule:
 
 1. `CARACAL_API_URL` environment variable, when present
-2. Fallback to `http://localhost:8000`
+2. Fallback to `http://localhost:${CARACAL_API_PORT:-8000}`
 
 This keeps client code unchanged across broker and enterprise gateway modes.

@@ -32,12 +32,13 @@ pip install "caracal-sdk[core]"
 
 ## Runtime Endpoint
 
-By default, the SDK targets `http://localhost:8000`.
+By default, the SDK targets `http://localhost:${CARACAL_API_PORT:-8000}`.
 
 To target a different containerized runtime endpoint (broker or enterprise),
 set:
 
 ```bash
+export CARACAL_API_PORT=8000
 export CARACAL_API_URL=http://localhost:8000
 ```
 
