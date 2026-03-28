@@ -57,7 +57,9 @@ caracal reset
 Full interactive CLI runs inside container:
 
 ```bash
-caracal cli -- --help
+caracal cli
+# then inside the container shell:
+caracal --help
 ```
 
 ## Infrastructure Commands

@@ -71,7 +71,6 @@ dev = [
 
 [project.scripts]
 caracal = "caracal.runtime.entrypoints:caracal_entrypoint"
-caracal-flow = "caracal.runtime.entrypoints:caracal_flow_entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["."]
