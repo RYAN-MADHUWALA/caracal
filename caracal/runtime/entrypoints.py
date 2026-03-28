@@ -196,7 +196,9 @@ services:
             REDIS_PASSWORD: ${REDIS_PASSWORD:-}
             LOG_LEVEL: ${LOG_LEVEL:-INFO}
         command:
-            - caracal-flow
+            - python
+            - -m
+            - caracal.flow.main
         volumes:
             - caracal_state:/home/caracal/.caracal
         stdin_open: true
@@ -226,21 +228,6 @@ def caracal_entrypoint() -> None:
     raise SystemExit(exit_code)
 
 
-def caracal_flow_entrypoint() -> None:
-    """Compatibility entrypoint.
-
-    On host, ``caracal-flow`` behaves like ``caracal flow``.
-    Inside container, it runs the full Flow command directly.
-    """
-    args = tuple(sys.argv[1:])
-    if _in_container_runtime():
-        _run_local_flow(args)
-        return
-
-    exit_code = _run_host_orchestrator(("flow", *args))
-    raise SystemExit(exit_code)
-
-
 def _run_host_orchestrator(args: Sequence[str]) -> int:
     os_name = platform.system()
     parser = argparse.ArgumentParser(
@@ -248,14 +235,14 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
         description=(
             "Caracal host orchestrator.\n"
             "Use this command to manage Docker runtime services.\n"
-            "For the full Caracal CLI, run: caracal cli -- --help"
+            "Use 'caracal cli' to open an in-container shell session."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             f"Detected OS: {os_name}\n"
             "Examples:\n"
             "  caracal up\n"
-            "  caracal cli -- principal list\n"
+            "  caracal cli\n"
             "  caracal flow"
         ),
     )
@@ -284,13 +271,11 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
 
     cli_parser = subparsers.add_parser(
         "cli",
-        help="Run full Caracal CLI inside runtime container",
+        help="Open an interactive shell session inside the runtime container",
     )
-    cli_parser.add_argument("cli_args", nargs=argparse.REMAINDER, help="Arguments passed to in-container caracal")
     cli_parser.set_defaults(handler=_host_cli)
 
     flow_parser = subparsers.add_parser("flow", help="Launch Flow (TUI) inside runtime container")
-    flow_parser.add_argument("flow_args", nargs=argparse.REMAINDER, help="Arguments passed to caracal-flow")
     flow_parser.set_defaults(handler=_host_flow)
 
     for command_parser in (up_parser, down_parser, reset_parser, logs_parser, cli_parser, flow_parser):
@@ -314,6 +299,9 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
             parser.print_help()
             return 2
         return int(handler(namespace))
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 2
+        return int(code)
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
@@ -370,10 +358,7 @@ def _host_cli(namespace: argparse.Namespace) -> int:
         return start_code
 
     compose_cmd = _compose_cmd(compose_file)
-    cli_args = list(namespace.cli_args or [])
-    if cli_args and cli_args[0] == "--":
-        cli_args = cli_args[1:]
-    cmd = compose_cmd + ["run", "--rm", "cli", "caracal", *cli_args]
+    cmd = compose_cmd + ["exec", "-u", "caracal", "mcp", "/bin/bash"]
     result = subprocess.run(cmd, check=False)
     return result.returncode
 
@@ -385,10 +370,19 @@ def _host_flow(namespace: argparse.Namespace) -> int:
         return start_code
 
     compose_cmd = _compose_cmd(compose_file)
-    flow_args = list(namespace.flow_args or [])
-    if flow_args and flow_args[0] == "--":
-        flow_args = flow_args[1:]
-    cmd = compose_cmd + ["run", "--rm", "--service-ports", "flow", "caracal-flow", *flow_args]
+    cmd = compose_cmd + [
+        "exec",
+        "-u",
+        "caracal",
+        "-e",
+        "TERM=xterm-256color",
+        "-e",
+        "COLORTERM=truecolor",
+        "mcp",
+        "python",
+        "-m",
+        "caracal.flow.main",
+    ]
     result = subprocess.run(cmd, check=False)
     return result.returncode
 
@@ -519,12 +513,6 @@ def _run_local_caracal(args: Sequence[str]) -> None:
     from caracal.cli.main import cli
 
     cli.main(args=list(args), prog_name="caracal", standalone_mode=True)
-
-
-def _run_local_flow(args: Sequence[str]) -> None:
-    from caracal.flow.main import main
-
-    main.main(args=list(args), prog_name="caracal-flow", standalone_mode=True)
 
 
 def _is_truthy(value: str | None) -> bool:

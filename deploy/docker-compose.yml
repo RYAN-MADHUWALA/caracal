@@ -171,7 +171,7 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    command: ["caracal-flow"]
+    command: ["python", "-m", "caracal.flow.main"]
     volumes:
       - caracal_state:/home/caracal/.caracal
     stdin_open: true
