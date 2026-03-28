@@ -18,6 +18,25 @@ if [ "$#" -eq 0 ]; then
     set -- caracal
 fi
 
+case "$1" in
+    caracal)
+        ;;
+    python)
+        if [ "${2:-}" = "-m" ] && [ "${3:-}" = "caracal.mcp.service" ]; then
+            :
+        elif [ "${2:-}" = "-m" ] && [ "${3:-}" = "caracal.flow.main" ]; then
+            :
+        else
+            echo "Blocked: only Caracal runtime commands are allowed in this container." >&2
+            exit 126
+        fi
+        ;;
+    *)
+        echo "Blocked: only Caracal runtime commands are allowed in this container." >&2
+        exit 126
+        ;;
+esac
+
 if [ "$(id -u)" = "0" ]; then
     chown -R caracal:caracal "${STATE_DIR}" || true
     if command -v gosu >/dev/null 2>&1; then
