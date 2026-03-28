@@ -305,10 +305,22 @@ class EnterpriseFlow:
         self.console.print(info_panel)
         self.console.print()
         
-        # Prompt for Enterprise API URL (with default)
+        cfg = load_enterprise_config()
+        default_enterprise_url = (
+            cfg.get("enterprise_api_url")
+            or os.environ.get("CARACAL_ENTERPRISE_URL")
+            or (
+                os.environ.get("CARACAL_ENTERPRISE_DEV_URL")
+                if (os.environ.get("CARACAL_ENV_MODE") or "dev").strip().lower() == "dev"
+                else None
+            )
+            or ""
+        )
+
+        # Prompt for Enterprise API URL (URL is required for online validation).
         enterprise_url = Prompt.ask(
             f"[{Colors.PRIMARY}]Enterprise API URL[/]",
-            default=f"http://localhost:{os.environ.get('CARACAL_ENTERPRISE_API_PORT', '9000')}",
+            default=default_enterprise_url,
         )
         
         # Prompt for license token
