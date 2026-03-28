@@ -109,6 +109,12 @@ Result:
 - same data
 - seamless switch between CLI and TUI
 
+### Open-Source Isolation Model
+
+- Caracal open-source runs as a standalone broker runtime.
+- Enterprise is a separate system and is never assumed to run locally.
+- Integration uses only a configured remote URL (`CARACAL_ENTERPRISE_URL`).
+
 ### Environment Modes and Logging
 
 Set `CARACAL_ENV_MODE` to `dev`, `staging`, or `prod`.
@@ -124,12 +130,17 @@ Optional controls:
 
 ### Advanced Configuration (Optional)
 
-No env setup is required for default use. For advanced routing:
+No env setup is required for default broker mode. For optional remote enterprise integration:
 
 ```bash
-export CARACAL_GATEWAY_URL=http://gateway:8443
-export CARACAL_GATEWAY_ENDPOINT=http://gateway:8443
+export CARACAL_ENTERPRISE_URL=https://enterprise.example.com
 export CARACAL_GATEWAY_ENABLED=true
+```
+
+Development-only local override (not required in production):
+
+```bash
+export CARACAL_ENTERPRISE_DEV_URL=http://localhost:<enterprise-api-port>
 ```
 
 ### Migration and Cleanup
