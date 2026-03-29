@@ -192,7 +192,7 @@ class PrincipalRegistry:
         source_metadata = dict(source.principal_metadata or {})
         has_private_material = any(
             k in source_metadata
-            for k in ("private_key_ref", "aws_kms_ciphertext_b64", "private_key_pem")
+            for k in ("private_key_ref", "aws_kms_ciphertext_b64")
         )
         if not source.public_key_pem or not has_private_material:
             generated = generate_and_store_principal_keypair(source.principal_id)
