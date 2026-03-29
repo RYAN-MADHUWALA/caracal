@@ -186,7 +186,7 @@ def _help_args(tokens: list[str]) -> list[str]:
 
 def _render_banner() -> None:
     click.secho("Caracal CLI", fg="cyan", bold=True)
-    click.secho("Authority-scoped command session", fg="bright_black")
+    click.secho("Command Line Interface Caracal", fg="bright_black")
     click.echo()
     click.secho("  help", fg="green", bold=True, nl=False)
     click.secho("  show available Caracal commands", fg="bright_black")

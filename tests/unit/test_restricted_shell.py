@@ -82,7 +82,7 @@ def test_render_banner_shows_guidance(capsys):
 
     captured = capsys.readouterr()
     assert "Caracal CLI" in captured.out
-    assert "Authority-scoped command session" in captured.out
+    assert "Command Line Interface Caracal" in captured.out
     assert "help" in captured.out
     assert "clear" in captured.out
     assert "exit" in captured.out
