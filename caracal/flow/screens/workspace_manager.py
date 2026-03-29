@@ -29,7 +29,7 @@ from caracal.flow.screens._workspace_helpers import list_workspace_configs, set_
 
 _CONTAINER_RUNTIME_ENV = "CARACAL_RUNTIME_IN_CONTAINER"
 _HOST_IO_ROOT_ENV = "CARACAL_HOST_IO_ROOT"
-_DEFAULT_HOST_IO_ROOT = Path("/caracal-host")
+_DEFAULT_HOST_IO_ROOT = Path("/caracal-host-io")
 
 
 def _in_container_runtime() -> bool:
@@ -487,6 +487,12 @@ def _export_workspace(console: Console, state: FlowState) -> None:
                     return
 
             normalized_lock_key = lock_key.strip() if lock_key else None
+            if include_secrets and not normalized_lock_key:
+                console.print(
+                    f"  [{Colors.ERROR}]{Icons.ERROR} Archive lock key is required when including secrets[/]"
+                )
+                input()
+                return
             
             # Export
             config_mgr.export_workspace(

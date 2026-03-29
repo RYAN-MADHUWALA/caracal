@@ -6,6 +6,7 @@ Unit tests for ConfigManager.
 """
 
 import json
+import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -345,6 +346,86 @@ class TestConfigManagerExportImport:
         
         with pytest.raises(WorkspaceAlreadyExistsError):
             manager.import_workspace(export_path, name="test-workspace")
+
+    def test_import_workspace_db_dump_fallback_for_unsupported_pg_setting(
+        self, temp_config_dir, monkeypatch
+    ):
+        """Import should fallback to sanitized SQL when pg_restore hits unknown GUCs."""
+        manager = ConfigManager()
+
+        workspace_dir = temp_config_dir / "workspace"
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        (workspace_dir / "config.yaml").write_text(
+            """
+database:
+  host: localhost
+  port: 5432
+  database: caracal
+  user: caracal
+  password: test
+  schema: ws_test_schema
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        dump_path = workspace_dir / "workspace_schema.dump"
+        dump_path.write_bytes(b"fake-dump")
+
+        calls = []
+
+        def fake_run(cmd, env=None, capture_output=None, text=None):
+            calls.append(cmd)
+
+            if cmd[0] == "pg_restore" and "--file" not in cmd:
+                return subprocess.CompletedProcess(
+                    cmd,
+                    1,
+                    stdout="",
+                    stderr=(
+                        "pg_restore: error: could not execute query: ERROR: "
+                        'unrecognized configuration parameter "transaction_timeout"\n'
+                        "Command was: SET transaction_timeout = 0;"
+                    ),
+                )
+
+            if cmd[0] == "pg_restore" and "--file" in cmd:
+                sql_out = Path(cmd[cmd.index("--file") + 1])
+                sql_out.write_text(
+                    "\n".join(
+                        [
+                            "SET statement_timeout = 0;",
+                            "SET transaction_timeout = 0;",
+                            "SELECT pg_catalog.set_config('transaction_timeout', '0', false);",
+                            "CREATE TABLE public.demo(id integer);",
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            if cmd[0] == "psql":
+                sql_path = Path(cmd[cmd.index("-f") + 1])
+                sanitized_sql = sql_path.read_text(encoding="utf-8")
+                assert "transaction_timeout" not in sanitized_sql
+                assert "SET statement_timeout = 0;" in sanitized_sql
+                assert "CREATE TABLE public.demo(id integer);" in sanitized_sql
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            raise AssertionError(f"Unexpected subprocess command: {cmd}")
+
+        monkeypatch.setattr("caracal.deployment.config_manager.subprocess.run", fake_run)
+
+        imported = manager._import_workspace_db_dump(
+            "test-workspace",
+            workspace_dir,
+            dump_path,
+        )
+
+        assert imported is True
+        assert len(calls) == 3
+        assert calls[0][0] == "pg_restore"
+        assert calls[2][0] == "psql"
 
 
 class TestConfigManagerPostgres:
