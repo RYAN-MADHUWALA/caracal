@@ -16,10 +16,12 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 
+from caracal.storage.layout import get_caracal_layout
+
 
 ROOT_COMMAND = "caracal"
 REPL_PROMPT = HTML("<brand>caracal</brand><accent>></accent> ")
-REPL_HISTORY_PATH = Path.home() / ".caracal" / "history" / "cli.history"
+REPL_HISTORY_PATH = get_caracal_layout().history_dir / "cli.history"
 EXIT_COMMANDS = {"exit", "quit"}
 HELP_COMMANDS = {"help", "?"}
 CLEAR_COMMANDS = {"clear", "cls"}

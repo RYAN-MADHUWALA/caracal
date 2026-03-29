@@ -5,7 +5,7 @@ Caracal, a product of Garudex Labs
 Workspace management for Caracal Flow.
 
 Provides centralized path resolution so every module resolves files
-relative to the active workspace root instead of hardcoding ``~/.caracal/``.
+relative to the active workspace root.
 
 The initial workspace root is resolved dynamically from the workspace marked
 as default/active.
@@ -33,14 +33,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from caracal.pathing import ensure_source_tree, source_of
+from caracal.storage.layout import resolve_caracal_home
 
 
-_WORKSPACES_DIR = Path.home() / ".caracal" / "workspaces"
-_LEGACY_ROOT = Path.home() / ".caracal"
-_RESERVED_WORKSPACE_NAMES = {"primary", "_deleted_backups"}
+_CARACAL_HOME_ROOT = resolve_caracal_home(require_explicit=False)
+_WORKSPACES_DIR = _CARACAL_HOME_ROOT / "workspaces"
+_RESERVED_WORKSPACE_NAMES = {"_deleted_backups"}
 
 # Global registry file lives outside any individual workspace so it can index all of them.
-_REGISTRY_PATH = Path.home() / ".caracal" / "workspaces.json"
+_REGISTRY_PATH = _CARACAL_HOME_ROOT / "workspaces.json"
 
 
 class WorkspaceManager:
@@ -49,7 +50,7 @@ class WorkspaceManager:
     Parameters
     ----------
     root:
-        Workspace root directory.  Defaults to ``~/.caracal/``.
+        Workspace root directory.
     """
 
     def __init__(self, root: Optional[Path] = None) -> None:
@@ -109,9 +110,11 @@ class WorkspaceManager:
         return self.logs_dir / "caracal.log"
 
     @property
-    def master_password_path(self) -> Path:
-        """Path to ``master_password``."""
-        return self._root / "master_password"
+    def master_key_path(self) -> Path:
+        """Path to local config-encryption master key material."""
+        from caracal.storage.layout import get_caracal_layout
+
+        return get_caracal_layout().master_key_path
 
     # ------------------------------------------------------------------
     # Directory management
@@ -124,52 +127,6 @@ class WorkspaceManager:
         self.logs_dir.mkdir(exist_ok=True)
         self.cache_dir.mkdir(exist_ok=True)
         self.keys_dir.mkdir(exist_ok=True)
-        self._migrate_legacy_runtime_artifacts()
-
-    def _migrate_legacy_runtime_artifacts(self) -> None:
-        """Move legacy runtime files from ``~/.caracal`` into default workspace.
-
-        This keeps ``~/.caracal`` focused on workspace registry/config files and
-        avoids scattering runtime artifacts at the root level.
-        """
-        if source_of(self._root) != _WORKSPACES_DIR:
-            return
-
-        import shutil
-
-        mappings = [
-            (_LEGACY_ROOT / "backups", self.backups_dir),
-            (_LEGACY_ROOT / "logs", self.logs_dir),
-            (_LEGACY_ROOT / "cache", self.cache_dir),
-            (_LEGACY_ROOT / "caracal.log", self.log_path),
-        ]
-
-        for legacy_path, workspace_path in mappings:
-            if not legacy_path.exists():
-                continue
-            if legacy_path.resolve() == workspace_path.resolve():
-                continue
-
-            try:
-                if legacy_path.is_file():
-                    if not workspace_path.exists():
-                        ensure_source_tree(source_of(workspace_path))
-                        shutil.move(str(legacy_path), str(workspace_path))
-                    continue
-
-                ensure_source_tree(workspace_path)
-                for legacy_child in legacy_path.iterdir():
-                    target_path = workspace_path / legacy_child.name
-                    if target_path.exists():
-                        continue
-                    shutil.move(str(legacy_child), str(target_path))
-
-                # Remove empty legacy directory after migration.
-                if not any(legacy_path.iterdir()):
-                    legacy_path.rmdir()
-            except Exception:
-                # Best-effort migration; never block workspace initialization.
-                continue
 
     # ------------------------------------------------------------------
     # Workspace registry (optional multi-workspace support)
@@ -458,8 +415,6 @@ def set_workspace(root: str | Path) -> WorkspaceManager:
 
 def _resolve_initial_workspace_root() -> Path:
     """Resolve initial workspace root from active/default workspace metadata."""
-    _cleanup_legacy_primary_dir()
-
     try:
         from caracal.deployment.config_manager import ConfigManager
 
@@ -486,7 +441,7 @@ def _resolve_initial_workspace_root() -> Path:
         if _WORKSPACES_DIR.exists():
             candidates = sorted(
                 p for p in _WORKSPACES_DIR.iterdir()
-                if p.is_dir() and (p / "workspace.toml").exists() and p.name != "primary"
+                if p.is_dir() and (p / "workspace.toml").exists()
             )
             if candidates:
                 return candidates[0]
@@ -494,31 +449,7 @@ def _resolve_initial_workspace_root() -> Path:
         pass
 
     # Last resort for brand-new installs before onboarding creates a workspace.
-    # Do not create a synthetic "primary" workspace directory.
-    return _LEGACY_ROOT
-
-
-def _cleanup_legacy_primary_dir() -> None:
-    """Remove legacy synthetic ``workspaces/primary`` when it is empty."""
-    primary_dir = _WORKSPACES_DIR / "primary"
-    if not primary_dir.exists() or not primary_dir.is_dir():
-        return
-
-    try:
-        # Only remove when it contains no files and only known runtime dirs.
-        targetren = list(primary_dir.iterdir())
-        allowed = {"backups", "logs", "cache", "keys"}
-        if any(target.is_file() for target in targetren):
-            return
-        if any(target.name not in allowed for target in targetren):
-            return
-
-        import shutil
-
-        shutil.rmtree(primary_dir)
-    except Exception:
-        # Best effort cleanup; never block startup.
-        return
+    return _CARACAL_HOME_ROOT
 
 
 def _load_registry_workspaces(registry_path: Path) -> list[dict[str, Any]]:
