@@ -465,9 +465,36 @@ def _export_workspace(console: Console, state: FlowState) -> None:
                 f"[{Colors.WARNING}]Include encrypted secrets?[/]",
                 default=False
             )
+
+            lock_key = ""
+            if include_secrets:
+                console.print()
+                lock_key = Prompt.ask(
+                    f"[{Colors.WARNING}]Archive lock key (required when including secrets)[/]",
+                    default="",
+                    password=True,
+                )
+                lock_key_confirm = Prompt.ask(
+                    f"[{Colors.WARNING}]Confirm archive lock key[/]",
+                    default="",
+                    password=True,
+                )
+                if lock_key != lock_key_confirm:
+                    console.print(
+                        f"  [{Colors.ERROR}]{Icons.ERROR} Lock keys do not match[/]"
+                    )
+                    input()
+                    return
+
+            normalized_lock_key = lock_key.strip() if lock_key else None
             
             # Export
-            config_mgr.export_workspace(result.key, resolved_export_path, include_secrets=include_secrets)
+            config_mgr.export_workspace(
+                result.key,
+                resolved_export_path,
+                include_secrets=include_secrets,
+                lock_key=normalized_lock_key,
+            )
             
             console.print()
             console.print(
@@ -524,10 +551,22 @@ def _import_workspace(console: Console, state: FlowState) -> None:
             f"[{Colors.INFO}]Workspace name (leave empty to use original)[/]",
             default=""
         )
+
+        console.print()
+        lock_key = Prompt.ask(
+            f"[{Colors.INFO}]Import key (leave empty for unlocked archive)[/]",
+            default="",
+            password=True,
+        )
+        normalized_lock_key = lock_key.strip() if lock_key else None
         
         # Import
         config_mgr = ConfigManager()
-        config_mgr.import_workspace(resolved_import_path, name=name if name else None)
+        config_mgr.import_workspace(
+            resolved_import_path,
+            name=name if name else None,
+            lock_key=normalized_lock_key,
+        )
         
         console.print()
         console.print(

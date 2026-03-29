@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -24,8 +25,10 @@ from typing import Any, Dict, List, Optional
 import keyring
 import structlog
 import toml
+from cryptography.exceptions import InvalidTag
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from caracal.deployment.exceptions import (
@@ -135,6 +138,14 @@ class ConfigManager:
             "metadata": {"template": "local-dev"}
         }
     }
+
+    # Locked export envelope format
+    ARCHIVE_LOCK_MAGIC = b"CRCLWSX1"
+    ARCHIVE_LOCK_VERSION = 1
+    ARCHIVE_LOCK_KDF_ITERATIONS = 390000
+    ARCHIVE_LOCK_SALT_BYTES = 16
+    ARCHIVE_LOCK_NONCE_BYTES = 12
+    ARCHIVE_LOCK_AAD = b"caracal.workspace.export.v1"
     
     def __init__(self):
         """Initialize the configuration manager."""
@@ -352,6 +363,274 @@ class ConfigManager:
     def _get_workspace_vault_file(self, workspace: str) -> Path:
         """Get workspace secrets vault file path."""
         return self._get_workspace_dir(workspace) / "secrets.vault"
+
+    def _load_workspace_runtime_config(self, workspace_dir: Path) -> Dict[str, Any]:
+        """Load workspace runtime config.yaml when available."""
+        config_path = workspace_dir / "config.yaml"
+        if not config_path.exists():
+            return {}
+
+        try:
+            import yaml
+
+            with open(config_path, "r") as f:
+                loaded = yaml.safe_load(f) or {}
+            if isinstance(loaded, dict):
+                return loaded
+        except Exception:
+            pass
+        return {}
+
+    def _extract_workspace_db_config(self, workspace_dir: Path) -> Optional[Dict[str, Any]]:
+        """Extract PostgreSQL connection settings for workspace schema transfer."""
+        cfg = self._load_workspace_runtime_config(workspace_dir)
+        db_cfg = cfg.get("database", {}) if isinstance(cfg, dict) else {}
+        if not isinstance(db_cfg, dict):
+            return None
+
+        schema = str(db_cfg.get("schema", "")).strip()
+        if not schema:
+            return None
+
+        try:
+            port = int(db_cfg.get("port", 5432))
+        except Exception:
+            port = 5432
+
+        return {
+            "host": db_cfg.get("host", "localhost"),
+            "port": port,
+            "database": db_cfg.get("database", "caracal"),
+            "user": db_cfg.get("user", "caracal"),
+            "password": db_cfg.get("password", ""),
+            "schema": schema,
+        }
+
+    def _pg_env(self, password: str) -> Dict[str, str]:
+        """Build subprocess environment for PostgreSQL CLI tools."""
+        env = os.environ.copy()
+        if password:
+            env["PGPASSWORD"] = str(password)
+        return env
+
+    def _normalize_lock_key(self, lock_key: Optional[str]) -> Optional[str]:
+        """Normalize optional lock key input."""
+        if lock_key is None:
+            return None
+        normalized = lock_key.strip()
+        return normalized if normalized else None
+
+    def _validate_lock_key(self, lock_key: str) -> None:
+        """Validate archive lock key quality constraints."""
+        if len(lock_key) < 12:
+            raise WorkspaceOperationError(
+                "Archive lock key must be at least 12 characters."
+            )
+
+    def _derive_archive_key(self, lock_key: str, salt: bytes, iterations: int) -> bytes:
+        """Derive AES-256 key from user-provided lock key."""
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=iterations,
+        )
+        return kdf.derive(lock_key.encode("utf-8"))
+
+    def _encrypt_archive_payload(self, archive_bytes: bytes, lock_key: str) -> bytes:
+        """Encrypt archive bytes into locked envelope format."""
+        self._validate_lock_key(lock_key)
+
+        salt = secrets.token_bytes(self.ARCHIVE_LOCK_SALT_BYTES)
+        nonce = secrets.token_bytes(self.ARCHIVE_LOCK_NONCE_BYTES)
+        iterations = self.ARCHIVE_LOCK_KDF_ITERATIONS
+
+        key = self._derive_archive_key(lock_key, salt, iterations)
+        ciphertext = AESGCM(key).encrypt(nonce, archive_bytes, self.ARCHIVE_LOCK_AAD)
+
+        header = {
+            "version": self.ARCHIVE_LOCK_VERSION,
+            "kdf": "pbkdf2-sha256",
+            "iterations": iterations,
+            "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+            "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
+        }
+        header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        header_len = len(header_bytes).to_bytes(4, "big")
+
+        return self.ARCHIVE_LOCK_MAGIC + header_len + header_bytes + ciphertext
+
+    def _prepare_import_archive(self, source_path: Path, lock_key: Optional[str], temp_dir: Path) -> Path:
+        """Return a tar.gz path ready for extraction, decrypting if needed."""
+        with open(source_path, "rb") as f:
+            magic = f.read(len(self.ARCHIVE_LOCK_MAGIC))
+
+            if magic != self.ARCHIVE_LOCK_MAGIC:
+                return source_path
+
+            header_len_bytes = f.read(4)
+            if len(header_len_bytes) != 4:
+                raise WorkspaceOperationError("Locked workspace archive header is corrupted.")
+
+            header_len = int.from_bytes(header_len_bytes, "big")
+            if header_len <= 0 or header_len > 8192:
+                raise WorkspaceOperationError("Locked workspace archive header is invalid.")
+
+            header_bytes = f.read(header_len)
+            if len(header_bytes) != header_len:
+                raise WorkspaceOperationError("Locked workspace archive header is truncated.")
+
+            try:
+                header = json.loads(header_bytes.decode("utf-8"))
+            except Exception as e:
+                raise WorkspaceOperationError("Locked workspace archive header is unreadable.") from e
+
+            if int(header.get("version", 0)) != self.ARCHIVE_LOCK_VERSION:
+                raise WorkspaceOperationError(
+                    f"Unsupported locked archive version: {header.get('version')}"
+                )
+
+            normalized_key = self._normalize_lock_key(lock_key)
+            if not normalized_key:
+                raise WorkspaceOperationError(
+                    "This workspace archive is locked. Provide lock key to import."
+                )
+
+            try:
+                salt = base64.urlsafe_b64decode(header["salt"].encode("ascii"))
+                nonce = base64.urlsafe_b64decode(header["nonce"].encode("ascii"))
+                iterations = int(header["iterations"])
+            except Exception as e:
+                raise WorkspaceOperationError("Locked workspace archive metadata is invalid.") from e
+
+            ciphertext = f.read()
+            try:
+                key = self._derive_archive_key(normalized_key, salt, iterations)
+                plaintext = AESGCM(key).decrypt(nonce, ciphertext, self.ARCHIVE_LOCK_AAD)
+            except InvalidTag as e:
+                raise WorkspaceOperationError(
+                    "Failed to unlock workspace archive: invalid key or corrupted file."
+                ) from e
+            except Exception as e:
+                raise WorkspaceOperationError(
+                    f"Failed to unlock workspace archive: {e}"
+                ) from e
+
+        decrypted_path = temp_dir / "workspace_import.tar.gz"
+        with open(decrypted_path, "wb") as out:
+            out.write(plaintext)
+        return decrypted_path
+
+    def _export_workspace_db_dump(self, workspace: str, workspace_dir: Path, dump_path: Path) -> bool:
+        """Export workspace PostgreSQL schema to a pg_dump archive if configured."""
+        db_cfg = self._extract_workspace_db_config(workspace_dir)
+        if not db_cfg:
+            return False
+
+        cmd = [
+            "pg_dump",
+            "-h", str(db_cfg["host"]),
+            "-p", str(db_cfg["port"]),
+            "-U", str(db_cfg["user"]),
+            "-d", str(db_cfg["database"]),
+            "-F", "c",
+            "-Z", "9",
+            "-f", str(dump_path),
+            "--no-owner",
+            "--no-privileges",
+            "-n", str(db_cfg["schema"]),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                env=self._pg_env(str(db_cfg.get("password", ""))),
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise WorkspaceOperationError(
+                "Workspace has PostgreSQL schema data, but 'pg_dump' is not available. "
+                "Install PostgreSQL client tools and retry export."
+            ) from e
+
+        if result.returncode != 0:
+            details = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise WorkspaceOperationError(
+                f"Failed to export workspace database schema '{db_cfg['schema']}': {details}"
+            )
+
+        return True
+
+    def _import_workspace_db_dump(self, workspace: str, workspace_dir: Path, dump_path: Path) -> bool:
+        """Import workspace PostgreSQL schema from a pg_dump archive if present."""
+        if not dump_path.exists():
+            return False
+
+        db_cfg = self._extract_workspace_db_config(workspace_dir)
+        if not db_cfg:
+            raise WorkspaceOperationError(
+                "Workspace archive contains database dump, but imported workspace config.yaml "
+                "does not define database.schema."
+            )
+
+        # Ensure target schema is clean before restore.
+        try:
+            from caracal.db.connection import DatabaseConfig, DatabaseConnectionManager
+
+            manager = DatabaseConnectionManager(
+                DatabaseConfig(
+                    host=str(db_cfg["host"]),
+                    port=int(db_cfg["port"]),
+                    database=str(db_cfg["database"]),
+                    user=str(db_cfg["user"]),
+                    password=str(db_cfg.get("password", "")),
+                )
+            )
+            manager.initialize()
+            manager.drop_schema(schema_name=str(db_cfg["schema"]))
+            manager.close()
+        except Exception as e:
+            logger.warning(
+                "workspace_schema_pre_restore_cleanup_failed",
+                workspace=workspace,
+                schema=str(db_cfg["schema"]),
+                error=str(e),
+            )
+
+        cmd = [
+            "pg_restore",
+            "-h", str(db_cfg["host"]),
+            "-p", str(db_cfg["port"]),
+            "-U", str(db_cfg["user"]),
+            "-d", str(db_cfg["database"]),
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+            str(dump_path),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                env=self._pg_env(str(db_cfg.get("password", ""))),
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as e:
+            raise WorkspaceOperationError(
+                "Workspace archive contains PostgreSQL dump, but 'pg_restore' is not available. "
+                "Install PostgreSQL client tools and retry import."
+            ) from e
+
+        if result.returncode != 0:
+            details = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise WorkspaceOperationError(
+                f"Failed to import workspace database schema '{db_cfg['schema']}': {details}"
+            )
+
+        return True
     
     def _load_workspace_toml(self, workspace: str) -> Dict[str, Any]:
         """
@@ -967,32 +1246,20 @@ class ConfigManager:
         
         try:
             # Attempt schema cleanup before deleting workspace files.
-            schema_name = None
-            db_kwargs = {}
-            ws_config_yaml = workspace_dir / "config.yaml"
-            if ws_config_yaml.exists():
-                try:
-                    import yaml
-
-                    with open(ws_config_yaml, "r") as f:
-                        cfg = yaml.safe_load(f) or {}
-                    db_cfg = cfg.get("database", {})
-                    schema_name = db_cfg.get("schema")
-                    db_kwargs = {
-                        "host": db_cfg.get("host", "localhost"),
-                        "port": int(db_cfg.get("port", 5432)),
-                        "database": db_cfg.get("database", "caracal"),
-                        "user": db_cfg.get("user", "caracal"),
-                        "password": db_cfg.get("password", ""),
-                    }
-                except Exception:
-                    pass
+            db_cfg = self._extract_workspace_db_config(workspace_dir) or {}
+            schema_name = db_cfg.get("schema")
 
             if schema_name:
                 try:
                     from caracal.db.connection import DatabaseConfig, DatabaseConnectionManager
 
-                    db_config = DatabaseConfig(**db_kwargs)
+                    db_config = DatabaseConfig(
+                        host=str(db_cfg.get("host", "localhost")),
+                        port=int(db_cfg.get("port", 5432)),
+                        database=str(db_cfg.get("database", "caracal")),
+                        user=str(db_cfg.get("user", "caracal")),
+                        password=str(db_cfg.get("password", "")),
+                    )
                     mgr = DatabaseConnectionManager(db_config)
                     mgr.initialize()
                     mgr.drop_schema(schema_name=schema_name)
@@ -1044,7 +1311,13 @@ class ConfigManager:
             )
             raise WorkspaceOperationError(f"Failed to delete workspace: {e}") from e
     
-    def export_workspace(self, name: str, path: Path, include_secrets: bool = False) -> None:
+    def export_workspace(
+        self,
+        name: str,
+        path: Path,
+        include_secrets: bool = False,
+        lock_key: Optional[str] = None,
+    ) -> None:
         """
         Exports workspace configuration for backup or migration.
         
@@ -1052,6 +1325,7 @@ class ConfigManager:
             name: Workspace name
             path: Export path
             include_secrets: Whether to include encrypted secrets
+            lock_key: Optional key to lock the archive (required when include_secrets=True)
             
         Raises:
             WorkspaceNotFoundError: If workspace doesn't exist
@@ -1060,25 +1334,64 @@ class ConfigManager:
         self._validate_workspace_name(name)
         
         workspace_dir = self._get_workspace_dir(name)
+        normalized_lock_key = self._normalize_lock_key(lock_key)
+
+        if include_secrets and not normalized_lock_key:
+            raise WorkspaceOperationError(
+                "Including secrets in workspace export requires a lock key."
+            )
         
         if not workspace_dir.exists():
             raise WorkspaceNotFoundError(f"Workspace not found: {name}")
         
         try:
             import tarfile
-            
-            with tarfile.open(path, "w:gz") as tar:
-                # Always include workspace.toml
-                tar.add(
-                    self._get_workspace_config_file(name),
-                    arcname=f"{name}/workspace.toml"
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                stage_root = Path(temp_dir)
+                staged_workspace_dir = stage_root / name
+                shutil.copytree(workspace_dir, staged_workspace_dir)
+
+                vault_file = staged_workspace_dir / "secrets.vault"
+                if not include_secrets and vault_file.exists():
+                    vault_file.unlink()
+
+                db_dump_path = staged_workspace_dir / "workspace_schema.dump"
+                db_dump_included = self._export_workspace_db_dump(
+                    name,
+                    workspace_dir,
+                    db_dump_path,
                 )
-                
-                # Optionally include secrets.vault
-                if include_secrets:
-                    vault_file = self._get_workspace_vault_file(name)
-                    if vault_file.exists():
-                        tar.add(vault_file, arcname=f"{name}/secrets.vault")
+
+                manifest = {
+                    "format_version": 2,
+                    "workspace": name,
+                    "exported_at": datetime.now().isoformat(),
+                    "archive": {
+                        "locked": bool(normalized_lock_key),
+                        "lock_format": "caracal-workspace-lock-v1" if normalized_lock_key else None,
+                    },
+                    "includes": {
+                        "workspace_files": True,
+                        "secrets": include_secrets and self._get_workspace_vault_file(name).exists(),
+                        "database_dump": db_dump_included,
+                    },
+                }
+                (staged_workspace_dir / "export_manifest.json").write_text(
+                    json.dumps(manifest, indent=2)
+                )
+
+                staged_archive_path = stage_root / "workspace_export.tar.gz"
+                with tarfile.open(staged_archive_path, "w:gz") as tar:
+                    tar.add(staged_workspace_dir, arcname=name)
+
+                if normalized_lock_key:
+                    archive_bytes = staged_archive_path.read_bytes()
+                    locked_bytes = self._encrypt_archive_payload(archive_bytes, normalized_lock_key)
+                    with open(path, "wb") as locked_out:
+                        locked_out.write(locked_bytes)
+                else:
+                    shutil.copy2(staged_archive_path, path)
             
             logger.info(
                 "workspace_exported",
@@ -1109,13 +1422,19 @@ class ConfigManager:
             )
             raise WorkspaceOperationError(f"Failed to export workspace: {e}") from e
     
-    def import_workspace(self, path: Path, name: Optional[str] = None) -> None:
+    def import_workspace(
+        self,
+        path: Path,
+        name: Optional[str] = None,
+        lock_key: Optional[str] = None,
+    ) -> None:
         """
         Imports workspace from backup or migration.
         
         Args:
             path: Import path
             name: Optional workspace name (uses name from export if not provided)
+            lock_key: Optional key for locked archive imports
             
         Raises:
             WorkspaceAlreadyExistsError: If workspace already exists
@@ -1130,8 +1449,10 @@ class ConfigManager:
             # Extract to temporary directory first
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
-                
-                with tarfile.open(path, "r:gz") as tar:
+
+                archive_to_extract = self._prepare_import_archive(path, lock_key, temp_path)
+
+                with tarfile.open(archive_to_extract, "r:gz") as tar:
                     tar.extractall(temp_path)
                 
                 # Find workspace directory in archive
@@ -1163,6 +1484,15 @@ class ConfigManager:
                     config.name = workspace_name
                     config.updated_at = datetime.now()
                     self.set_workspace_config(workspace_name, config)
+
+                db_dump_path = target_dir / "workspace_schema.dump"
+                if db_dump_path.exists():
+                    self._import_workspace_db_dump(workspace_name, target_dir, db_dump_path)
+                    db_dump_path.unlink(missing_ok=True)
+
+                manifest_path = target_dir / "export_manifest.json"
+                if manifest_path.exists():
+                    manifest_path.unlink(missing_ok=True)
                 
                 logger.info(
                     "workspace_imported",
