@@ -68,6 +68,8 @@ services:
             - "10000"
         volumes:
             - redis_data:/data
+        ports:
+            - "6379:6379"
         healthcheck:
             test:
                 - CMD
