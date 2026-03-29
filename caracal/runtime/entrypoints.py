@@ -118,7 +118,7 @@ services:
             - caracal.mcp.service
         volumes:
             - caracal_state:/home/caracal/.caracal
-            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host:z
         ports:
             - ${CARACAL_API_PORT:-8000}:8080
         healthcheck:
@@ -171,7 +171,7 @@ services:
             - caracal
         volumes:
             - caracal_state:/home/caracal/.caracal
-            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host:z
         stdin_open: true
         tty: true
         networks:
@@ -217,7 +217,7 @@ services:
             - caracal.flow.main
         volumes:
             - caracal_state:/home/caracal/.caracal
-            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host:z
         stdin_open: true
         tty: true
         networks:
