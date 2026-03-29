@@ -73,7 +73,7 @@ class _DBPrincipalRegistryAdapter:
                 metadata = dict(row.principal_metadata or {})
                 has_private_material = any(
                     k in metadata
-                    for k in ("private_key_ref", "aws_kms_ciphertext_b64", "private_key_pem")
+                    for k in ("private_key_ref", "aws_kms_ciphertext_b64")
                 )
                 if row.public_key_pem and has_private_material:
                     return
