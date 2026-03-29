@@ -329,6 +329,7 @@ class FlowApp:
         from rich.panel import Panel
         from rich.table import Table
         import socket
+        import os
         
         self.console.print(Panel(
             f"[{Colors.NEUTRAL}]Service Health Check[/]",
@@ -354,6 +355,9 @@ class FlowApp:
         table.add_column("Status")
         table.add_column("Endpoint", style=Colors.DIM)
         
+        # Detect if running inside container runtime
+        in_container = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {"1", "true", "yes", "on"}
+        
         def _check_tcp(host: str, port: int) -> bool:
             try:
                 sock = socket.create_connection((host, port), timeout=2)
@@ -361,6 +365,16 @@ class FlowApp:
                 return True
             except Exception:
                 return False
+        
+        def _resolve_service_host(config_host: str, docker_service_name: str) -> str:
+            """Resolve service host based on container context.
+            
+            When running inside container: translate localhost -> service name.
+            When running on host: keep the configured host.
+            """
+            if in_container and config_host == 'localhost':
+                return docker_service_name
+            return config_host
         
         def _enabled_str(val: bool) -> str:
             return f"[{Colors.SUCCESS}]Yes[/]" if val else f"[{Colors.DIM}]No[/]"
@@ -371,14 +385,16 @@ class FlowApp:
             return f"[{Colors.ERROR}]{Icons.ERROR} Unreachable[/]"
         
         # Database (always checked — core requirement)
-        db_ok = _check_tcp(config.database.host, config.database.port)
+        db_checkhost = _resolve_service_host(config.database.host, 'postgres')
+        db_ok = _check_tcp(db_checkhost, config.database.port)
         table.add_row("PostgreSQL", "Core", _enabled_str(True), _status_str(db_ok),
                      f"{config.database.host}:{config.database.port}")
         
         # Redis (required)
         redis_host = getattr(config.redis, 'host', 'localhost')
         redis_port = getattr(config.redis, 'port', 6379)
-        redis_ok = _check_tcp(redis_host, redis_port)
+        redis_checkhost = _resolve_service_host(redis_host, 'redis')
+        redis_ok = _check_tcp(redis_checkhost, redis_port)
         table.add_row("Redis", "Core", _enabled_str(True), _status_str(redis_ok),
                      f"{redis_host}:{redis_port}")
         
