@@ -76,12 +76,6 @@ def store_principal_private_key(principal_id: UUID, private_key_pem: str) -> Pri
     - aws_kms (requires CARACAL_AWS_KMS_KEY_ID and boto3)
     """
     backend = os.getenv("CARACAL_PRINCIPAL_KEY_BACKEND", _LOCAL_BACKEND).strip().lower()
-    strict_aws = os.getenv("CARACAL_PRINCIPAL_KEY_STRICT_AWS", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
 
     if backend not in {_LOCAL_BACKEND, _AWS_KMS_BACKEND}:
         raise PrincipalKeyStorageError(
@@ -93,12 +87,9 @@ def store_principal_private_key(principal_id: UUID, private_key_pem: str) -> Pri
         kms_result = _store_in_aws_kms(principal_id=principal_id, private_key_pem=private_key_pem)
         if kms_result is not None:
             return kms_result
-        if strict_aws:
-            raise PrincipalKeyStorageError(
-                "AWS KMS backend is configured but key storage failed and "
-                "CARACAL_PRINCIPAL_KEY_STRICT_AWS is enabled."
-            )
-        logger.warning("Falling back to local key storage for principal %s", principal_id)
+        raise PrincipalKeyStorageError(
+            "AWS KMS backend is configured but key storage failed."
+        )
 
     return _store_locally(principal_id=principal_id, private_key_pem=private_key_pem)
 
@@ -109,18 +100,10 @@ def resolve_principal_private_key(
 ) -> str:
     """Resolve a principal private key PEM from metadata-backed storage references.
 
-    Backward compatibility:
-    - If ``private_key_pem`` exists in metadata, it is returned as-is.
-
-    Preferred path:
     - ``key_backend=local`` resolves ``private_key_ref`` as a local file path.
     - ``key_backend=aws_kms`` decrypts ``aws_kms_ciphertext_b64`` via AWS KMS.
     """
     metadata = dict(principal_metadata or {})
-
-    legacy_private_key = metadata.get("private_key_pem")
-    if isinstance(legacy_private_key, str) and legacy_private_key.strip():
-        return legacy_private_key
 
     backend = str(metadata.get("key_backend") or _LOCAL_BACKEND).strip().lower()
 
@@ -202,7 +185,9 @@ def _resolve_local_keystore_dir() -> Path:
 
         return (get_workspace().keys_dir / "principals").expanduser().resolve(strict=False)
     except Exception:
-        return (Path.home() / ".caracal" / "keystore").expanduser().resolve(strict=False)
+        from caracal.storage.layout import get_caracal_layout
+
+        return (get_caracal_layout().keystore_dir / "principals").expanduser().resolve(strict=False)
 
 
 def _store_locally(principal_id: UUID, private_key_pem: str) -> PrincipalKeyStorageResult:

@@ -44,6 +44,7 @@ from caracal.deployment.exceptions import (
     WorkspaceOperationError,
 )
 from caracal.runtime.environment import debug_logs_enabled
+from caracal.storage.layout import resolve_caracal_home
 
 logger = structlog.get_logger(__name__)
 
@@ -103,7 +104,7 @@ class ConfigManager:
     """
     
     # Configuration directory and file paths
-    CONFIG_DIR = Path.home() / ".caracal"
+    CONFIG_DIR = resolve_caracal_home()
     CONFIG_FILE = CONFIG_DIR / "config.toml"
     WORKSPACES_DIR = CONFIG_DIR / "workspaces"
     CACHE_DIR = CONFIG_DIR / "cache"  # Legacy root cache (deprecated)
