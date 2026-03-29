@@ -190,7 +190,6 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
             display_metadata = {
                 k: v for k, v in principal['metadata'].items()
                 if k not in [
-                    'private_key_pem',
                     'public_key_pem',
                     'delegation_tokens',
                     'aws_kms_ciphertext_b64',
