@@ -491,9 +491,46 @@ def _step_workspace(wizard: Wizard) -> Any:
                 wizard.context["workspace_path"] = str(workspace_path)
                 wizard.context["workspace_name"] = imported_name
                 wizard.context["workspace_existing"] = True
+                wizard.context["exit_onboarding_after_workspace_import"] = True
+
+                # Imported archives may not include full runtime config. Seed it
+                # so returning directly to main menu does not land in a broken state.
+                try:
+                    _initialize_caracal_dir(workspace_path, wipe=False)
+                    wizard.context["config_path"] = str(workspace_path)
+
+                    config_file = workspace_path / "config.yaml"
+                    if config_file.exists():
+                        import yaml
+
+                        with open(config_file, "r") as f:
+                            config_yaml = yaml.safe_load(f) or {}
+
+                        db_section = config_yaml.get("database") if isinstance(config_yaml, dict) else None
+                        if not db_section:
+                            env_config = _get_db_config_from_env()
+                            env_issues = _validate_env_config(dict(env_config))
+                            if not env_issues:
+                                schema_name = _resolve_workspace_schema(imported_name, wizard.context)
+                                config_yaml["database"] = {
+                                    "type": "postgres",
+                                    "host": env_config["host"],
+                                    "port": env_config["port"],
+                                    "database": env_config["database"],
+                                    "user": env_config["username"],
+                                    "password": env_config["password"],
+                                    "schema": schema_name,
+                                }
+                                with open(config_file, "w") as f:
+                                    yaml.safe_dump(config_yaml, f, default_flow_style=False, sort_keys=False)
+                except Exception:
+                    pass
 
                 console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Selected workspace: {imported_name}[/]")
                 console.print(f"  [{Colors.DIM}]Path: {workspace_path}[/]")
+
+                # Importing an existing workspace should return directly to the main menu.
+                wizard.cancel()
                 return str(workspace_path)
             except Exception:
                 pass
@@ -1539,6 +1576,10 @@ def run_onboarding(
         return results
     
     results["workspace_configured"] = True
+
+    if wizard.context.get("exit_onboarding_after_workspace_import"):
+        results["imported_workspace"] = True
+        return results
     
     # Show summary
     wizard.show_summary()
