@@ -24,6 +24,7 @@ from caracal.deployment.exceptions import (
     SecretNotFoundError,
     WorkspaceAlreadyExistsError,
     WorkspaceNotFoundError,
+    WorkspaceOperationError,
 )
 
 
@@ -253,9 +254,27 @@ class TestConfigManagerExportImport:
         manager.store_secret("api_key", "secret-value", "test-workspace")
         
         export_path = temp_config_dir / "export.tar.gz"
-        manager.export_workspace("test-workspace", export_path, include_secrets=True)
+        manager.export_workspace(
+            "test-workspace",
+            export_path,
+            include_secrets=True,
+            lock_key="strong-test-lock-key",
+        )
         
         assert export_path.exists()
+
+    def test_export_workspace_with_secrets_requires_lock_key(self, temp_config_dir, monkeypatch):
+        """Secrets export must require lock key."""
+        monkeypatch.setattr("keyring.get_password", lambda s, u: None)
+        monkeypatch.setattr("keyring.set_password", lambda s, u, p: None)
+
+        manager = ConfigManager()
+        manager.create_workspace("test-workspace")
+        manager.store_secret("api_key", "secret-value", "test-workspace")
+
+        export_path = temp_config_dir / "export.tar.gz"
+        with pytest.raises(WorkspaceOperationError):
+            manager.export_workspace("test-workspace", export_path, include_secrets=True)
     
     def test_import_workspace(self, temp_config_dir, monkeypatch):
         """Test importing workspace."""
@@ -268,19 +287,50 @@ class TestConfigManagerExportImport:
         
         # Export
         export_path = temp_config_dir / "export.tar.gz"
-        manager.export_workspace("original-workspace", export_path, include_secrets=True)
+        manager.export_workspace(
+            "original-workspace",
+            export_path,
+            include_secrets=True,
+            lock_key="strong-test-lock-key",
+        )
         
         # Delete original
         manager.delete_workspace("original-workspace", backup=False)
         
         # Import with new name
-        manager.import_workspace(export_path, name="imported-workspace")
+        manager.import_workspace(
+            export_path,
+            name="imported-workspace",
+            lock_key="strong-test-lock-key",
+        )
         
         assert "imported-workspace" in manager.list_workspaces()
         
         # Verify secret was imported
         value = manager.get_secret("api_key", "imported-workspace")
         assert value == "secret-value"
+
+    def test_import_locked_workspace_requires_key(self, temp_config_dir, monkeypatch):
+        """Locked exports cannot be imported without a key."""
+        monkeypatch.setattr("keyring.get_password", lambda s, u: None)
+        monkeypatch.setattr("keyring.set_password", lambda s, u, p: None)
+
+        manager = ConfigManager()
+        manager.create_workspace("original-workspace")
+        manager.store_secret("api_key", "secret-value", "original-workspace")
+
+        export_path = temp_config_dir / "export.tar.gz"
+        manager.export_workspace(
+            "original-workspace",
+            export_path,
+            include_secrets=True,
+            lock_key="strong-test-lock-key",
+        )
+
+        manager.delete_workspace("original-workspace", backup=False)
+
+        with pytest.raises(WorkspaceOperationError):
+            manager.import_workspace(export_path, name="imported-workspace")
     
     def test_import_workspace_already_exists(self, temp_config_dir, monkeypatch):
         """Test importing workspace that already exists."""
