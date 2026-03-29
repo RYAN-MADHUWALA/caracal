@@ -11,19 +11,15 @@ Principal management flows:
 - Rotate Key — replace the keypair and choose mandate disposition
 
 Key storage:
-  Development : private key written to ~/.caracal/keystore/<id>.key (chmod 600)
-  Production  : integrate with an HSM, PKCS#11 provider, or cloud KMS
-                (AWS KMS, GCP Cloud KMS, HashiCorp Vault) instead.
+    Default     : private key written to active workspace keys directory
+                                (or CARACAL_KEYSTORE_DIR when configured).
+    Optional    : AWS KMS backend via CARACAL_PRINCIPAL_KEY_BACKEND=aws_kms.
 """
 
-import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -37,15 +33,12 @@ from caracal.flow.components.prompt import FlowPrompt
 from caracal.flow.theme import Colors, Icons
 from caracal.flow.state import FlowState, RecentAction
 from caracal.logging_config import get_logger
-from caracal.pathing import ensure_source_tree
-
-logger = get_logger(__name__)
-
-# Default local keystore directory (overridable via CARACAL_KEYSTORE_DIR env var)
-_KEYSTORE_DIR = Path(
-    os.environ.get("CARACAL_KEYSTORE_DIR", str(Path.home() / ".caracal" / "keystore"))
+from caracal.core.principal_keys import (
+    backup_local_private_key,
+    generate_and_store_principal_keypair,
 )
 
+logger = get_logger(__name__)
 
 class PrincipalFlow:
     """Principal management flow."""
@@ -207,19 +200,14 @@ class PrincipalFlow:
                 db_session.flush()  # populate principal_id before key generation
                 
                 # --- Auto-generate ECDSA P-256 keypair ---
-                key_path = self._generate_and_store_keypair(principal, db_session)
+                key_ref = self._generate_and_store_keypair(principal, db_session)
                 
                 db_session.commit()
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal registered![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Principal ID : [{Colors.PRIMARY}]{principal.principal_id}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Private key  : [{Colors.DIM}]{key_path}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Private key  : [{Colors.DIM}]{key_ref}[/]")
                 self.console.print()
-                self.console.print(
-                    f"  [{Colors.WARNING}]{Icons.WARNING} Private key stored on local filesystem.[/]\n"
-                    f"  [{Colors.HINT}]Production: use an HSM or cloud KMS "
-                    f"(AWS KMS, GCP Cloud KMS, HashiCorp Vault, PKCS#11).[/]"
-                )
                 
                 if self.state:
                     self.state.add_recent_action(RecentAction.create(
@@ -312,10 +300,8 @@ class PrincipalFlow:
         """Generate an ECDSA P-256 keypair, persist it, and write an audit log entry.
         
         The public key PEM is stored in ``principal.public_key_pem``.
-        The private key is written to the local keystore directory with chmod 600.
-        
-        In production replace the filesystem write with an HSM/KMS call and
-        store only a key reference (key ID / ARN) in the principal metadata.
+        The private key is stored using the configured backend:
+        local filesystem by default or AWS KMS when enabled by environment.
         
         Args:
             principal: The :class:`~caracal.db.models.Principal` ORM object
@@ -323,40 +309,22 @@ class PrincipalFlow:
             db_session: Active SQLAlchemy session (used for the audit record).
         
         Returns:
-            Absolute path to the written private key file.
+            Private key storage reference.
         """
         self.console.print(f"  [{Colors.INFO}]Generating ECDSA P-256 keypair...[/]")
-        
-        # Generate key material
-        private_key = ec.generate_private_key(ec.SECP256R1())
-        public_key = private_key.public_key()
-        
-        # Serialize
-        private_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode("utf-8")
-        
-        public_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode("utf-8")
-        
-        # Store public key in principal metadata
-        principal.public_key_pem = public_pem
-        
-        # Write private key to local keystore (dev/staging)
-        ensure_source_tree(_KEYSTORE_DIR)
-        key_file = _KEYSTORE_DIR / f"{principal.principal_id}.key"
-        key_file.write_text(private_pem)
-        key_file.chmod(0o600)
+        generated = generate_and_store_principal_keypair(principal_id=principal.principal_id)
+        principal.public_key_pem = generated.public_key_pem
+
+        principal_metadata = dict(principal.principal_metadata or {})
+        principal_metadata.update(generated.storage.metadata)
+        principal.principal_metadata = principal_metadata
         
         logger.info(
             "ECDSA P-256 keypair generated for principal %s; "
-            "private key written to %s",
+            "private key stored via backend=%s ref=%s",
             principal.principal_id,
-            key_file,
+            generated.storage.backend,
+            generated.storage.reference,
         )
         
         # Audit log entry
@@ -364,10 +332,13 @@ class PrincipalFlow:
             db_session,
             event_type="key_generated",
             principal_id=principal.principal_id,
-            details=f"ECDSA P-256 keypair generated; private key stored at {key_file}",
+            details=(
+                "ECDSA P-256 keypair generated; "
+                f"private key stored via {generated.storage.backend} at {generated.storage.reference}"
+            ),
         )
         
-        return str(key_file)
+        return generated.storage.reference
 
     def _write_audit_log(
         self,
@@ -535,13 +506,15 @@ class PrincipalFlow:
                     return
                 
                 # ---------- backup old key file ----------
-                old_key_file = _KEYSTORE_DIR / f"{principal.principal_id}.key"
-                if old_key_file.exists():
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    backup_path = (
-                        _KEYSTORE_DIR / f"{principal.principal_id}.key.bak_{timestamp}"
-                    )
-                    old_key_file.rename(backup_path)
+                existing_backend = (
+                    (principal.principal_metadata or {}).get("key_backend", "local")
+                )
+                if existing_backend == "local":
+                    backup_path = backup_local_private_key(principal.principal_id)
+                else:
+                    backup_path = None
+
+                if backup_path:
                     self.console.print(
                         f"  [{Colors.DIM}]Old private key backed up → {backup_path}[/]"
                     )
@@ -670,11 +643,6 @@ class PrincipalFlow:
                 )
                 self.console.print(
                     f"  [{Colors.NEUTRAL}]New private key : [{Colors.DIM}]{new_key_path}[/]"
-                )
-                self.console.print(
-                    f"  [{Colors.WARNING}]{Icons.WARNING} Private key stored on local filesystem.[/]\n"
-                    f"  [{Colors.HINT}]Production: use an HSM or cloud KMS "
-                    f"(AWS KMS, GCP Cloud KMS, HashiCorp Vault, PKCS#11).[/]"
                 )
                 
                 if self.state:

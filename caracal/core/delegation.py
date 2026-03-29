@@ -28,6 +28,7 @@ from caracal.exceptions import (
     TokenExpiredError,
     TokenValidationError,
 )
+from caracal.core.principal_keys import PrincipalKeyStorageError, resolve_principal_private_key
 from caracal.core.error_handling import (
     get_error_handler,
     ErrorCategory,
@@ -169,14 +170,17 @@ class DelegationTokenManager:
                 f"Source principal with ID '{source_principal_id}' does not exist"
             )
         
-        # Get source agent's private key from metadata
-        if source_principal.metadata is None or "private_key_pem" not in source_principal.metadata:
-            logger.error(f"Source principal {source_principal_id} has no private key")
-            raise InvalidDelegationTokenError(
-                f"Source principal '{source_principal_id}' has no private key for signing"
+        # Resolve source private key through the principal key storage abstraction.
+        try:
+            private_key_pem = resolve_principal_private_key(
+                principal_id=source_principal_id,
+                principal_metadata=source_principal.metadata,
             )
-        
-        private_key_pem = source_principal.metadata["private_key_pem"]
+        except PrincipalKeyStorageError as exc:
+            logger.error("Source principal %s private key resolution failed: %s", source_principal_id, exc)
+            raise InvalidDelegationTokenError(
+                f"Source principal '{source_principal_id}' has no usable private key for signing"
+            ) from exc
         
         # Load private key
         try:
@@ -311,8 +315,12 @@ class DelegationTokenManager:
                 logger.error(f"Issuer agent not found (fail-closed): {issuer_id}")
                 raise error
             
-            # Get issuer's public key from metadata
-            if issuer_agent.metadata is None or "public_key_pem" not in issuer_agent.metadata:
+            # Prefer canonical principal public key field, fallback to legacy metadata key.
+            public_key_pem = getattr(issuer_agent, "public_key", None)
+            if not public_key_pem and issuer_agent.metadata is not None:
+                public_key_pem = issuer_agent.metadata.get("public_key_pem")
+
+            if not public_key_pem:
                 # Fail closed: deny if public key not available (Requirement 23.3)
                 error_handler = get_error_handler("delegation-token-manager")
                 error = TokenValidationError(f"Issuer agent '{issuer_id}' has no public key for verification")
@@ -326,8 +334,6 @@ class DelegationTokenManager:
                 )
                 logger.error(f"Issuer agent {issuer_id} has no public key (fail-closed)")
                 raise error
-            
-            public_key_pem = issuer_agent.metadata["public_key_pem"]
             
             # Load public key
             try:
