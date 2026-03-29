@@ -488,6 +488,47 @@ class ConfigManager:
             raise WorkspaceOperationError(
                 f"Failed to save secrets vault: {e}"
             ) from e
+
+    def _normalize_workspace_ownership(self, workspace_dir: Path) -> None:
+        """Best-effort ownership normalization for container runtime.
+
+        When workspace files are created as root inside the runtime container,
+        later operations run as the unprivileged `caracal` user can fail with
+        permission errors. Normalize ownership to `caracal` when possible.
+        """
+        in_container_runtime = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not in_container_runtime:
+            return
+
+        if not hasattr(os, "geteuid") or os.geteuid() != 0:
+            return
+
+        if not hasattr(os, "chown"):
+            return
+
+        try:
+            import pwd
+
+            pw = pwd.getpwnam("caracal")
+            uid, gid = pw.pw_uid, pw.pw_gid
+        except Exception:
+            return
+
+        try:
+            for root, dirs, files in os.walk(workspace_dir):
+                os.chown(root, uid, gid)
+                for name in dirs:
+                    os.chown(os.path.join(root, name), uid, gid)
+                for name in files:
+                    os.chown(os.path.join(root, name), uid, gid)
+        except Exception:
+            # Ownership normalization is best-effort and should not block operations.
+            return
     
     def get_workspace_config(self, workspace: str) -> WorkspaceConfig:
         """
@@ -857,6 +898,10 @@ class ConfigManager:
             
             # Create empty vault
             self._save_vault(name, {})
+
+            # Ensure root-created workspaces in container runtime remain accessible
+            # when commands later run as the unprivileged runtime user.
+            self._normalize_workspace_ownership(workspace_dir)
             
             logger.info(
                 "workspace_created",
@@ -1041,6 +1086,20 @@ class ConfigManager:
                 export_path=str(path),
                 include_secrets=include_secrets
             )
+        except PermissionError as e:
+            in_container_runtime = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if in_container_runtime:
+                raise WorkspaceOperationError(
+                    "Failed to export workspace due to ownership mismatch on workspace files. "
+                    "Run 'caracal down && caracal up' to repair permissions, then retry export. "
+                    f"Original error: {e}"
+                ) from e
+            raise WorkspaceOperationError(f"Failed to export workspace: {e}") from e
             
         except Exception as e:
             logger.error(
@@ -1095,6 +1154,8 @@ class ConfigManager:
                 # Copy workspace directory
                 shutil.copytree(source_dir, target_dir)
                 target_dir.chmod(0o700)
+
+                self._normalize_workspace_ownership(target_dir)
                 
                 # Update workspace name in configuration if renamed
                 if name and name != source_dir.name:
