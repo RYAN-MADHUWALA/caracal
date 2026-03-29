@@ -2,7 +2,7 @@
 # This example matches the current broker-only open-source architecture.
 
 storage:
-  backup_dir: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/backups
+  backup_dir: ${CARACAL_HOME:~/.caracal}/backups
   backup_count: 3
 
 database:
@@ -35,14 +35,14 @@ merkle:
   batch_timeout_seconds: 300
   signing_algorithm: ES256
   signing_backend: software
-  private_key_path: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/keys/merkle_signing_key.pem
+  private_key_path: ${CARACAL_HOME:~/.caracal}/keys/merkle_signing_key.pem
   key_rotation_enabled: false
 
 snapshot:
   enabled: true
   schedule_cron: "0 0 * * *"
   retention_days: 90
-  storage_path: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/snapshots
+  storage_path: ${CARACAL_HOME:~/.caracal}/snapshots
   compression_enabled: true
   auto_cleanup_enabled: true
 
@@ -57,7 +57,7 @@ defaults:
 
 logging:
   level: ${LOG_LEVEL:INFO}
-  file: ${CARACAL_WORKSPACE_ROOT:~/.caracal}/logs/caracal.log
+  file: ${CARACAL_HOME:~/.caracal}/logs/caracal.log
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 performance:

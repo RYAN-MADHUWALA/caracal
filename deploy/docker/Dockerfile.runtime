@@ -24,6 +24,7 @@ RUN python -m pip install --upgrade pip wheel setuptools && \
 FROM python:3.12-slim
 
 ENV HOME=/home/caracal \
+    CARACAL_HOME=/home/caracal/.caracal \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TERM=xterm-256color \
@@ -53,7 +54,7 @@ RUN python -m pip install --upgrade pip && \
     python -m pip install /wheels/*.whl && \
     rm -rf /wheels && \
     chmod +x /usr/local/bin/caracal-runtime-entrypoint && \
-    mkdir -p /home/caracal/.caracal /home/caracal/.cache && \
+    mkdir -p "${CARACAL_HOME}" /home/caracal/.cache && \
     chown -R caracal:caracal /home/caracal /opt/caracal
 
 EXPOSE 8080
