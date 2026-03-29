@@ -20,6 +20,9 @@ from caracal.storage.layout import resolve_caracal_home
 
 COMPOSE_FILE_ENV = "CARACAL_DOCKER_COMPOSE_FILE"
 IN_CONTAINER_ENV = "CARACAL_RUNTIME_IN_CONTAINER"
+HOST_IO_DIR_ENV = "CARACAL_HOST_IO_DIR"
+HOST_IO_ROOT_ENV = "CARACAL_HOST_IO_ROOT"
+HOST_IO_ROOT_IN_CONTAINER = "/caracal-host"
 NETWORK_IN_USE_MARKER = "Resource is still in use"
 PURGE_CONFIRMATION_TEXT = "purge"
 
@@ -89,6 +92,7 @@ services:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
             CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOST_IO_ROOT: /caracal-host
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
@@ -114,6 +118,7 @@ services:
             - caracal.mcp.service
         volumes:
             - caracal_state:/home/caracal/.caracal
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
         ports:
             - ${CARACAL_API_PORT:-8000}:8080
         healthcheck:
@@ -143,6 +148,7 @@ services:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
             CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOST_IO_ROOT: /caracal-host
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
@@ -165,6 +171,7 @@ services:
             - caracal
         volumes:
             - caracal_state:/home/caracal/.caracal
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
         stdin_open: true
         tty: true
         networks:
@@ -183,6 +190,7 @@ services:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
             CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOST_IO_ROOT: /caracal-host
             CARACAL_API_URL: http://mcp:8080
             CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
@@ -209,6 +217,7 @@ services:
             - caracal.flow.main
         volumes:
             - caracal_state:/home/caracal/.caracal
+            - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host
         stdin_open: true
         tty: true
         networks:
@@ -1179,6 +1188,12 @@ def _service_uses_local_build(compose_file: Path, service_name: str) -> bool:
 
 
 def _compose_cmd(compose_file: Path) -> list[str]:
+    if not os.environ.get(HOST_IO_DIR_ENV):
+        host_io_dir = (compose_file.parent / "caracal-host-io").resolve()
+        host_io_dir.mkdir(parents=True, exist_ok=True)
+        os.environ[HOST_IO_DIR_ENV] = str(host_io_dir)
+
+    os.environ.setdefault(HOST_IO_ROOT_ENV, HOST_IO_ROOT_IN_CONTAINER)
     return _resolve_compose_command() + ["-f", str(compose_file)]
 
 
