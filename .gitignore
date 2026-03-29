@@ -63,3 +63,6 @@ Thumbs.db
 
 # Certificates
 /certs/*
+
+# Exported Workspace
+deploy/caracal-host-io/*
