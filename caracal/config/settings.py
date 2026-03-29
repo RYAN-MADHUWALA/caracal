@@ -6,7 +6,7 @@ Configuration management for Caracal Core.
 
 Loads YAML configuration from file with sensible defaults and validation.
 Supports environment variable substitution using ${ENV_VAR} syntax.
-Supports encrypted configuration values using ENC[...] syntax.
+Supports encrypted configuration values using ENC[v2:...] syntax.
 """
 import os
 import re
@@ -63,8 +63,8 @@ def _decrypt_config_values(config_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Recursively decrypt encrypted configuration values.
     
-    Encrypted values use the format: ENC[base64_encoded_ciphertext]
-    Requires CARACAL_MASTER_PASSWORD environment variable to be set.
+    Encrypted values use the format: ENC[v2:...].
+    Decryption keys are loaded from the local keystore.
     
     Args:
         config_data: Configuration dictionary
@@ -82,7 +82,7 @@ def _decrypt_config_values(config_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from caracal.config.encryption import ConfigEncryption
         
-        # Initialize encryptor (will use CARACAL_MASTER_PASSWORD env var)
+        # Initialize encryptor using local keystore-backed key hierarchy.
         encryptor = ConfigEncryption()
         
         # Decrypt all encrypted values
@@ -101,7 +101,7 @@ def _decrypt_config_values(config_data: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Failed to decrypt configuration: {e}")
         raise InvalidConfigurationError(
             f"Failed to decrypt configuration: {e}. "
-            "Ensure CARACAL_MASTER_PASSWORD environment variable is set correctly."
+            "Ensure keystore files are present and readable."
         )
 
 
@@ -116,7 +116,7 @@ def _has_encrypted_values(value: Any) -> bool:
         True if any encrypted values found, False otherwise
     """
     if isinstance(value, str):
-        return value.startswith("ENC[") and value.endswith("]")
+        return value.startswith("ENC[v2:") and value.endswith("]")
     elif isinstance(value, dict):
         return any(_has_encrypted_values(v) for v in value.values())
     elif isinstance(value, list):

@@ -1,343 +1,360 @@
 """
-Copyright (C) 2026 Garudex Labs.  All Rights Reserved.
-Caracal, a product of Garudex Labs
+Configuration encryption utilities backed by deterministic local key hierarchy.
 
-Configuration encryption utilities for Caracal Core.
-
-Provides utilities for:
-- Encrypting sensitive configuration values
-- Decrypting encrypted configuration values
-- Managing encryption keys
-- Secure key storage
-
-All encryption uses AES-256-GCM for authenticated encryption.
+Model:
+- Master key (keystore/master_key) only wraps/unwarps DEKs
+- DEKs (keystore/encrypted_keys/*.json) encrypt/decrypt payload values
+- Encrypted payloads use strict versioned format ENC[v2:...]
 """
 
+from __future__ import annotations
+
 import base64
+import json
 import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
-from cryptography.hazmat.backends import default_backend
 
 from caracal.logging_config import get_logger
+from caracal.storage.layout import (
+    CaracalLayout,
+    append_key_audit_event,
+    ensure_layout,
+    get_caracal_layout,
+)
 
 logger = get_logger(__name__)
 
 
+_MASTER_KEY_BYTES = 32
+_SALT_BYTES = 32
+_NONCE_BYTES = 12
+_DEK_FILE_VERSION = 1
+
+
+class MasterKeyError(RuntimeError):
+    """Raised when master key access fails or violates strict behavior."""
+
+
+@dataclass
+class RotationSummary:
+    """Result from rotating local master key and re-wrapping DEKs."""
+
+    rewrapped_deks: int
+    rotated_at: str
+
+
 class ConfigEncryption:
-    """
-    Handles encryption and decryption of configuration values.
-    
-    Uses AES-256-GCM for authenticated encryption with a key derived
-    from a master password using PBKDF2.
-    
-    Example:
-        >>> from caracal.config.encryption import ConfigEncryption
-        >>> 
-        >>> # Encrypt a value
-        >>> encryptor = ConfigEncryption("master_password")
-        >>> encrypted = encryptor.encrypt("sensitive_value")
-        >>> print(encrypted)  # ENC[base64_encoded_ciphertext]
-        >>> 
-        >>> # Decrypt a value
-        >>> decrypted = encryptor.decrypt(encrypted)
-        >>> print(decrypted)  # sensitive_value
-    """
-    
-    # Prefix for encrypted values in configuration
-    ENCRYPTED_PREFIX = "ENC["
+    """Encrypt/decrypt config values using local DEK envelope encryption."""
+
+    ENCRYPTED_PREFIX = "ENC[v2:"
     ENCRYPTED_SUFFIX = "]"
-    
-    # Salt for key derivation (should be stored securely in production)
-    # In production, this should be unique per installation
-    DEFAULT_SALT = b"caracal_config_encryption_salt_v1"
-    
+    DEFAULT_DEK_NAME = "config.default"
+
     def __init__(
         self,
-        master_password: Optional[str] = None,
-        salt: Optional[bytes] = None,
+        layout: Optional[CaracalLayout] = None,
+        dek_name: str = DEFAULT_DEK_NAME,
+        actor: str = "system",
     ):
-        """
-        Initialize configuration encryption.
-        
-        Args:
-            master_password: Master password for encryption (from env var if not provided)
-            salt: Salt for key derivation (uses default if not provided)
-        """
-        # Get master password from environment if not provided
-        if master_password is None:
-            master_password = os.environ.get("CARACAL_MASTER_PASSWORD")
-            if not master_password:
-                raise ValueError(
-                    "Master password not provided. Set CARACAL_MASTER_PASSWORD "
-                    "environment variable or pass master_password parameter."
-                )
-        
-        self.master_password = master_password
-        self.salt = salt or self.DEFAULT_SALT
-        
-        # Derive encryption key from master password
-        self.key = self._derive_key(master_password, self.salt)
-        self.cipher = AESGCM(self.key)
-        
-        logger.debug("Configuration encryption initialized")
-    
-    def _derive_key(self, password: str, salt: bytes) -> bytes:
-        """
-        Derive encryption key from password using PBKDF2.
-        
-        Args:
-            password: Master password
-            salt: Salt for key derivation
-        
-        Returns:
-            32-byte encryption key
-        """
-        kdf = PBKDF2(
-            algorithm=hashes.SHA256(),
-            length=32,  # 256 bits for AES-256
-            salt=salt,
-            iterations=100000,  # OWASP recommended minimum
-            backend=default_backend()
-        )
-        return kdf.derive(password.encode())
-    
+        self.layout = layout or get_caracal_layout()
+        self.dek_name = dek_name
+        self.actor = actor
+        ensure_layout(self.layout)
+
     def encrypt(self, plaintext: str) -> str:
-        """
-        Encrypt a plaintext value.
-        
-        Args:
-            plaintext: Value to encrypt
-        
-        Returns:
-            Encrypted value in format: ENC[base64_encoded_ciphertext]
-        """
-        # Generate random nonce (12 bytes for GCM)
-        nonce = os.urandom(12)
-        
-        # Encrypt plaintext
-        ciphertext = self.cipher.encrypt(nonce, plaintext.encode(), None)
-        
-        # Combine nonce and ciphertext
-        encrypted_data = nonce + ciphertext
-        
-        # Encode as base64
-        encoded = base64.b64encode(encrypted_data).decode('ascii')
-        
-        # Return with prefix/suffix
-        return f"{self.ENCRYPTED_PREFIX}{encoded}{self.ENCRYPTED_SUFFIX}"
-    
+        """Encrypt a plaintext value under the configured DEK."""
+        master_key = self._load_or_init_master_key(allow_bootstrap=True)
+        salt = self._load_or_init_salt(allow_bootstrap=True)
+        dek = self._load_or_create_dek(master_key=master_key, salt=salt, allow_bootstrap=True)
+
+        nonce = os.urandom(_NONCE_BYTES)
+        ciphertext = AESGCM(dek).encrypt(nonce, plaintext.encode("utf-8"), None)
+        payload = {
+            "v": 2,
+            "dek": self.dek_name,
+            "n": base64.b64encode(nonce).decode("ascii"),
+            "c": base64.b64encode(ciphertext).decode("ascii"),
+        }
+        encoded_payload = base64.b64encode(
+            json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return f"{self.ENCRYPTED_PREFIX}{encoded_payload}{self.ENCRYPTED_SUFFIX}"
+
     def decrypt(self, encrypted: str) -> str:
-        """
-        Decrypt an encrypted value.
-        
-        Args:
-            encrypted: Encrypted value in format: ENC[base64_encoded_ciphertext]
-        
-        Returns:
-            Decrypted plaintext value
-        
-        Raises:
-            ValueError: If encrypted value is invalid or decryption fails
-        """
-        # Check if value is encrypted
+        """Decrypt a strict ENC[v2:...] value."""
         if not self.is_encrypted(encrypted):
             raise ValueError(
-                f"Value is not encrypted (must start with {self.ENCRYPTED_PREFIX} "
-                f"and end with {self.ENCRYPTED_SUFFIX})"
+                f"Value is not encrypted (must start with {self.ENCRYPTED_PREFIX} and end with {self.ENCRYPTED_SUFFIX})"
             )
-        
-        # Extract base64-encoded ciphertext
-        encoded = encrypted[len(self.ENCRYPTED_PREFIX):-len(self.ENCRYPTED_SUFFIX)]
-        
+
+        encoded_payload = encrypted[len(self.ENCRYPTED_PREFIX):-len(self.ENCRYPTED_SUFFIX)]
         try:
-            # Decode from base64
-            encrypted_data = base64.b64decode(encoded)
-            
-            # Extract nonce and ciphertext
-            nonce = encrypted_data[:12]
-            ciphertext = encrypted_data[12:]
-            
-            # Decrypt
-            plaintext = self.cipher.decrypt(nonce, ciphertext, None)
-            
-            return plaintext.decode('utf-8')
-            
-        except Exception as e:
-            logger.error(f"Failed to decrypt value: {e}")
-            raise ValueError(f"Failed to decrypt value: {e}") from e
-    
+            payload = json.loads(base64.b64decode(encoded_payload).decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("Encrypted payload is malformed") from exc
+
+        if payload.get("v") != 2:
+            raise ValueError("Unsupported encrypted payload version")
+
+        dek_name = str(payload.get("dek") or self.dek_name)
+        nonce_b64 = payload.get("n")
+        ciphertext_b64 = payload.get("c")
+        if not isinstance(nonce_b64, str) or not isinstance(ciphertext_b64, str):
+            raise ValueError("Encrypted payload missing nonce or ciphertext")
+
+        master_key = self._load_or_init_master_key(allow_bootstrap=False)
+        salt = self._load_or_init_salt(allow_bootstrap=False)
+        dek = self._load_or_create_dek(master_key=master_key, salt=salt, allow_bootstrap=False, dek_name=dek_name)
+
+        try:
+            nonce = base64.b64decode(nonce_b64)
+            ciphertext = base64.b64decode(ciphertext_b64)
+            plaintext = AESGCM(dek).decrypt(nonce, ciphertext, None)
+            return plaintext.decode("utf-8")
+        except Exception as exc:
+            raise ValueError("Failed to decrypt value") from exc
+
     @classmethod
     def is_encrypted(cls, value: str) -> bool:
-        """
-        Check if a value is encrypted.
-        
-        Args:
-            value: Value to check
-        
-        Returns:
-            True if value is encrypted, False otherwise
-        """
-        return (
-            isinstance(value, str) and
-            value.startswith(cls.ENCRYPTED_PREFIX) and
-            value.endswith(cls.ENCRYPTED_SUFFIX)
-        )
-    
-    def decrypt_config(self, config_dict: dict) -> dict:
-        """
-        Recursively decrypt all encrypted values in a configuration dictionary.
-        
-        Args:
-            config_dict: Configuration dictionary
-        
-        Returns:
-            Configuration dictionary with decrypted values
-        """
-        result = {}
-        
+        return isinstance(value, str) and value.startswith(cls.ENCRYPTED_PREFIX) and value.endswith(cls.ENCRYPTED_SUFFIX)
+
+    def decrypt_config(self, config_dict: dict[str, Any]) -> dict[str, Any]:
+        """Recursively decrypt encrypted values in a configuration dictionary."""
+        result: dict[str, Any] = {}
         for key, value in config_dict.items():
             if isinstance(value, str) and self.is_encrypted(value):
-                # Decrypt encrypted value
-                try:
-                    result[key] = self.decrypt(value)
-                    logger.debug(f"Decrypted configuration value: {key}")
-                except Exception as e:
-                    logger.error(f"Failed to decrypt configuration value {key}: {e}")
-                    raise
+                result[key] = self.decrypt(value)
             elif isinstance(value, dict):
-                # Recursively decrypt nested dictionaries
                 result[key] = self.decrypt_config(value)
             elif isinstance(value, list):
-                # Decrypt list items
-                result[key] = [
-                    self.decrypt(item) if isinstance(item, str) and self.is_encrypted(item)
-                    else item
-                    for item in value
-                ]
+                items = []
+                for item in value:
+                    if isinstance(item, str) and self.is_encrypted(item):
+                        items.append(self.decrypt(item))
+                    elif isinstance(item, dict):
+                        items.append(self.decrypt_config(item))
+                    else:
+                        items.append(item)
+                result[key] = items
             else:
-                # Keep non-encrypted values as-is
                 result[key] = value
-        
         return result
 
+    def _load_or_init_master_key(self, allow_bootstrap: bool) -> bytes:
+        key_path = self.layout.master_key_path
+        if key_path.exists():
+            raw = base64.b64decode(key_path.read_text(encoding="utf-8").strip())
+            if len(raw) != _MASTER_KEY_BYTES:
+                raise MasterKeyError("Master key file is invalid")
+            append_key_audit_event(
+                self.layout,
+                event_type="master_key_loaded",
+                actor=self.actor,
+                operation="read",
+                metadata={"path": str(key_path)},
+            )
+            return raw
 
-def encrypt_value(value: str, master_password: Optional[str] = None) -> str:
-    """
-    Convenience function to encrypt a single value.
-    
-    Args:
-        value: Value to encrypt
-        master_password: Master password (from env var if not provided)
-    
-    Returns:
-        Encrypted value in format: ENC[base64_encoded_ciphertext]
-    
-    Example:
-        >>> from caracal.config.encryption import encrypt_value
-        >>> 
-        >>> encrypted = encrypt_value("my_secret_password")
-        >>> print(encrypted)  # ENC[...]
-    """
-    encryptor = ConfigEncryption(master_password=master_password)
+        if self._has_any_encrypted_state():
+            append_key_audit_event(
+                self.layout,
+                event_type="master_key_missing",
+                actor=self.actor,
+                operation="read",
+                metadata={"path": str(key_path)},
+            )
+            raise MasterKeyError(
+                "Master key is missing while encrypted key state exists; refusing to regenerate automatically."
+            )
+
+        if not allow_bootstrap:
+            raise MasterKeyError("Master key is not initialized")
+
+        master_key = os.urandom(_MASTER_KEY_BYTES)
+        _atomic_write_text(key_path, base64.b64encode(master_key).decode("ascii"))
+        os.chmod(key_path, 0o600)
+        append_key_audit_event(
+            self.layout,
+            event_type="master_key_generated",
+            actor=self.actor,
+            operation="create",
+            metadata={"path": str(key_path)},
+        )
+        return master_key
+
+    def _load_or_init_salt(self, allow_bootstrap: bool) -> bytes:
+        salt_path = self.layout.salt_path
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+            if len(salt) != _SALT_BYTES:
+                raise MasterKeyError("Salt file is invalid")
+            return salt
+
+        if not allow_bootstrap:
+            raise MasterKeyError("Salt file is missing")
+
+        salt = os.urandom(_SALT_BYTES)
+        _atomic_write_bytes(salt_path, salt)
+        os.chmod(salt_path, 0o600)
+        return salt
+
+    def _dek_file_path(self, dek_name: Optional[str] = None) -> Path:
+        name = (dek_name or self.dek_name).replace("/", "_")
+        return self.layout.encrypted_keys_dir / f"{name}.json"
+
+    def _load_or_create_dek(
+        self,
+        master_key: bytes,
+        salt: bytes,
+        allow_bootstrap: bool,
+        dek_name: Optional[str] = None,
+    ) -> bytes:
+        path = self._dek_file_path(dek_name=dek_name)
+
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            wrapped_b64 = payload.get("wrapped_dek")
+            nonce_b64 = payload.get("nonce")
+            if payload.get("version") != _DEK_FILE_VERSION:
+                raise MasterKeyError(f"Unsupported DEK metadata version in {path}")
+            if not isinstance(wrapped_b64, str) or not isinstance(nonce_b64, str):
+                raise MasterKeyError(f"DEK metadata is invalid in {path}")
+            wrapped = base64.b64decode(wrapped_b64)
+            nonce = base64.b64decode(nonce_b64)
+            return AESGCM(master_key).decrypt(nonce, wrapped, self._wrap_aad(salt, path.stem))
+
+        if not allow_bootstrap:
+            raise MasterKeyError(f"DEK metadata is missing for {path.stem}")
+
+        dek = os.urandom(_MASTER_KEY_BYTES)
+        nonce = os.urandom(_NONCE_BYTES)
+        wrapped = AESGCM(master_key).encrypt(nonce, dek, self._wrap_aad(salt, path.stem))
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "version": _DEK_FILE_VERSION,
+            "name": path.stem,
+            "wrapped_dek": base64.b64encode(wrapped).decode("ascii"),
+            "nonce": base64.b64encode(nonce).decode("ascii"),
+            "created_at": now,
+            "updated_at": now,
+        }
+        _atomic_write_text(path, json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        os.chmod(path, 0o600)
+        return dek
+
+    def _wrap_aad(self, salt: bytes, dek_name: str) -> bytes:
+        return salt + b":" + dek_name.encode("utf-8")
+
+    def _has_any_encrypted_state(self) -> bool:
+        if self.layout.encrypted_keys_dir.exists():
+            return any(self.layout.encrypted_keys_dir.iterdir())
+        return False
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(content, encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_bytes(content)
+    temp_path.replace(path)
+
+
+def encrypt_value(value: str) -> str:
+    """Encrypt a value with the installation DEK."""
+    encryptor = ConfigEncryption(actor="cli")
     return encryptor.encrypt(value)
 
 
-def decrypt_value(encrypted: str, master_password: Optional[str] = None) -> str:
-    """
-    Convenience function to decrypt a single value.
-    
-    Args:
-        encrypted: Encrypted value in format: ENC[base64_encoded_ciphertext]
-        master_password: Master password (from env var if not provided)
-    
-    Returns:
-        Decrypted plaintext value
-    
-    Example:
-        >>> from caracal.config.encryption import decrypt_value
-        >>> 
-        >>> decrypted = decrypt_value("ENC[...]")
-        >>> print(decrypted)  # my_secret_password
-    """
-    encryptor = ConfigEncryption(master_password=master_password)
+def decrypt_value(encrypted: str) -> str:
+    """Decrypt a value with the installation DEK."""
+    encryptor = ConfigEncryption(actor="cli")
     return encryptor.decrypt(encrypted)
 
 
-def generate_master_password() -> str:
-    """
-    Generate a secure random master password.
-    
-    Returns:
-        Base64-encoded random password (32 bytes)
-    
-    Example:
-        >>> from caracal.config.encryption import generate_master_password
-        >>> 
-        >>> password = generate_master_password()
-        >>> print(password)  # Random base64 string
-    """
-    random_bytes = os.urandom(32)
-    return base64.b64encode(random_bytes).decode('ascii')
+def rotate_master_key(actor: str = "cli") -> RotationSummary:
+    """Rotate master key and re-wrap all persisted DEKs."""
+    layout = get_caracal_layout()
+    ensure_layout(layout)
+
+    if not layout.master_key_path.exists():
+        append_key_audit_event(
+            layout,
+            event_type="master_key_missing",
+            actor=actor,
+            operation="rotate",
+            metadata={"path": str(layout.master_key_path)},
+        )
+        raise MasterKeyError("Cannot rotate master key because it is missing")
+
+    salt = layout.salt_path.read_bytes()
+    if len(salt) != _SALT_BYTES:
+        raise MasterKeyError("Cannot rotate master key: installation salt is missing or invalid")
+
+    old_master_key = base64.b64decode(layout.master_key_path.read_text(encoding="utf-8").strip())
+    if len(old_master_key) != _MASTER_KEY_BYTES:
+        raise MasterKeyError("Cannot rotate master key: current key file is invalid")
+
+    new_master_key = os.urandom(_MASTER_KEY_BYTES)
+    now = datetime.now(timezone.utc).isoformat()
+    rewrapped = 0
+
+    for dek_file in sorted(layout.encrypted_keys_dir.glob("*.json")):
+        payload = json.loads(dek_file.read_text(encoding="utf-8"))
+        wrapped_b64 = payload.get("wrapped_dek")
+        nonce_b64 = payload.get("nonce")
+        if not isinstance(wrapped_b64, str) or not isinstance(nonce_b64, str):
+            raise MasterKeyError(f"DEK metadata is invalid in {dek_file}")
+
+        old_nonce = base64.b64decode(nonce_b64)
+        old_wrapped = base64.b64decode(wrapped_b64)
+        dek_plain = AESGCM(old_master_key).decrypt(old_nonce, old_wrapped, salt + b":" + dek_file.stem.encode("utf-8"))
+
+        new_nonce = os.urandom(_NONCE_BYTES)
+        new_wrapped = AESGCM(new_master_key).encrypt(
+            new_nonce,
+            dek_plain,
+            salt + b":" + dek_file.stem.encode("utf-8"),
+        )
+
+        payload["wrapped_dek"] = base64.b64encode(new_wrapped).decode("ascii")
+        payload["nonce"] = base64.b64encode(new_nonce).decode("ascii")
+        payload["updated_at"] = now
+        _atomic_write_text(dek_file, json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        os.chmod(dek_file, 0o600)
+        rewrapped += 1
+
+    _atomic_write_text(layout.master_key_path, base64.b64encode(new_master_key).decode("ascii"))
+    os.chmod(layout.master_key_path, 0o600)
+    append_key_audit_event(
+        layout,
+        event_type="master_key_rotated",
+        actor=actor,
+        operation="rotate",
+        metadata={"rewrapped_deks": rewrapped},
+    )
+    return RotationSummary(rewrapped_deks=rewrapped, rotated_at=now)
 
 
-def save_master_password(password: str, path: str) -> None:
-    """
-    Save master password to a file with restricted permissions.
-    
-    Args:
-        password: Master password to save
-        path: Path to save password file
-    
-    Example:
-        >>> from caracal.config.encryption import generate_master_password, save_master_password
-        >>> 
-        >>> password = generate_master_password()
-        >>> save_master_password(password, "~/.caracal/master_password")
-    """
-    password_path = Path(path).expanduser()
-    
-    # Ensure directory exists
-    password_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Write password
-    password_path.write_text(password)
-    
-    # Set restrictive permissions (read/write for owner only)
-    os.chmod(password_path, 0o600)
-    
-    logger.info(f"Master password saved to {password_path}")
-
-
-def load_master_password(path: str) -> str:
-    """
-    Load master password from a file.
-    
-    Args:
-        path: Path to password file
-    
-    Returns:
-        Master password
-    
-    Raises:
-        FileNotFoundError: If password file doesn't exist
-    
-    Example:
-        >>> from caracal.config.encryption import load_master_password
-        >>> 
-        >>> password = load_master_password("~/.caracal/master_password")
-    """
-    password_path = Path(path).expanduser()
-    
-    if not password_path.exists():
-        raise FileNotFoundError(f"Master password file not found: {password_path}")
-    
-    password = password_path.read_text().strip()
-    
-    logger.debug(f"Master password loaded from {password_path}")
-    
-    return password
+def get_key_status() -> dict[str, Any]:
+    """Return current key material status for CLI diagnostics."""
+    layout = get_caracal_layout()
+    ensure_layout(layout)
+    dek_files = sorted(layout.encrypted_keys_dir.glob("*.json"))
+    return {
+        "home": str(layout.root),
+        "master_key_present": layout.master_key_path.exists(),
+        "salt_present": layout.salt_path.exists(),
+        "dek_count": len(dek_files),
+        "key_audit_log": str(layout.key_audit_log_path),
+    }
