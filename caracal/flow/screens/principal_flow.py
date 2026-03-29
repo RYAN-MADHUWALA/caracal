@@ -16,6 +16,7 @@ Key storage:
     Optional    : AWS KMS backend via CARACAL_PRINCIPAL_KEY_BACKEND=aws_kms.
 """
 
+import os
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -39,6 +40,16 @@ from caracal.core.principal_keys import (
 )
 
 logger = get_logger(__name__)
+
+
+def _path_scope_label() -> str:
+    in_container = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return "container path" if in_container else "host path"
 
 class PrincipalFlow:
     """Principal management flow."""
@@ -206,7 +217,9 @@ class PrincipalFlow:
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal registered![/]")
                 self.console.print(f"  [{Colors.NEUTRAL}]Principal ID : [{Colors.PRIMARY}]{principal.principal_id}[/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Private key  : [{Colors.DIM}]{key_ref}[/]")
+                self.console.print(
+                    f"  [{Colors.NEUTRAL}]Private key ({_path_scope_label()}) : [{Colors.DIM}]{key_ref}[/]"
+                )
                 self.console.print()
                 
                 if self.state:
@@ -642,7 +655,7 @@ class PrincipalFlow:
                     f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Key rotation complete.[/]"
                 )
                 self.console.print(
-                    f"  [{Colors.NEUTRAL}]New private key : [{Colors.DIM}]{new_key_path}[/]"
+                    f"  [{Colors.NEUTRAL}]New private key ({_path_scope_label()}) : [{Colors.DIM}]{new_key_path}[/]"
                 )
                 
                 if self.state:

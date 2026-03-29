@@ -8,6 +8,7 @@ Provides commands for registering, listing, and retrieving principal identities.
 """
 
 import json
+import os
 import sys
 from datetime import datetime
 from typing import Optional
@@ -22,6 +23,16 @@ from caracal.exceptions import (
     CaracalError,
     DuplicatePrincipalNameError,
 )
+
+
+def _path_scope_label() -> str:
+    in_container = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    return "container path" if in_container else "host path"
 
 
 def _format_created(value) -> str:
@@ -183,7 +194,7 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
 
         click.echo(f"Email:       {principal['owner']}")
         click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
-        click.echo(f"Private key: {principal.get('private_key_ref', '')}")
+        click.echo(f"Private key ({_path_scope_label()}): {principal.get('private_key_ref', '')}")
 
         if principal.get('metadata'):
             # Filter out keys for display (don't show private keys)
