@@ -161,15 +161,14 @@ class PrincipalFlow:
         
         try:
             # Collect information
-            name = self.prompt.text(
-                "Principal name",
-                validator=lambda x: (len(x) >= 2, "Name must be at least 2 characters"),
-            )
-            
             principal_type = self.prompt.select(
                 "Principal type",
                 choices=["agent", "user", "service"],
-                default="agent",
+            )
+
+            name = self.prompt.text(
+                "Principal name",
+                validator=lambda x: (len(x) >= 2, "Name must be at least 2 characters"),
             )
             
             owner = self.prompt.text(
