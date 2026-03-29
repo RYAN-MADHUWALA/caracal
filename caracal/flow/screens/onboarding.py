@@ -29,6 +29,7 @@ from caracal.flow.screens._provider_scope_helpers import load_provider_scope_cat
 from caracal.flow.state import FlowState, StatePersistence, RecentAction
 from caracal.flow.theme import Colors, Icons
 from caracal.pathing import ensure_source_tree, source_of
+from caracal.storage.layout import resolve_caracal_home
 
 
 def _find_env_file() -> Optional[Path]:
@@ -342,21 +343,9 @@ def _step_workspace(wizard: Wizard) -> Any:
             default="my-workspace",
         )
         
-        # Generate path from name
-        default_base = Path.home() / ".caracal" / "workspaces"
+        # Always create new workspaces under canonical CARACAL_HOME/workspaces.
+        default_base = resolve_caracal_home(require_explicit=False) / "workspaces"
         workspace_path = default_base / workspace_name.lower().replace(" ", "-")
-        
-        custom_path = prompt.confirm(
-            f"Use default path ({workspace_path})?",
-            default=True,
-        )
-        
-        if not custom_path:
-            path_str = prompt.text(
-                "Enter workspace directory path",
-                default=str(workspace_path),
-            )
-            workspace_path = Path(path_str).expanduser()
         
         console.print()
         console.print(f"  [{Colors.INFO}]{Icons.INFO} Creating workspace: {workspace_name}[/]")
