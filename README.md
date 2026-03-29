@@ -102,12 +102,16 @@ Host `caracal` does not pass command arguments through to the container.
 
 `caracal cli` and `caracal flow` both mount the same Docker volume (`caracal_state`) at `/home/caracal/.caracal`.
 
+For workspace export/import files, runtime also mounts a host-shared directory at `/caracal-host`
+(`CARACAL_HOST_IO_DIR` on host).
+
 Result:
 
 - same config
 - same state
 - same data
 - seamless switch between CLI and TUI
+- workspace export/import archives are written to/read from host-local storage via `/caracal-host`
 
 ### Open-Source Isolation Model
 
