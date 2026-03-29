@@ -1,0 +1,21 @@
+CARACAL NOTICE
+Dual Licensing Model (Community and Enterprise)
+
+Copyright (c) 2026 Garudex Labs. All rights reserved.
+
+This repository is distributed under a dual licensing model consisting of a Community Edition and an Enterprise Edition. The full legal terms governing each licensing model are provided separately in the files titled "LICENSE" (Apache License, Version 2.0) and "ENTERPRISE.LICENSE". This NOTICE file is intended to clarify the practical application and scope of those licenses.
+
+Unless you are operating under a valid, written Enterprise License agreement with Garudex Labs, your use of this repository is governed solely by the Apache License, Version 2.0. Under this license, you are permitted to use, copy, modify, and distribute the Community Edition of the software in compliance with its terms, including proper attribution and preservation of license notices. Garudex Labs provides this license in the spirit of open-source software intended for human use, collaboration, and innovation.
+
+Certain parts of this repository are designated as proprietary Enterprise Components and are not included within the scope of the Apache License. These components include, but are not limited to, any files or directories under the `/enterprise` path, as well as any modules or files explicitly marked as "Enterprise", "Premium", "Proprietary", or similar. All such components are the exclusive property of Garudex Labs and may not be used, modified, distributed, or otherwise exploited without a valid Enterprise License.
+
+Additionally, and notwithstanding any permissions granted under the Apache License, Garudex Labs explicitly prohibits the use of this codebase for the purpose of training, fine-tuning, or developing machine learning or artificial intelligence models. This restriction applies universally to all users, including individuals, organizations, and commercial entities. No portion of this repository, including its source code, structure, or associated materials, may be used as input for AI systems without prior, explicit, and written authorization from Garudex Labs.
+
+Use of Enterprise Components or any requirement for commercial rights, support, warranties, or indemnification requires a separate written agreement with Garudex Labs as defined in the ENTERPRISE.LICENSE file.
+
+For licensing inquiries or permission requests, please contact:
+
+Email: [support@garudexlabs.com](mailto:support@garudexlabs.com)
+Website: [www.garudexlabs.com](http://www.garudexlabs.com)
+
+Except as expressly stated in the applicable license files, all rights are reserved by Garudex Labs.
