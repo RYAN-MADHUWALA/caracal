@@ -334,7 +334,8 @@ def _get_json(url: str, headers: Optional[dict] = None, timeout: int = 15) -> di
 def _resolve_api_url(override: Optional[str] = None) -> str:
     """Return the Enterprise API base URL.
 
-    Priority: *override* → explicit env vars → default env var → static default.
+    Priority: *override* → persisted config → explicit env vars →
+    default env var → static default.
 
     In development mode only, ``CARACAL_ENTERPRISE_DEV_URL`` can be used
     as a convenience override.
@@ -348,6 +349,12 @@ def _resolve_api_url(override: Optional[str] = None) -> str:
             "Rejected unsupported enterprise URL override '%s'. Allowed hosts: localhost, garudexlabs.com",
             override,
         )
+
+    # Prefer persisted API URL from the active workspace when available.
+    persisted_cfg = load_enterprise_config()
+    persisted_url = _normalize_enterprise_url(persisted_cfg.get("enterprise_api_url"))
+    if persisted_url:
+        return persisted_url
 
     # Primary remote URL contract.
     enterprise_url = _normalize_enterprise_url(_read_env("CARACAL_ENTERPRISE_URL"))
