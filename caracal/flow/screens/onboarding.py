@@ -1894,13 +1894,19 @@ def _show_next_steps(console: Console, results: dict, context: dict) -> None:
     if results.get("principal") is None:
         todos.append(("Register a principal", "caracal authority register --name my-principal --owner user@example.com"))
     
-    if results.get("policy") is None:
-        todos.append(("Create an authority policy", "caracal authority-policy create --principal-id <uuid> --max-validity 3600"))
-    
-    if results.get("mandate") is None:
-        todos.append(("Issue an execution mandate", "caracal authority issue --issuer-id <uuid> --subject-id <uuid>"))
-    
-    # Always suggest viewing the ledger
+    # Provider-backed authority flow: provider -> policy -> mandate -> ledger
+    todos.append((
+        "Add a provider",
+        "caracal provider add <name> --resource <id> --action <resource:action:method:path> --credential <secret>",
+    ))
+    todos.append((
+        "Create an authority policy",
+        "caracal policy create --principal-id <uuid> --max-validity-seconds 3600 --resource-pattern \"provider:<name>:resource:<id>\" --action \"provider:<name>:action:invoke\"",
+    ))
+    todos.append((
+        "Issue an execution mandate",
+        "caracal authority issue --issuer-id <uuid> --subject-id <uuid> --resource-scope \"provider:<name>:resource:<id>\" --action-scope \"provider:<name>:action:invoke\" --validity-seconds 3600",
+    ))
     todos.append(("Explore your authority ledger", "caracal authority-ledger query"))
     
     for i, (title, cmd) in enumerate(todos, 1):
