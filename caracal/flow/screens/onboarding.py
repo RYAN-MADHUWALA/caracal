@@ -1201,8 +1201,7 @@ def _try_runtime_password_fallback(
         ok, _ = _test_db_connection(probe_config)
         if ok:
             console.print(
-                f"  [{Colors.WARNING}]{Icons.WARNING} Detected container DB password drift. "
-                f"Using recovered runtime password.[/]"
+                f"  [{Colors.INFO}]{Icons.INFO} Using recovered runtime database credentials.[/]"
             )
             _persist_workspace_db_password(config_file, candidate)
             return True, candidate
@@ -1747,7 +1746,7 @@ def run_onboarding(
                         db_config.password = recovered_password
                         if isinstance(db_config_data, dict):
                             db_config_data["password"] = recovered_password
-                        console.print(f"  [{Colors.INFO}]{Icons.INFO} Retrying database connection with recovered credentials...[/]")
+                        console.print(f"  [{Colors.DIM}]Retrying database connection...[/]")
                         continue
                 
                 if is_connection_error and (not is_auth_error) and attempt < max_attempts:
