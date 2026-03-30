@@ -40,7 +40,11 @@ from caracal.core.gateway_features import (
     DEPLOYMENT_MANAGED,
     DEPLOYMENT_ON_PREM,
 )
-from caracal.enterprise.license import load_enterprise_config, save_enterprise_config
+from caracal.enterprise.license import (
+    _candidate_api_urls,
+    load_enterprise_config,
+    save_enterprise_config,
+)
 from caracal.flow.components.menu import Menu, MenuItem
 from caracal.flow.theme import Colors, Icons
 from caracal.logging_config import get_logger
@@ -609,32 +613,55 @@ class GatewayFlow:
 
     # ── API helpers ───────────────────────────────────────────────────────────
 
+    def _persist_resolved_gateway_endpoint(
+        self,
+        flags: Optional[GatewayFeatureFlags],
+        endpoint: str,
+    ) -> None:
+        """Persist resolved endpoint after loopback/container fallback."""
+        try:
+            cfg = load_enterprise_config()
+            gateway_cfg = cfg.get("gateway")
+            if not isinstance(gateway_cfg, dict):
+                gateway_cfg = {}
+                cfg["gateway"] = gateway_cfg
+            gateway_cfg["endpoint"] = endpoint
+            save_enterprise_config(cfg)
+            if flags is not None:
+                flags.gateway_endpoint = endpoint
+        except Exception as exc:
+            logger.debug("Failed to persist resolved gateway endpoint: %s", exc)
+
     def _check_gateway_health(self, endpoint: str) -> None:
+        candidates = _candidate_api_urls(endpoint)
         try:
             import httpx
-            from urllib.parse import urlparse
+            last_exc: Optional[Exception] = None
 
-            resp = httpx.get(f"{endpoint}/health", timeout=5)
-            if resp.status_code == 200:
-                self.console.print(
-                    f"[{Colors.SUCCESS}]✓ Gateway reachable: {endpoint}[/]"
-                )
-            else:
-                self.console.print(
-                    f"[{Colors.WARNING}]⚠ Gateway responded HTTP {resp.status_code}[/]"
-                )
-        except httpx.ConnectError as exc:
-            parsed = urlparse(endpoint)
-            host = (parsed.hostname or "").lower()
-            if host in {"localhost", "127.0.0.1", "::1"}:
-                self.console.print(
-                    f"[{Colors.WARNING}]⚠ Gateway configured but not running at {endpoint} ({exc}).[/]\n"
-                    f"[{Colors.DIM}]Start the gateway service (for local dev typically on port {parsed.port or 9100}) and retry.[/]"
-                )
-            else:
-                self.console.print(
-                    f"[{Colors.WARNING}]⚠ Gateway endpoint not reachable right now: {exc}[/]"
-                )
+            for candidate in candidates:
+                try:
+                    resp = httpx.get(f"{candidate}/health", timeout=5)
+                    if resp.status_code == 200:
+                        if candidate != endpoint:
+                            self._persist_resolved_gateway_endpoint(self._flags, candidate)
+                        self.console.print(
+                            f"[{Colors.SUCCESS}]✓ Gateway reachable: {candidate}[/]"
+                        )
+                        return
+
+                    if candidate != endpoint:
+                        self._persist_resolved_gateway_endpoint(self._flags, candidate)
+                    self.console.print(
+                        f"[{Colors.WARNING}]⚠ Gateway responded HTTP {resp.status_code} at {candidate}[/]"
+                    )
+                    return
+                except Exception as exc:
+                    last_exc = exc
+
+            self.console.print(
+                f"[{Colors.WARNING}]⚠ Gateway configured but not reachable via {endpoint} ({last_exc}).[/]\n"
+                f"[{Colors.DIM}]Start the gateway service (for local dev typically on port 9100) and retry.[/]"
+            )
         except Exception as exc:
             self.console.print(
                 f"[{Colors.WARNING}]⚠ Gateway health check failed: {exc}[/]"
@@ -654,14 +681,28 @@ class GatewayFlow:
             headers = {}
             if flags.gateway_api_key:
                 headers["X-Gateway-Key"] = flags.gateway_api_key
-            url = f"{flags.gateway_endpoint.rstrip('/')}{path}"
-            if method == "GET":
-                resp = httpx.get(url, headers=headers, timeout=10)
-            else:
-                resp = httpx.post(url, headers=headers, json=body, timeout=10)
-            if resp.status_code < 400:
-                return resp.json()
-            logger.warning("Gateway API error %s %s: %s", method, path, resp.status_code)
+
+            last_exc: Optional[Exception] = None
+            original_endpoint = flags.gateway_endpoint.rstrip("/")
+            for candidate_endpoint in _candidate_api_urls(original_endpoint):
+                url = f"{candidate_endpoint.rstrip('/')}{path}"
+                try:
+                    if method == "GET":
+                        resp = httpx.get(url, headers=headers, timeout=10)
+                    else:
+                        resp = httpx.post(url, headers=headers, json=body, timeout=10)
+
+                    if candidate_endpoint != original_endpoint:
+                        self._persist_resolved_gateway_endpoint(flags, candidate_endpoint)
+
+                    if resp.status_code < 400:
+                        return resp.json()
+                    logger.warning("Gateway API error %s %s: %s", method, path, resp.status_code)
+                    return None
+                except Exception as exc:
+                    last_exc = exc
+
+            logger.error("Gateway API call failed across endpoint candidates: %s", last_exc)
             return None
         except Exception as exc:
             logger.error("Gateway API call failed: %s", exc)
