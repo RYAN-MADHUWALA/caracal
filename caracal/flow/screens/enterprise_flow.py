@@ -22,7 +22,12 @@ from rich.table import Table
 from rich.text import Text
 
 from caracal.enterprise import EnterpriseLicenseValidator
-from caracal.enterprise.license import _resolve_api_url, load_enterprise_config
+from caracal.enterprise.license import (
+    _normalize_enterprise_url,
+    _read_env,
+    _resolve_api_url,
+    load_enterprise_config,
+)
 from caracal.core.gateway_features import get_gateway_features
 from caracal.flow.components.menu import Menu, MenuItem
 from caracal.flow.theme import Colors, Icons
@@ -323,8 +328,11 @@ class EnterpriseFlow:
         self.console.print(info_panel)
         self.console.print()
         
-        # URL is auto-resolved from workspace config/env/default.
-        enterprise_url = _resolve_api_url()
+        # Explicit default URL from env/.env takes precedence for this flow.
+        configured_default = _normalize_enterprise_url(
+            _read_env("CARACAL_ENTERPRISE_DEFAULT_URL")
+        )
+        enterprise_url = configured_default or _resolve_api_url()
         
         # Prompt for license token
         license_token = Prompt.ask(
