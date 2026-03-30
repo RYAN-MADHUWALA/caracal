@@ -500,27 +500,52 @@ class EnterpriseSyncClient:
             payload["license_key"] = self._license_key
 
         try:
-            url = f"{self._api_url}/api/sync/upload"
-
-            # Build the request manually so we can add the header
             data = json.dumps(payload).encode()
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Caracal-Client-Id": self._client_instance_id,
-                },
-                method="POST",
-            )
-            if self._sync_api_key:
-                req.add_header("X-Sync-Api-Key", self._sync_api_key)
+            result: Optional[Dict[str, Any]] = None
+            resolved_api_url = self._api_url
+            last_url_error: Optional[urllib.error.URLError] = None
 
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode())
+            for candidate_api_url in _candidate_api_urls(self._api_url):
+                url = f"{candidate_api_url}/api/sync/upload"
+
+                # Build the request manually so we can add the sync header.
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Caracal-Client-Id": self._client_instance_id,
+                    },
+                    method="POST",
+                )
+                if self._sync_api_key:
+                    req.add_header("X-Sync-Api-Key", self._sync_api_key)
+
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        result = json.loads(resp.read().decode())
+                    resolved_api_url = candidate_api_url
+                    break
+                except urllib.error.URLError as exc:
+                    last_url_error = exc
+
+            if result is None:
+                reason = last_url_error.reason if last_url_error else "unknown"
+                return SyncResult(
+                    success=False,
+                    message=f"Cannot reach Enterprise API at {self._api_url}: {reason}",
+                )
+
+            if resolved_api_url != self._api_url:
+                logger.info(
+                    "Enterprise sync resolved via alternate loopback URL: %s",
+                    resolved_api_url,
+                )
+                self._api_url = resolved_api_url
 
             # Update last sync in local config
             cfg = load_enterprise_config()
+            cfg["enterprise_api_url"] = resolved_api_url
             cfg["last_sync"] = {
                 "timestamp": datetime.utcnow().isoformat(),
                 "counts": result.get("synced_counts", {}),
