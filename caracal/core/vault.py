@@ -28,6 +28,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 from uuid import UUID, uuid4
 
@@ -47,6 +48,73 @@ _CACHE_MAX_ENTRIES = 512
 _CACHE_TTL_SECONDS = 300     # 5 minutes
 _RATE_LIMIT_WINDOW = 60.0    # seconds
 _RATE_LIMIT_DEFAULT = 120    # requests per window
+
+
+def _read_env_or_dotenv(name: str) -> Optional[str]:
+    """Resolve environment values from process env, then common local .env files."""
+    value = os.environ.get(name)
+    if value:
+        return value
+
+    candidates: list[Path] = [Path.cwd() / ".env"]
+
+    try:
+        from caracal.flow.workspace import get_workspace
+
+        candidates.append(get_workspace().root / ".env")
+    except Exception:
+        pass
+
+    # Typical local mono-repo layouts used during development.
+    repo_root = Path(__file__).resolve().parents[3]
+    candidates.extend(
+        [
+            repo_root / ".env",
+            repo_root / "caracalEnterprise" / ".env",
+            Path(__file__).resolve().parents[2] / ".env",
+        ]
+    )
+
+    # Allow running from nested folders by checking parent directories.
+    cwd_resolved = Path.cwd().resolve()
+    for parent in [cwd_resolved] + list(cwd_resolved.parents):
+        candidates.append(parent / ".env")
+
+    seen: set[Path] = set()
+    for env_path in candidates:
+        try:
+            resolved = env_path.resolve()
+        except Exception:
+            resolved = env_path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+
+        if not env_path.exists():
+            continue
+
+        try:
+            for line in env_path.read_text().splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+
+                key, raw_value = stripped.split("=", 1)
+                if key.strip() != name:
+                    continue
+
+                parsed = raw_value.strip()
+                if parsed and parsed[0] in ('"', "'") and parsed[-1:] == parsed[0]:
+                    parsed = parsed[1:-1]
+                elif " #" in parsed:
+                    parsed = parsed.split(" #", 1)[0].strip()
+
+                if parsed:
+                    return parsed
+        except Exception:
+            continue
+
+    return None
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -214,7 +282,7 @@ class MasterKeyProvider:
     _ENV_MEK_SECRET = "CARACAL_VAULT_MEK_SECRET"
 
     def __init__(self) -> None:
-        raw = os.environ.get(self._ENV_MEK_SECRET)
+        raw = _read_env_or_dotenv(self._ENV_MEK_SECRET)
         if not raw:
             raise MasterKeyError(
                 f"{self._ENV_MEK_SECRET} is not set.  "

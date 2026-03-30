@@ -722,8 +722,35 @@ class EnterpriseSyncClient:
 
     def test_connection(self) -> bool:
         """Quick connectivity check to the Enterprise API."""
-        try:
-            resp = _get_json(f"{self._api_url}/health")
-            return resp.get("status") == "healthy"
-        except Exception:
-            return False
+        for candidate_api_url in _candidate_api_urls(self._api_url):
+            for probe_path in ("/health", "/api/health"):
+                url = f"{candidate_api_url}{probe_path}"
+                req = urllib.request.Request(
+                    url,
+                    headers={"X-Caracal-Client-Id": self._client_instance_id},
+                    method="GET",
+                )
+                if self._sync_api_key:
+                    req.add_header("X-Sync-Api-Key", self._sync_api_key)
+
+                try:
+                    # Any HTTP response means the API is network-reachable.
+                    with urllib.request.urlopen(req, timeout=5):
+                        pass
+                    if candidate_api_url != self._api_url:
+                        self._api_url = candidate_api_url
+                        cfg = load_enterprise_config()
+                        cfg["enterprise_api_url"] = candidate_api_url
+                        save_enterprise_config(cfg)
+                    return True
+                except urllib.error.HTTPError:
+                    if candidate_api_url != self._api_url:
+                        self._api_url = candidate_api_url
+                        cfg = load_enterprise_config()
+                        cfg["enterprise_api_url"] = candidate_api_url
+                        save_enterprise_config(cfg)
+                    return True
+                except Exception:
+                    continue
+
+        return False
