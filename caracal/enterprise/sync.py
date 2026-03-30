@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 from caracal.enterprise.license import (
     _build_client_metadata,
+    _candidate_api_urls,
     _get_or_create_client_instance_id,
     _get_json,
     _post_json,
@@ -581,7 +582,6 @@ class EnterpriseSyncClient:
             return {"success": False, "message": "Enterprise sync not configured."}
 
         try:
-            url = f"{self._api_url}/api/gateway/sync-config"
             headers: Dict[str, str] = {}
             if self._sync_api_key:
                 # X-Sync-Api-Key for dedicated CLI auth; never send it as Bearer
@@ -589,7 +589,32 @@ class EnterpriseSyncClient:
                 headers["X-Sync-Api-Key"] = self._sync_api_key
             headers["X-Caracal-Client-Id"] = self._client_instance_id
 
-            result = _get_json_with_retry(url, headers=headers)
+            result: Optional[Dict[str, Any]] = None
+            resolved_api_url = self._api_url
+            last_exc: Optional[Exception] = None
+
+            for candidate_api_url in _candidate_api_urls(self._api_url):
+                url = f"{candidate_api_url}/api/gateway/sync-config"
+                try:
+                    result = _get_json_with_retry(url, headers=headers)
+                    resolved_api_url = candidate_api_url
+                    break
+                except Exception as exc:  # pragma: no cover - defensive aggregation
+                    last_exc = exc
+
+            if result is None:
+                if last_exc:
+                    raise last_exc
+                raise ConnectionError(
+                    f"Cannot reach Enterprise API at {self._api_url}/api/gateway/sync-config"
+                )
+
+            if resolved_api_url != self._api_url:
+                logger.info(
+                    "Gateway sync resolved via alternate loopback URL: %s",
+                    resolved_api_url,
+                )
+                self._api_url = resolved_api_url
 
             if not result.get("gateway_configured"):
                 return {
@@ -608,6 +633,7 @@ class EnterpriseSyncClient:
                 "fail_closed": result.get("fail_closed", True),
                 "use_provider_registry": result.get("use_provider_registry", True),
             }
+            cfg["enterprise_api_url"] = resolved_api_url
             cfg["tier"] = result.get("tier", cfg.get("tier", "starter"))
             save_enterprise_config(cfg)
 
