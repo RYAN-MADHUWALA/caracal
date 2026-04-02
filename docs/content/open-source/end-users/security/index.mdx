@@ -1,0 +1,25 @@
+---
+title: Security
+description: Placeholder for open-source security documentation.
+sidebar_label: Security
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="Planned security section for secrets handling, config encryption, runtime boundaries, fail-closed behavior, and vulnerability reporting."
+  audience="Open-source end users and security reviewers."
+  prerequisites={["Awareness that enterprise-only internals are intentionally excluded from this lane."]}
+  plannedSections={[
+    "Explicit authority and fail-closed enforcement",
+    "Keystore, wrapped keys, and encrypted configuration values",
+    "Runtime isolation and restricted shell boundaries",
+    "Security reporting path",
+  ]}
+  related={[
+    { label: "Configuration", to: "/open-source/end-users/configuration" },
+    { label: "Enterprise Connector", to: "/open-source/developers/enterprise-connector" },
+  ]}
+/>
+
+Security reports should go to <a href="mailto:support@garudexlabs.com">support@garudexlabs.com</a>.
