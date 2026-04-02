@@ -1,0 +1,23 @@
+---
+title: Open Source Developers
+description: Contributor-facing open-source docs for the Caracal codebase.
+sidebar_label: Developers
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="This lane is for contributors and integrators working inside the open-source repository. It covers the codebase map, local setup, test strategy, and release surfaces."
+  audience="Open-source contributors and maintainers."
+  prerequisites={["Local clone of the repository.", "Comfort reading Python, Docusaurus, and supporting configs."]}
+  plannedSections={[
+    "Repository map and module ownership",
+    "Local setup with uv, Docker, and the docs app",
+    "Tests, release scripts, and packaging surfaces",
+    "Strict boundary around enterprise internals with only a minimal connector page",
+  ]}
+  related={[
+    { label: "Architecture", to: "/open-source/developers/architecture" },
+    { label: "Development Setup", to: "/open-source/developers/development-setup" },
+  ]}
+/>
