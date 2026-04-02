@@ -1,0 +1,23 @@
+---
+title: Releases
+description: Placeholder for release workflow documentation.
+sidebar_label: Releases
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="Planned release section covering the VERSION file, update scripts, Docker image scripts, packaging metadata, and release sequence."
+  audience="Open-source maintainers."
+  prerequisites={["Repository write access.", "Release intent and version selected."]}
+  plannedSections={[
+    "VERSION as single source of truth",
+    "update-version.sh, build-images.sh, and release.sh",
+    "Package and image release surfaces",
+    "What belongs in the changelog",
+  ]}
+  related={[
+    { label: "Changelog", to: "/open-source/developers/changelog" },
+    { label: "Contributing", to: "/open-source/developers/contributing" },
+  ]}
+/>

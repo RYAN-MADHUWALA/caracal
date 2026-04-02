@@ -1,0 +1,23 @@
+---
+title: Development Setup
+description: Placeholder for developer setup documentation.
+sidebar_label: Development Setup
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="Planned setup section for cloning the repo, installing dependencies with uv, bringing up infrastructure, and running the runtime and docs locally."
+  audience="Open-source contributors."
+  prerequisites={["Git.", "uv.", "Docker with Compose support.", "Node 20+ for the docs app."]}
+  plannedSections={[
+    "Repo bootstrap and dependency install",
+    "Infrastructure targets and Makefile helpers",
+    "Runtime startup model for contributors",
+    "Docs application workflow",
+  ]}
+  related={[
+    { label: "Testing", to: "/open-source/developers/testing" },
+    { label: "Releases", to: "/open-source/developers/releases" },
+  ]}
+/>
