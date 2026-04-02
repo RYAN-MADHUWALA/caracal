@@ -110,7 +110,15 @@ def validate_config_files() -> Tuple[bool, List[str]]:
 
 
 def validate_test_files() -> Tuple[bool, List[str]]:
-    """Validate that test files follow naming conventions."""
+    """Validate that test files follow naming conventions.
+    
+    Requirements:
+    - All test files must start with test_
+    - All test files must use lowercase with underscores
+    - All test files must contain 1-2 words maximum (after test_)
+    """
+    import re
+    
     errors = []
     tests_dir = Path("tests")
     
@@ -127,10 +135,30 @@ def validate_test_files() -> Tuple[bool, List[str]]:
             if py_file.name == "__init__.py":
                 continue
             
+            filename = py_file.name
+            
             # Check if file starts with test_
-            if not py_file.name.startswith("test_"):
+            if not filename.startswith("test_"):
                 errors.append(
-                    f"Test file does not follow naming convention: {py_file}"
+                    f"Test file does not start with 'test_': {py_file.relative_to(tests_dir)}"
+                )
+                continue
+            
+            # Remove test_ prefix and .py suffix
+            name_part = filename[5:-3]  # Remove 'test_' and '.py'
+            
+            # Check for lowercase with underscores only
+            if not re.match(r'^[a-z_]+$', name_part):
+                errors.append(
+                    f"Test file contains uppercase or invalid characters: {py_file.relative_to(tests_dir)}"
+                )
+                continue
+            
+            # Check word count (1-2 words maximum)
+            words = [w for w in name_part.split('_') if w]
+            if len(words) > 2:
+                errors.append(
+                    f"Test file contains more than 2 words ({len(words)} words): {py_file.relative_to(tests_dir)}"
                 )
     
     return len(errors) == 0, errors
