@@ -218,7 +218,7 @@ def parse_datetime(date_str: str) -> datetime:
 @click.pass_context
 def query(
     ctx,
-    principal_id: Optional[str],
+    agent_id: Optional[str],
     start: Optional[str],
     end: Optional[str],
     resource: Optional[str],
@@ -286,7 +286,7 @@ def query(
         
         # Query events
         events = ledger_query.get_events(
-            principal_id=principal_id,
+            principal_id=agent_id,
             start_time=start_time,
             end_time=end_time,
             resource_type=resource,
@@ -388,7 +388,7 @@ def query(
 @click.pass_context
 def summary(
     ctx,
-    principal_id: Optional[str],
+    agent_id: Optional[str],
     start: Optional[str],
     end: Optional[str],
     aggregate_targetren: bool,
@@ -464,7 +464,7 @@ def summary(
         if aggregate_targetren or breakdown:
             principal_registry = get_principal_registry(cli_ctx.config)
         
-        if principal_id:
+        if agent_id:
             # Single agent summary with optional directed features
             if not start_time or not end_time:
                 click.echo(
@@ -476,7 +476,7 @@ def summary(
             # Handle directed breakdown view
             if breakdown:
                 breakdown_data = ledger_query.get_usage_breakdown(
-                    principal_id=principal_id,
+                    principal_id=agent_id,
                     start_time=start_time,
                     end_time=end_time,
                     principal_registry=principal_registry
@@ -533,21 +533,21 @@ def summary(
             # Handle aggregate targetren (sum with targetren)
             if aggregate_targetren:
                 usage_with_targetren = ledger_query.sum_usage_with_targetren(
-                    principal_id=principal_id,
+                    principal_id=agent_id,
                     start_time=start_time,
                     end_time=end_time,
                     principal_registry=principal_registry
                 )
                 
                 # Calculate totals
-                own_usage = usage_with_targetren.get(principal_id, Decimal('0'))
+                own_usage = usage_with_targetren.get(agent_id, Decimal('0'))
                 total_usage = sum(usage_with_targetren.values())
                 targetren_usage = total_usage - own_usage
                 
                 if format.lower() == 'json':
                     # JSON output
                     output = {
-                        "principal_id": principal_id,
+                        "principal_id": agent_id,
                         "start_time": start_time.isoformat() if start_time else None,
                         "end_time": end_time.isoformat() if end_time else None,
                         "own_usage": str(own_usage),
@@ -589,7 +589,7 @@ def summary(
                             key=lambda x: x[1],
                             reverse=True
                         ):
-                            marker = " (self)" if aid == principal_id else ""
+                            marker = " (self)" if aid == agent_id else ""
                             click.echo(f"{aid:<{principal_id_width}}  {usage}{marker}")
                 
                 return
@@ -597,14 +597,14 @@ def summary(
             # Standard single agent summary (no directed features)
             # Calculate total usage
             total_usage = ledger_query.sum_usage(
-                principal_id=principal_id,
+                principal_id=agent_id,
                 start_time=start_time,
                 end_time=end_time,
             )
             
             # Get events for breakdown by resource type
             events = ledger_query.get_events(
-                principal_id=principal_id,
+                principal_id=agent_id,
                 start_time=start_time,
                 end_time=end_time,
             )
@@ -624,7 +624,7 @@ def summary(
             if format.lower() == 'json':
                 # JSON output
                 output = {
-                    "principal_id": principal_id,
+                    "principal_id": agent_id,
                     "start_time": start_time.isoformat() if start_time else None,
                     "end_time": end_time.isoformat() if end_time else None,
                     "total_usage": str(total_usage),
@@ -637,7 +637,7 @@ def summary(
                 click.echo(json.dumps(output, indent=2))
             else:
                 # Table output
-                click.echo(f"Usage Summary for Agent: {principal_id}")
+                click.echo(f"Usage Summary for Agent: {agent_id}")
                 click.echo("=" * 70)
                 click.echo()
                 click.echo(f"Time Period: {start_time} to {end_time}")
