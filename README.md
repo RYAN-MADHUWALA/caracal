@@ -64,19 +64,14 @@ More coming soon
 
 ## Installation & Setup
 
-Caracal uses a two-layer command model.
-
-- Host `caracal`: orchestration only (`up`, `down`, `cli`, `flow`, `logs`, `reset`, `purge`)
-- Container `caracal`: restricted interactive Caracal CLI
-
-This keeps host usage simple and avoids command collisions.
-
 ### Quickstart
 
 ```bash
-caracal up
-caracal cli
-caracal flow
+caracal up # Setup
+
+caracal cli # Containerized CLI
+# OR
+caracal flow # Terminal UI
 ```
 
 ### Command Reference
@@ -91,46 +86,6 @@ caracal reset      # Down + remove volumes (full local reset)
 caracal purge      # Completely remove Caracal containers, data, networks, images, and local state
 ```
 
-### Host vs Container Help
-
-- `caracal --help` on host: orchestration commands only
-- `caracal cli`: opens a restricted interactive Caracal session inside the runtime container
-- inside that session, run `help` or `caracal --help` for full in-container CLI help
-
-Host `caracal` does not pass command arguments through to the container.
-
-### Shared Workspace Behavior
-
-`caracal cli` and `caracal flow` both mount the same Docker volume (`caracal_state`) at `/home/caracal/.caracal`.
-
-For workspace export/import files, runtime also mounts a host-shared directory at `/caracal-host-io`
-(`CARACAL_HOST_IO_DIR` on host).
-
-Result:
-
-- same config
-- same state
-- same data
-- seamless switch between CLI and TUI
-- workspace export/import archives are written to/read from host-local storage via `/caracal-host-io`
-
-### Open-Source Isolation Model
-
-- Caracal open-source runs as a standalone broker runtime.
-
-### Environment Modes and Logging
-
-Set `CARACAL_ENV_MODE` to `dev`, `staging`, or `prod`.
-
-- `dev`: debug enabled only when `CARACAL_DEBUG_LOGS=true`
-- `staging`: JSON logs + sensitive-field redaction
-- `prod`: JSON logs + sensitive-field redaction
-
-Optional controls:
-
-- `CARACAL_JSON_LOGS=true`
-- `LOG_LEVEL=INFO|WARNING|ERROR`
-
 ### Migration and Cleanup
 
 ```bash
@@ -139,13 +94,6 @@ caracal workspace delete <workspace-name> --force
 caracal reset
 caracal purge --force
 ```
-
-### SDK Endpoint Contract
-
-Python and Node SDKs resolve endpoint in this order:
-
-1. `CARACAL_API_URL`
-2. `http://localhost:${CARACAL_API_PORT:-8000}`
 
 -----
 
