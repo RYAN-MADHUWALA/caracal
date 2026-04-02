@@ -55,7 +55,7 @@ class TestCLIMain:
     
     def test_get_active_workspace_success(self):
         """Test getting active workspace when configured."""
-        with patch('caracal.cli.main.ConfigManager') as mock_config_mgr:
+        with patch('caracal.deployment.config_manager.ConfigManager') as mock_config_mgr:
             mock_instance = Mock()
             mock_instance.get_default_workspace_name.return_value = 'test-workspace'
             mock_config_mgr.return_value = mock_instance
@@ -66,7 +66,7 @@ class TestCLIMain:
     
     def test_get_active_workspace_no_config(self):
         """Test getting active workspace when not configured."""
-        with patch('caracal.cli.main.ConfigManager', side_effect=Exception('No config')):
+        with patch('caracal.deployment.config_manager.ConfigManager', side_effect=Exception('No config')):
             workspace = get_active_workspace()
             
             assert workspace is None
