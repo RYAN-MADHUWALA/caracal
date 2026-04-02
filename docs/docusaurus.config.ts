@@ -1,34 +1,25 @@
-import { themes as prismThemes } from 'prism-react-renderer';
-import type { Config } from '@docusaurus/types';
-import type * as Preset from '@docusaurus/preset-classic';
-
-// This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
+import { themes as prismThemes } from "prism-react-renderer";
+import type { Config } from "@docusaurus/types";
+import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: 'Caracal',
-  tagline: 'Execution authority enforcement for AI agents',
-  favicon: 'img/favicon.ico',
-
-  // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
+  title: "Caracal Docs",
+  tagline: "Authority enforcement docs for operators, integrators, and contributors",
+  favicon: "img/caracal.png",
   future: {
-    v4: true, // Improve compatibility with the upcoming Docusaurus v4
+    v4: true,
   },
-
-  // Set the production url of your site here
-  url: 'https://docs.garudexlabs.com',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
-
-  // GitHub pages deployment config.
-  // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'Garudex-Labs', // Usually your GitHub org/user name.
-  projectName: 'Caracal', // Usually your repo name.
-
-  onBrokenLinks: 'warn',
+  url: "https://docs.garudexlabs.com",
+  baseUrl: "/",
+  organizationName: "Garudex-Labs",
+  projectName: "Caracal",
+  onBrokenLinks: "throw",
   markdown: {
-    format: 'mdx',
+    format: "mdx",
     mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: "throw",
+    },
     mdx1Compat: {
       comments: true,
       admonitions: true,
@@ -38,118 +29,225 @@ const config: Config = {
       maintainCase: true,
     },
   },
-
-  // Even if you don't use internationalization, you can use this field to set
-  // useful metadata like html lang. For example, if your site is Chinese, you
-  // may want to replace "en" with "zh-Hans".
   i18n: {
-    defaultLocale: 'en',
-    locales: ['en'],
+    defaultLocale: "en",
+    locales: ["en"],
   },
-
   presets: [
     [
-      'classic',
+      "classic",
       {
         docs: {
-          sidebarPath: './sidebars.ts',
-          routeBasePath: '/', // Serve the docs at the site's root
-          editUrl:
-            'https://github.com/Garudex-Labs/Caracal/tree/main/docs/',
+          path: "content",
+          routeBasePath: "/",
+          sidebarPath: "./sidebars.ts",
+          editUrl: "https://github.com/Garudex-Labs/caracal/tree/main/docs/",
+          showLastUpdateAuthor: false,
+          showLastUpdateTime: false,
         },
-        blog: false, // Disable the blog
+        blog: false,
+        pages: false,
         theme: {
-          customCss: './src/css/custom.css',
+          customCss: "./src/css/custom.css",
         },
       } satisfies Preset.Options,
     ],
   ],
-
   themes: [
     [
-      '@easyops-cn/docusaurus-search-local',
+      "@easyops-cn/docusaurus-search-local",
       {
         hashed: true,
-        docsRouteBasePath: '/',
+        docsRouteBasePath: "/",
+        indexDocs: true,
         indexBlog: false,
         highlightSearchTermsOnTargetPage: true,
+        explicitSearchResultPath: true,
+        searchBarShortcut: true,
+        searchBarShortcutHint: true,
       },
     ],
   ],
-
   themeConfig: {
-    // Replace with your project's social card
-    image: 'img/caracal_social_card.png',
+    image: "img/caracal.png",
+    announcementBar: {
+      id: "maintenance-v1",
+      content:
+        "<strong>Documentation is currently under maintenance and is being prepared for the v1.0.0 release soon.</strong>",
+      backgroundColor: "#9BD34D",
+      textColor: "#000000",
+      isCloseable: false,
+    },
     colorMode: {
-      defaultMode: 'dark',
-      disableSwitch: false,
-      respectPrefersColorScheme: true,
+      defaultMode: "dark",
+      disableSwitch: true,
+      respectPrefersColorScheme: false,
+    },
+    docs: {
+      sidebar: {
+        autoCollapseCategories: false,
+        hideable: true,
+      },
     },
     navbar: {
-      title: 'Caracal',
+      title: "Caracal Docs",
+      hideOnScroll: false,
       logo: {
-        alt: 'Caracal Logo',
-        src: 'img/caracal.png',
-        srcDark: 'img/caracal_inverted.png',
+        alt: "Caracal Logo",
+        src: "img/caracal.png",
+        srcDark: "img/caracal_inverted.png",
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'caracalSidebar',
-          position: 'left',
-          label: 'Documentation',
+          label: "Open Source",
+          activeBaseRegex: "^/open-source(?:/|$)",
+          items: [
+            { label: "Overview", to: "/open-source/overview" },
+            { label: "End Users", to: "/open-source/end-users" },
+            { label: "Developers", to: "/open-source/developers" },
+            { label: "CLI", to: "/open-source/end-users/cli" },
+            { label: "TUI", to: "/open-source/end-users/tui" },
+            { label: "Configuration", to: "/open-source/end-users/configuration" },
+            { label: "Commands", to: "/open-source/end-users/commands" },
+            { label: "Workflows", to: "/open-source/end-users/workflows" },
+            { label: "Architecture", to: "/open-source/developers/architecture" },
+          ],
+          position: "left",
         },
         {
-          href: 'https://github.com/Garudex-Labs/Caracal',
-          label: 'GitHub',
-          position: 'right',
+          label: "Enterprise",
+          activeBaseRegex: "^/enterprise(?:/|$)",
+          items: [
+            { label: "Overview", to: "/enterprise/overview" },
+            { label: "Getting Started", to: "/enterprise/getting-started" },
+            { label: "Configuration", to: "/enterprise/configuration" },
+            { label: "Administration", to: "/enterprise/administration" },
+            { label: "Access / Auth", to: "/enterprise/access-auth" },
+            { label: "Deployment", to: "/enterprise/deployment" },
+            { label: "Monitoring", to: "/enterprise/monitoring" },
+            { label: "Troubleshooting", to: "/enterprise/troubleshooting" },
+            { label: "Reference", to: "/enterprise/reference" },
+          ],
+          position: "left",
+        },
+        {
+          label: "Build",
+          activeBaseRegex: "^/build$",
+          items: [
+            { label: "Build Hub", to: "/build" },
+            { label: "Architecture", to: "/open-source/developers/architecture" },
+            { label: "Contributing", to: "/open-source/developers/contributing" },
+            { label: "Development Setup", to: "/open-source/developers/development-setup" },
+            { label: "Testing", to: "/open-source/developers/testing" },
+            { label: "Releases", to: "/open-source/developers/releases" },
+            { label: "Changelog", to: "/open-source/developers/changelog" },
+          ],
+          position: "left",
+        },
+        {
+          label: "Manage",
+          activeBaseRegex: "^/manage$",
+          items: [
+            { label: "Manage Hub", to: "/manage" },
+            { label: "Installation", to: "/open-source/end-users/getting-started/installation" },
+            { label: "Quickstart", to: "/open-source/end-users/getting-started/quickstart" },
+            { label: "CLI", to: "/open-source/end-users/cli" },
+            { label: "TUI", to: "/open-source/end-users/tui" },
+            { label: "Configuration", to: "/open-source/end-users/configuration" },
+            { label: "Workflows", to: "/open-source/end-users/workflows" },
+            { label: "Administration", to: "/enterprise/administration" },
+          ],
+          position: "left",
+        },
+        {
+          label: "Reference",
+          activeBaseRegex: "^/reference$",
+          items: [
+            { label: "Reference Hub", to: "/reference" },
+            { label: "Commands", to: "/open-source/end-users/commands" },
+            { label: "Concepts", to: "/open-source/end-users/concepts" },
+            { label: "Architecture", to: "/open-source/developers/architecture" },
+            { label: "Enterprise Reference", to: "/enterprise/reference" },
+          ],
+          position: "left",
+        },
+        {
+          label: "Resources",
+          activeBaseRegex: "^/resources(?:/|$)",
+          items: [
+            { label: "Resources Hub", to: "/resources" },
+            { label: "Rulebook", to: "/resources/documentation-system/rulebook" },
+            { label: "Security", to: "/open-source/end-users/security" },
+            { label: "Troubleshooting", to: "/open-source/end-users/troubleshooting" },
+            { label: "Contributing", to: "/open-source/developers/contributing" },
+          ],
+          position: "left",
+        },
+        {
+          type: "search",
+          position: "right",
+        },
+        {
+          type: "html",
+          position: "right",
+          value:
+            '<a class="caracal-github-link" href="https://github.com/Garudex-Labs/caracal" target="_blank" rel="noreferrer" aria-label="Caracal on GitHub"><svg class="caracal-github-link__icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-1.96c-3.2.7-3.88-1.36-3.88-1.36-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.7 1.25 3.35.96.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a10.9 10.9 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.24 2.76.12 3.05.73.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.4-5.26 5.68.41.35.78 1.05.78 2.12v3.14c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg><img class="caracal-github-link__badge" alt="GitHub star count" src="https://img.shields.io/github/stars/Garudex-Labs/caracal?style=flat-square&amp;label=&amp;color=9bd34d&amp;labelColor=11161c" /></a>',
         },
       ],
     },
     footer: {
-      style: 'dark',
+      style: "dark",
       links: [
         {
-          title: 'Docs',
+          title: "Start",
           items: [
             {
-              label: 'Introduction',
-              to: '/',
+              label: "Landing Page",
+              to: "/",
             },
             {
-              label: 'Quickstart',
-              to: '/caracalCore/gettingStarted/quickstart',
+              label: "Open Source Overview",
+              to: "/open-source/overview",
             },
           ],
         },
         {
-          title: 'Community',
+          title: "Support",
           items: [
             {
-              label: 'GitHub Issues',
-              href: 'https://github.com/Garudex-Labs/Caracal/issues',
+              label: "support@garudexlabs.com",
+              href: "mailto:support@garudexlabs.com",
             },
             {
-              label: 'Discord',
-              href: 'https://discord.gg/d32UBmsK7A',
+              label: "Enterprise Sales",
+              href: "https://cal.com/rawx18/caracal-enterprise-sales",
+            },
+            {
+              label: "Open Source Calls",
+              href: "https://cal.com/rawx18/open-source",
             },
           ],
         },
         {
-          title: 'More',
+          title: "Reference",
           items: [
             {
-              label: 'GitHub',
-              href: 'https://github.com/Garudex-Labs/Caracal',
+              label: "Rulebook",
+              to: "/resources/documentation-system/rulebook",
+            },
+            {
+              label: "Security",
+              to: "/open-source/end-users/security",
             },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Garudex Labs. All rights reserved.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Garudex Labs.`,
     },
     prism: {
       theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      darkTheme: prismThemes.vsDark,
+      additionalLanguages: ["bash", "json", "yaml", "toml", "typescript"],
     },
   } satisfies Preset.ThemeConfig,
 };
