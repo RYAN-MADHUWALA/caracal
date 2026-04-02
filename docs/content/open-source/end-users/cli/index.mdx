@@ -1,0 +1,23 @@
+---
+title: CLI
+description: Placeholder for CLI documentation.
+sidebar_label: CLI
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="Planned CLI section covering the two-layer command model: host orchestration outside the container and the restricted interactive Caracal CLI inside it."
+  audience="Open-source end users."
+  prerequisites={["Runtime installed.", "Familiarity with the difference between host and container contexts."]}
+  plannedSections={[
+    "Host commands: up, down, cli, flow, logs, reset, purge",
+    "Restricted shell behavior inside the runtime container",
+    "Workspace-aware command groups",
+    "Where `caracal --help` changes meaning",
+  ]}
+  related={[
+    { label: "Commands", to: "/open-source/end-users/commands" },
+    { label: "Concepts", to: "/open-source/end-users/concepts" },
+  ]}
+/>
