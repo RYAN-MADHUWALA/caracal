@@ -1,25 +1,57 @@
 """Database test fixtures."""
 import pytest
-from typing import Generator, Any
-from sqlalchemy import create_engine
+import os
+from typing import Generator
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
+from caracal.db.models import Base
 
 
 @pytest.fixture
-def in_memory_db_engine():
-    """Provide an in-memory SQLite database engine for testing."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    return engine
+def test_db_url() -> str:
+    """Provide test database URL from environment or default to in-memory SQLite."""
+    # Check for test database URL in environment
+    test_url = os.environ.get("CARACAL_TEST_DB_URL")
+    if test_url:
+        return test_url
+    # Default to in-memory SQLite for unit tests
+    return "sqlite:///:memory:"
+
+
+@pytest.fixture
+def in_memory_db_engine(test_db_url):
+    """Provide an in-memory database engine for testing."""
+    # For SQLite, use special configuration
+    if test_db_url.startswith("sqlite"):
+        engine = create_engine(
+            test_db_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        # Enable foreign keys for SQLite
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    else:
+        # For PostgreSQL test database
+        engine = create_engine(test_db_url)
+    
+    # Create all tables
+    Base.metadata.create_all(engine)
+    
+    yield engine
+    
+    # Cleanup: drop all tables
+    Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 @pytest.fixture
 def db_session(in_memory_db_engine) -> Generator[Session, None, None]:
-    """Provide a database session for testing."""
+    """Provide a database session for testing with automatic rollback."""
     SessionLocal = sessionmaker(
         autocommit=False,
         autoflush=False,
@@ -46,8 +78,11 @@ def db_connection(in_memory_db_engine):
 
 @pytest.fixture
 def test_database_url() -> str:
-    """Provide a test database URL."""
-    return "postgresql://test:test@localhost:5432/caracal_test"
+    """Provide a test database URL for PostgreSQL integration tests."""
+    return os.environ.get(
+        "CARACAL_TEST_DB_URL",
+        "postgresql://test:test@localhost:5432/caracal_test"
+    )
 
 
 @pytest.fixture
@@ -60,3 +95,20 @@ def migration_versions() -> list[str]:
         "004_add_audit_log",
         "005_add_merkle_tree",
     ]
+
+
+@pytest.fixture
+def clean_database(db_session):
+    """Ensure database is clean before and after test."""
+    # Clean before test
+    for table in reversed(Base.metadata.sorted_tables):
+        db_session.execute(table.delete())
+    db_session.commit()
+    
+    yield db_session
+    
+    # Clean after test
+    for table in reversed(Base.metadata.sorted_tables):
+        db_session.execute(table.delete())
+    db_session.commit()
+
