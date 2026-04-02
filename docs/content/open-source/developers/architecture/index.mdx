@@ -1,0 +1,23 @@
+---
+title: Architecture
+description: Placeholder for developer architecture documentation.
+sidebar_label: Architecture
+---
+
+import DocPlaceholder from "@site/src/components/DocPlaceholder";
+
+<DocPlaceholder
+  summary="Planned architecture section derived from the codebase: runtime entrypoints, CLI/TUI layers, core authority engine, services, SDKs, storage, and deployment modules."
+  audience="Open-source contributors."
+  prerequisites={["Repository checkout.", "Read access to the Python package and tests."]}
+  plannedSections={[
+    "Host orchestrator versus in-container CLI entrypoints",
+    "CLI and Flow app boundaries",
+    "Core, DB, Merkle, MCP, monitoring, and deployment modules",
+    "SDK, provider catalog, and enterprise boundary map",
+  ]}
+  related={[
+    { label: "Contributing", to: "/open-source/developers/contributing" },
+    { label: "Enterprise Connector", to: "/open-source/developers/enterprise-connector" },
+  ]}
+/>
