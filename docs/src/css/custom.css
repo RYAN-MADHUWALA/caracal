@@ -1034,3 +1034,43 @@ button {
     padding: 16px;
   }
 }
+
+/* Right-rail layout helpers */
+.caracal-doc-layout-flex {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.caracal-doc-layout-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.caracal-doc-rail-sticky {
+  position: sticky;
+  top: calc(var(--ifm-navbar-height) + 16px);
+  align-self: flex-start;
+  max-height: calc(100vh - var(--ifm-navbar-height) - 32px);
+  overflow: auto;
+}
+
+@media (min-width: 997px) {
+  .caracal-docitem-layout-single-rail > .row > .col.col--3 {
+    display: none;
+  }
+
+  .caracal-docitem-layout-single-rail > .row > .col {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 996px) {
+  .caracal-doc-layout-flex {
+    display: block;
+  }
+  .caracal-doc-rail-col,
+  .caracal-doc-rail-sticky {
+    display: none !important;
+  }
+}
