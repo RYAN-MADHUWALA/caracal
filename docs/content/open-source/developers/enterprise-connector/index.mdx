@@ -1,23 +1,54 @@
 ---
 title: Enterprise Connector
-description: Minimal OSS developer-facing boundary for enterprise connectivity.
+description: Public open-source boundary to enterprise-related runtime behavior.
 sidebar_label: Enterprise Connector
 ---
 
-import DocPlaceholder from "@site/src/components/DocPlaceholder";
+This page documents the public connector boundary only. It does not document enterprise internals.
 
-<DocPlaceholder
-  summary="This is the only enterprise-adjacent page in the open-source developer lane. It will stay minimal and focus on public connector surfaces only."
-  audience="Open-source contributors who need to understand the connector boundary."
-  prerequisites={["Comfort with the open-source deployment and configuration model."]}
-  plannedSections={[
-    "Auto-detected enterprise mode indicators",
-    "Remote URL and gateway connector surfaces",
-    "What is intentionally out of scope for OSS docs",
-    "How SDK and sync clients cross the boundary",
-  ]}
-  related={[
-    { label: "Enterprise Overview", to: "/enterprise/overview" },
-    { label: "Architecture", to: "/open-source/developers/architecture" },
-  ]}
-/>
+**Audience:** Developer
+
+**Context:** Read this page when open-source code paths intersect with public enterprise URLs, mode or edition switches, sync surfaces, or provider restrictions.
+
+## Core Explanation
+
+The open-source repository contains public enterprise-adjacent surfaces because the runtime can:
+
+- store enterprise-related URLs and connector settings
+- switch edition or mode through public commands
+- expose sync command groups
+- enforce different provider behavior when enterprise gateway management is active
+- include enterprise placeholder modules and stubs
+
+Those surfaces are public because they affect the open-source runtime's behavior. The internals behind the remote service are not public and are not documented here.
+
+## Public Boundary Points
+
+- `CARACAL_ENTERPRISE_URL`
+- `CARACAL_ENTERPRISE_DEFAULT_URL`
+- gateway-related env vars such as `CARACAL_GATEWAY_URL` and `CARACAL_GATEWAY_ENABLED`
+- edition and mode commands in `caracal/cli/deployment_cli.py`
+- sync-related models and command groups
+- provider add restrictions that reject local provider registration when enterprise gateway mode is active
+
+## Internal Behavior
+
+Several modules in `caracal/deployment` and `caracal/cli/deployment_cli.py` intentionally make enterprise state visible to the open-source runtime:
+
+- edition selection
+- workspace sync metadata
+- remote URL storage
+- migration helpers
+- connector-safe operational messaging
+
+The repository also includes `caracal/enterprise`, but it remains a public stub boundary here.
+
+## Edge Cases And Constraints
+
+- Public connector code may influence CLI behavior in open-source mode, especially around providers and sync.
+- This page must stay boundary-focused. It must not grow into a description of enterprise architecture, implementation, or private operational details.
+
+## Related Concepts
+
+- [Services and Integrations](/open-source/developers/services-and-integrations)
+- [Enterprise Overview](/enterprise/overview)
