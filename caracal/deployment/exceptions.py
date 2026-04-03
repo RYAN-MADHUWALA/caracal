@@ -191,6 +191,11 @@ class ProviderAuthenticationError(ProviderError):
     pass
 
 
+class ProviderAuthorizationError(ProviderError):
+    """Raised when provider authorization is denied."""
+    pass
+
+
 class ProviderRateLimitError(ProviderError):
     """Raised when provider rate limit is exceeded."""
     pass
@@ -219,6 +224,11 @@ class GatewayConnectionError(GatewayError):
 
 class GatewayAuthenticationError(GatewayError):
     """Raised when gateway authentication fails."""
+    pass
+
+
+class GatewayAuthorizationError(GatewayError):
+    """Raised when gateway denies a request after authentication."""
     pass
 
 
