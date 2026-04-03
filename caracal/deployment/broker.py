@@ -318,16 +318,6 @@ class ProviderHealthCheck:
     error: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.now)
 
-    @property
-    def is_healthy(self) -> bool:
-        """Compatibility alias used by CLI code paths."""
-        return self.healthy
-
-    @property
-    def error_message(self) -> Optional[str]:
-        """Compatibility alias used by CLI code paths."""
-        return self.error
-
 
 @dataclass
 class ProviderMetrics:

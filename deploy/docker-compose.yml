@@ -65,11 +65,12 @@ services:
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
-      CARACAL_HOME: /home/caracal/.caracal
+      CARACAL_HOME: /home/caracal/runtime
       CARACAL_HOST_IO_ROOT: /caracal-host-io
       CARACAL_API_URL: http://mcp:8080
-      CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+      CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
       CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
+      CARACAL_PRINCIPAL_KEY_BACKEND: aws_kms
       CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
       CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
       CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -89,7 +90,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     command: ["python", "-m", "caracal.mcp.service"]
     volumes:
-      - caracal_state:/home/caracal/.caracal
       - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
     ports:
       - "${CARACAL_API_PORT:-8000}:8080"
@@ -117,10 +117,11 @@ services:
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
-      CARACAL_HOME: /home/caracal/.caracal
+      CARACAL_HOME: /home/caracal/runtime
       CARACAL_HOST_IO_ROOT: /caracal-host-io
       CARACAL_API_URL: http://mcp:8080
-      CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+      CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+      CARACAL_PRINCIPAL_KEY_BACKEND: aws_kms
       CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
       CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
       CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -140,7 +141,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     command: ["caracal"]
     volumes:
-      - caracal_state:/home/caracal/.caracal
       - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
     stdin_open: true
     tty: true
@@ -161,10 +161,11 @@ services:
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
-      CARACAL_HOME: /home/caracal/.caracal
+      CARACAL_HOME: /home/caracal/runtime
       CARACAL_HOST_IO_ROOT: /caracal-host-io
       CARACAL_API_URL: http://mcp:8080
-      CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+      CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+      CARACAL_PRINCIPAL_KEY_BACKEND: aws_kms
       CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
       CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
       CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -186,7 +187,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     command: ["python", "-m", "caracal.flow.main"]
     volumes:
-      - caracal_state:/home/caracal/.caracal
       - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
     stdin_open: true
     tty: true
@@ -196,7 +196,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  caracal_state:
 
 networks:
   caracal-runtime:
