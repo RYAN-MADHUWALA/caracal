@@ -67,7 +67,10 @@ def test_runtime_preflight_blocks_compatibility_alias_flags() -> None:
             compose_file=None,
             database_urls={"DATABASE_URL": "postgresql://ok"},
             check_jsonb=False,
-            env_vars={"CARACAL_ENABLE_COMPAT_ALIASES": "true"},
+            env_vars={
+                "CARACAL_ENABLE_COMPAT_ALIASES": "true",
+                "CARACAL_PRINCIPAL_KEY_BACKEND": "aws_kms",
+            },
         )
 
 
@@ -86,6 +89,28 @@ def test_runtime_preflight_blocks_legacy_state_artifacts(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
+def test_runtime_preflight_blocks_local_secret_backend() -> None:
+    with pytest.raises(HardCutPreflightError, match="CARACAL_PRINCIPAL_KEY_BACKEND"):
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars={"CARACAL_PRINCIPAL_KEY_BACKEND": "local"},
+        )
+
+
+@pytest.mark.unit
+def test_runtime_preflight_requires_explicit_secret_backend() -> None:
+    with pytest.raises(HardCutPreflightError, match="CARACAL_PRINCIPAL_KEY_BACKEND"):
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars={},
+        )
+
+
+@pytest.mark.unit
 def test_migration_preflight_blocks_sqlite_and_compat_markers_in_config(tmp_path: Path) -> None:
     alembic_ini = tmp_path / "alembic.ini"
     alembic_ini.write_text("sqlalchemy.url = sqlite:///tmp/caracal.db\n", encoding="utf-8")
@@ -95,6 +120,35 @@ def test_migration_preflight_blocks_sqlite_and_compat_markers_in_config(tmp_path
             database_urls={"DATABASE_URL": "postgresql://ok"},
             check_jsonb=False,
             config_paths=[alembic_ini],
+        )
+
+
+@pytest.mark.unit
+def test_runtime_preflight_blocks_gateway_enabled_without_endpoint() -> None:
+    with pytest.raises(HardCutPreflightError, match="gateway endpoint"):
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars={
+                "CARACAL_PRINCIPAL_KEY_BACKEND": "aws_kms",
+                "CARACAL_GATEWAY_ENABLED": "true",
+            },
+        )
+
+
+@pytest.mark.unit
+def test_runtime_preflight_blocks_conflicting_gateway_enabled_and_endpoint() -> None:
+    with pytest.raises(HardCutPreflightError, match="Execution exclusivity violation"):
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars={
+                "CARACAL_PRINCIPAL_KEY_BACKEND": "aws_kms",
+                "CARACAL_GATEWAY_ENABLED": "false",
+                "CARACAL_ENTERPRISE_URL": "https://gateway.example",
+            },
         )
 
 
