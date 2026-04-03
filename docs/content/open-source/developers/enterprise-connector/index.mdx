@@ -1,6 +1,6 @@
 ---
 title: Enterprise Connector
-description: Public open-source boundary to enterprise-related runtime behavior.
+description: Developer-facing guide to the public connector boundary between open-source Caracal and Enterprise.
 sidebar_label: Enterprise Connector
 ---
 
@@ -8,47 +8,79 @@ This page documents the public connector boundary only. It does not document ent
 
 **Audience:** Developer
 
-**Context:** Read this page when open-source code paths intersect with public enterprise URLs, mode or edition switches, sync surfaces, or provider restrictions.
+**Context:** Read this page when open-source usage needs to connect a runtime or workspace to an enterprise-managed environment.
 
-## Core Explanation
+## What The Connector Is
 
-The open-source repository contains public enterprise-adjacent surfaces because the runtime can:
+The enterprise connector is the public integration boundary between:
 
-- store enterprise-related URLs and connector settings
-- switch edition or mode through public commands
-- expose sync command groups
-- enforce different provider behavior when enterprise gateway management is active
-- include enterprise placeholder modules and stubs
+- the open-source Caracal runtime and its public developer surfaces
+- the enterprise-managed environment that provides shared administration and connected operations
 
-Those surfaces are public because they affect the open-source runtime's behavior. The internals behind the remote service are not public and are not documented here.
+From a developer perspective, the connector exists so an otherwise open-source runtime can:
 
-## Public Boundary Points
+- connect to an enterprise environment through approved public inputs
+- move between open-source-only and enterprise-connected operation
+- expose connection, sync, and status workflows through public commands
+- adjust certain runtime behaviors when enterprise-managed operation is active
+
+## System Boundary
+
+Treat the systems as having different responsibilities:
+
+- the open-source runtime owns local execution, enforcement, and the public CLI, TUI, and SDK integration points
+- Enterprise owns organization-level administration, shared operational workflows, and enterprise-managed connected behavior
+
+The connector is the handshake layer between those responsibilities. It should be documented in terms of behavior, public configuration, and usage, not private implementation.
+
+## High-Level Data Flow
+
+At a high level, the connector flow looks like this:
+
+1. A developer or operator provides approved enterprise connection details.
+2. The runtime records the connection state for the selected workspace or environment.
+3. Enterprise-connected behavior becomes available through the public runtime surface.
+4. The runtime can report connection status, perform synchronization, or disconnect when requested.
+5. If the workspace is disconnected, it returns toward open-source-only behavior.
+
+## Public Configuration And Usage
+
+The connector is intentionally operated through public configuration and commands.
+
+### Public configuration inputs
+
+Depending on your workflow, the connector may use public environment or runtime settings such as:
 
 - `CARACAL_ENTERPRISE_URL`
-- `CARACAL_ENTERPRISE_DEFAULT_URL`
-- gateway-related env vars such as `CARACAL_GATEWAY_URL` and `CARACAL_GATEWAY_ENABLED`
-- edition and mode commands in `caracal/cli/deployment_cli.py`
-- sync-related models and command groups
-- provider add restrictions that reject local provider registration when enterprise gateway mode is active
+- `CARACAL_GATEWAY_ENABLED`
 
-## Internal Behavior
+Use only organization-approved values for those inputs.
 
-Several modules in `caracal/deployment` and `caracal/cli/deployment_cli.py` intentionally make enterprise state visible to the open-source runtime:
+### Public command path
 
-- edition selection
-- workspace sync metadata
-- remote URL storage
-- migration helpers
-- connector-safe operational messaging
+The standard public connector workflow is:
 
-The repository also includes `caracal/enterprise`, but it remains a public stub boundary here.
+- `caracal sync connect <url> <token>`
+- `caracal sync status`
+- `caracal sync now`
+- `caracal sync disconnect`
 
-## Edge Cases And Constraints
+These commands are the supported developer and operator entry points for enterprise connectivity from the open-source side.
 
-- Public connector code may influence CLI behavior in open-source mode, especially around providers and sync.
-- This page must stay boundary-focused. It must not grow into a description of enterprise architecture, implementation, or private operational details.
+## Developer Guidance
+
+- Build against the connector as a boundary, not as a mirror of enterprise internals.
+- Assume Enterprise may evolve behind that public boundary without exposing its private implementation.
+- Treat enterprise-specific SDK surfaces as separate product surfaces from the core open-source runtime.
+- Keep documentation focused on what the runtime accepts, reports, and changes publicly.
+
+## Constraints
+
+- The connector is intentionally high level in documentation.
+- Enterprise internals are out of scope here.
+- Public connector behavior may affect runtime workflows such as sync status, connected mode, and certain managed-provider expectations.
 
 ## Related Concepts
 
-- [Services and Integrations](/open-source/developers/services-and-integrations)
 - [Enterprise Overview](/enterprise/overview)
+- [Services and Integrations](/open-source/developers/services-and-integrations)
