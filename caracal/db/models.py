@@ -33,7 +33,7 @@ from sqlalchemy import (
     String,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID as PG_UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -41,8 +41,8 @@ Base = declarative_base()
 
 
 def get_json_type():
-    """Return JSONB for PostgreSQL."""
-    return JSONB
+    """Return JSON for PostgreSQL."""
+    return JSON
 
 
 class PrincipalKind(str, Enum):
@@ -107,7 +107,7 @@ class LedgerEvent(Base):
     quantity = Column(Numeric(precision=20, scale=6), nullable=False)
     
     # Metadata
-    event_metadata = Column("metadata", JSONB, nullable=True)
+    event_metadata = Column("metadata", JSON, nullable=True)
     
     # Merkle tree integration 
     merkle_root_id = Column(
@@ -160,7 +160,7 @@ class AuditLog(Base):
     # Event data
     principal_id = Column(PG_UUID(as_uuid=True), nullable=True, index=True)
     correlation_id = Column(String(255), nullable=True, index=True)
-    event_data = Column(JSONB, nullable=False)
+    event_data = Column(JSON, nullable=False)
     
     # Composite indexes for common queries
     __table_args__ = (
@@ -246,7 +246,7 @@ class LedgerSnapshot(Base):
     merkle_root = Column(String(64), nullable=False)  # Hex-encoded SHA-256 hash
     
     # Snapshot data (aggregated usage per agent)
-    snapshot_data = Column(JSONB, nullable=False)
+    snapshot_data = Column(JSON, nullable=False)
     
     # Creation timestamp
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
@@ -308,7 +308,7 @@ class Principal(Base):
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    principal_metadata = Column("metadata", JSONB, nullable=True)
+    principal_metadata = Column("metadata", JSON, nullable=True)
 
     source_principal = relationship(
         "Principal",
@@ -492,7 +492,7 @@ class ExecutionMandate(Base):
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    mandate_metadata = Column("metadata", JSONB, nullable=True)
+    mandate_metadata = Column("metadata", JSON, nullable=True)
     
     # Revocation
     revoked = Column(Boolean, nullable=False, default=False, index=True)
@@ -677,7 +677,7 @@ class DelegationEdgeModel(Base):
     revoked_at = Column(DateTime, nullable=True)
     
     # Metadata
-    edge_metadata = Column("metadata", JSONB, nullable=True)
+    edge_metadata = Column("metadata", JSON, nullable=True)
     
     # Relationships
     source_mandate = relationship(
@@ -920,8 +920,8 @@ class AuthorityPolicy(Base):
     max_validity_seconds = Column(Integer, nullable=False)  # Maximum TTL for mandates
     
     # Scope constraints
-    allowed_resource_patterns = Column(JSONB, nullable=False)  # List of regex/glob patterns
-    allowed_actions = Column(JSONB, nullable=False)  # List of action types
+    allowed_resource_patterns = Column(JSON, nullable=False)  # List of regex/glob patterns
+    allowed_actions = Column(JSON, nullable=False)  # List of action types
     
     # Delegation constraints
     allow_delegation = Column(Boolean, nullable=False, default=False)
@@ -961,22 +961,22 @@ class GatewayProvider(Base):
     service_type = Column(String(100), nullable=False, default="application", server_default="application")
     auth_scheme = Column(String(100), nullable=False, default="api_key", server_default="api_key")
     version = Column(String(255), nullable=True)
-    capabilities = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    tags = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    provider_metadata = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    capabilities = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    tags = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    provider_metadata = Column("metadata", JSON, nullable=False, default=dict, server_default=text("'{}'"))
     provider_definition = Column(String(255), nullable=False, default="custom", server_default="custom")
-    provider_definition_data = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
-    resources = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    actions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    auth_metadata = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    provider_definition_data = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    resources = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    actions = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    auth_metadata = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     provider_layer = Column(String(50), nullable=False, default="user_provider", server_default="user_provider", index=True)
     template_id = Column(String(255), nullable=True)
     managed_by = Column(String(255), nullable=True)
     credential_storage = Column(String(50), nullable=False, default="gateway_vault", server_default="gateway_vault")
 
-    # JSON arrays stored as JSONB
-    allowed_paths = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    scopes = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
+    # JSON arrays stored as JSON
+    allowed_paths = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    scopes = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
 
     tls_pin = Column(String(255), nullable=True)
     secret_ref = Column(String(512), nullable=True)
@@ -984,8 +984,8 @@ class GatewayProvider(Base):
     timeout_seconds = Column(Integer, nullable=False, default=30, server_default="30")
     max_retries = Column(Integer, nullable=False, default=3, server_default="3")
     rate_limit_rpm = Column(Integer, nullable=True)
-    default_headers = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
-    access_policy = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    default_headers = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    access_policy = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     enabled = Column(Boolean, nullable=False, default=True, index=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -1025,8 +1025,8 @@ class SyncOperation(Base):
     entity_type = Column(String(100), nullable=False, index=True)
     entity_id = Column(String(255), nullable=False, index=True)
     
-    # Operation data (JSONB for flexibility)
-    operation_data = Column(JSONB, nullable=False)
+    # Operation data (JSON for flexibility)
+    operation_data = Column(JSON, nullable=False)
     
     # Timing
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
@@ -1048,7 +1048,7 @@ class SyncOperation(Base):
     completed_at = Column(DateTime, nullable=True)
     
     # Metadata
-    operation_metadata = Column("metadata", JSONB, nullable=True)
+    operation_metadata = Column("metadata", JSON, nullable=True)
     correlation_id = Column(String(255), nullable=True, index=True)
     
     # Composite indexes for efficient querying
@@ -1087,9 +1087,9 @@ class SyncConflict(Base):
     entity_type = Column(String(100), nullable=False, index=True)
     entity_id = Column(String(255), nullable=False, index=True)
     
-    # Conflict versions (JSONB for flexibility)
-    local_version = Column(JSONB, nullable=False)
-    remote_version = Column(JSONB, nullable=False)
+    # Conflict versions (JSON for flexibility)
+    local_version = Column(JSON, nullable=False)
+    remote_version = Column(JSON, nullable=False)
     
     # Timestamps
     local_timestamp = Column(DateTime, nullable=False, index=True)
@@ -1098,7 +1098,7 @@ class SyncConflict(Base):
     
     # Resolution
     resolution_strategy = Column(String(50), nullable=True)  # operational_transform, last_write_wins, etc.
-    resolved_version = Column(JSONB, nullable=True)
+    resolved_version = Column(JSON, nullable=True)
     resolved_at = Column(DateTime, nullable=True, index=True)
     resolved_by = Column(String(255), nullable=True)  # system or user identifier
     
@@ -1111,7 +1111,7 @@ class SyncConflict(Base):
     )  # unresolved, resolved, manual_review
     
     # Metadata
-    conflict_metadata = Column("metadata", JSONB, nullable=True)
+    conflict_metadata = Column("metadata", JSON, nullable=True)
     correlation_id = Column(String(255), nullable=True, index=True)
     
     # Composite indexes for efficient querying
@@ -1173,7 +1173,7 @@ class SyncMetadata(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Metadata
-    sync_metadata_data = Column("metadata", JSONB, nullable=True)
+    sync_metadata_data = Column("metadata", JSON, nullable=True)
     
     def __repr__(self):
         return (

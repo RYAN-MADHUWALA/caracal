@@ -341,7 +341,7 @@ def _host_up(namespace: argparse.Namespace) -> int:
         compose_file=compose_file,
         database_urls=_runtime_database_url_candidates(),
         state_roots=[_caracal_home_dir()],
-        env_vars=os.environ,
+        env_vars=_runtime_hardcut_env(),
     )
     compose_cmd = _compose_cmd(compose_file)
     uses_local_build = _service_uses_local_build(compose_file, "mcp")
@@ -1077,7 +1077,7 @@ def _host_flow(namespace: argparse.Namespace) -> int:
         compose_file=compose_file,
         database_urls=_runtime_database_url_candidates(),
         state_roots=[_caracal_home_dir()],
-        env_vars=os.environ,
+        env_vars=_runtime_hardcut_env(),
     )
     compose_cmd = _compose_cmd(compose_file)
     uses_local_build = _service_uses_local_build(compose_file, "flow")
@@ -1259,7 +1259,7 @@ def _run_local_caracal(args: Sequence[str]) -> None:
         compose_file=None,
         database_urls=_runtime_database_url_candidates(),
         state_roots=[_caracal_home_dir()],
-        env_vars=os.environ,
+        env_vars=_runtime_hardcut_env(),
     )
 
     raise SystemExit(run_restricted_command(list(args)))
@@ -1271,6 +1271,12 @@ def _runtime_database_url_candidates() -> dict[str, str | None]:
         "CARACAL_DATABASE_URL": os.getenv("CARACAL_DATABASE_URL"),
         "CARACAL_DB_URL": os.getenv("CARACAL_DB_URL"),
     }
+
+
+def _runtime_hardcut_env() -> dict[str, str]:
+    normalized = dict(os.environ)
+    normalized.setdefault("CARACAL_PRINCIPAL_KEY_BACKEND", "aws_kms")
+    return normalized
 
 
 def _is_truthy(value: str | None) -> bool:
