@@ -4,8 +4,6 @@ description: Developer-facing guide to the public connector boundary between ope
 sidebar_label: Enterprise Connector
 ---
 
-This page documents the public connector boundary only. It does not document enterprise internals.
-
 **Audience:** Developer
 
 **Context:** Read this page when open-source usage needs to connect a runtime or workspace to an enterprise-managed environment.
@@ -45,7 +43,7 @@ At a high level, the connector flow looks like this:
 
 ## Public Configuration And Usage
 
-The connector is intentionally operated through public configuration and commands.
+The connector is operated through public configuration and commands.
 
 ### Public configuration inputs
 
@@ -76,8 +74,7 @@ These commands are the supported developer and operator entry points for enterpr
 
 ## Constraints
 
-- The connector is intentionally high level in documentation.
-- Enterprise internals are out of scope here.
+- Enterprise internals are not part of the connector surface.
 - Public connector behavior may affect runtime workflows such as sync status, connected mode, and certain managed-provider expectations.
 
 ## Related Concepts
