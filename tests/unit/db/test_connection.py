@@ -19,6 +19,21 @@ from caracal.db.connection import (
 @pytest.mark.unit
 class TestDatabaseConfig:
     """Test suite for DatabaseConfig."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_db_env(self, monkeypatch):
+        for env_name in (
+            "CARACAL_DB_HOST",
+            "CARACAL_DB_PORT",
+            "CARACAL_DB_NAME",
+            "CARACAL_DB_USER",
+            "CARACAL_DB_PASSWORD",
+            "CARACAL_DB_SCHEMA",
+        ):
+            monkeypatch.delenv(env_name, raising=False)
+
+        with patch("caracal.db.connection._ensure_dotenv_loaded", return_value=None):
+            yield
     
     def test_config_creation_with_defaults(self):
         """Test DatabaseConfig instantiation with default values."""
@@ -55,14 +70,6 @@ class TestDatabaseConfig:
         assert config.password == "test_pass"
         assert config.pool_size == 20
         assert config.max_overflow == 10
-    
-    def test_config_type_property(self):
-        """Test DatabaseConfig type property returns postgresql."""
-        # Arrange
-        config = DatabaseConfig()
-        
-        # Act & Assert
-        assert config.type == "postgresql"
     
     def test_get_connection_url(self):
         """Test connection URL generation."""

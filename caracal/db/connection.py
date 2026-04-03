@@ -87,9 +87,6 @@ class DatabaseConfig:
         pool_timeout: int = 30,
         pool_recycle: int = 3600,
         echo: bool = False,
-        # Legacy kwargs accepted but ignored — prevents breakage in callers
-        # that still pass type= or file_path=.
-        **_ignored,
     ):
         _ensure_dotenv_loaded()
         self.host = _env(_ENV_HOST, host)
@@ -103,11 +100,6 @@ class DatabaseConfig:
         self.pool_timeout = pool_timeout
         self.pool_recycle = pool_recycle
         self.echo = echo
-
-    # Back-compat: callers that still check config.type
-    @property
-    def type(self) -> str:
-        return "postgresql"
 
     def get_connection_url(self) -> str:
         """Build a ``postgresql://`` connection URL."""
