@@ -14,9 +14,11 @@ This module defines the database schema for:
 PostgreSQL is the only supported backend.
 """
 
+import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -41,6 +43,40 @@ Base = declarative_base()
 def get_json_type():
     """Return JSONB for PostgreSQL."""
     return JSONB
+
+
+class PrincipalKind(str, Enum):
+    """Behavioral principal taxonomy."""
+
+    HUMAN = "human"
+    ORCHESTRATOR = "orchestrator"
+    WORKER = "worker"
+    SERVICE = "service"
+
+
+class PrincipalLifecycleStatus(str, Enum):
+    """Principal lifecycle status values."""
+
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DEACTIVATED = "deactivated"
+    REVOKED = "revoked"
+
+
+class PrincipalAttestationStatus(str, Enum):
+    """Principal attestation state values."""
+
+    UNATTESTED = "unattested"
+    PENDING = "pending"
+    ATTESTED = "attested"
+    FAILED = "failed"
+
+
+class PrincipalKeyBackend(str, Enum):
+    """Supported custody backends for principal private keys."""
+
+    LOCAL = "local"
+    AWS_KMS = "aws_kms"
 
 
 class LedgerEvent(Base):
@@ -226,7 +262,7 @@ class LedgerSnapshot(Base):
 
 class Principal(Base):
     """
-    Principal identity (agent, user, or service).
+    Principal identity with behavioral taxonomy and lifecycle state.
     
     Represents an entity that can hold authority and perform actions.
     Replaces AgentIdentity with more general concept for authority enforcement.
@@ -240,19 +276,183 @@ class Principal(Base):
     
     # Identity
     name = Column(String(255), unique=True, nullable=False, index=True)
-    principal_type = Column(String(50), nullable=False, index=True)  # agent, user, service
+    principal_kind = Column(String(50), nullable=False, index=True)  # human, orchestrator, worker, service
     owner = Column(String(255), nullable=False)
+
+    # Lifecycle graph relation
+    source_principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id"),
+        nullable=True,
+        index=True,
+    )
+
+    # Lifecycle and attestation status
+    lifecycle_status = Column(
+        String(50),
+        nullable=False,
+        default=PrincipalLifecycleStatus.ACTIVE.value,
+        server_default=PrincipalLifecycleStatus.ACTIVE.value,
+        index=True,
+    )
+    attestation_status = Column(
+        String(50),
+        nullable=False,
+        default=PrincipalAttestationStatus.UNATTESTED.value,
+        server_default=PrincipalAttestationStatus.UNATTESTED.value,
+        index=True,
+    )
     
     # Cryptographic keys
     public_key_pem = Column(String(2000), nullable=True)
-    private_key_pem = Column(String(4000), nullable=True)  # Encrypted or stored in KMS
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     principal_metadata = Column("metadata", JSONB, nullable=True)
+
+    source_principal = relationship(
+        "Principal",
+        remote_side=[principal_id],
+        foreign_keys=[source_principal_id],
+        backref="spawned_principals",
+    )
+    key_custody = relationship(
+        "PrincipalKeyCustody",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    workload_bindings = relationship(
+        "PrincipalWorkloadBinding",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+    )
+    capability_grants = relationship(
+        "PrincipalCapabilityGrant",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def capabilities(self) -> list[str]:
+        return [grant.capability for grant in self.capability_grants]
+
+    @capabilities.setter
+    def capabilities(self, values: Optional[list[str]]) -> None:
+        self.capability_grants = [
+            PrincipalCapabilityGrant(capability=str(value))
+            for value in (values or [])
+        ]
     
     def __repr__(self):
-        return f"<Principal(principal_id={self.principal_id}, name={self.name}, type={self.principal_type})>"
+        return (
+            f"<Principal(principal_id={self.principal_id}, name={self.name}, "
+            f"kind={self.principal_kind}, lifecycle={self.lifecycle_status})>"
+        )
+
+
+class PrincipalKeyCustody(Base):
+    """Canonical private-key custody record for a principal."""
+
+    __tablename__ = "principal_key_custody"
+
+    custody_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    backend = Column(String(50), nullable=False, index=True)
+    key_reference = Column(String(2000), nullable=False)
+    key_updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    rotated_at = Column(DateTime, nullable=True)
+
+    principal = relationship("Principal", back_populates="key_custody")
+    local_details = relationship(
+        "PrincipalKeyCustodyLocal",
+        back_populates="custody",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    aws_kms_details = relationship(
+        "PrincipalKeyCustodyAWSKMS",
+        back_populates="custody",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class PrincipalKeyCustodyLocal(Base):
+    """Local filesystem custody details."""
+
+    __tablename__ = "principal_key_custody_local"
+
+    custody_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principal_key_custody.custody_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    private_key_ref = Column(String(2000), nullable=False)
+
+    custody = relationship("PrincipalKeyCustody", back_populates="local_details")
+
+
+class PrincipalKeyCustodyAWSKMS(Base):
+    """AWS KMS custody details."""
+
+    __tablename__ = "principal_key_custody_aws_kms"
+
+    custody_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principal_key_custody.custody_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    kms_key_id = Column(String(512), nullable=False)
+    kms_region = Column(String(128), nullable=True)
+    ciphertext_b64 = Column(String(8192), nullable=False)
+
+    custody = relationship("PrincipalKeyCustody", back_populates="aws_kms_details")
+
+
+class PrincipalWorkloadBinding(Base):
+    """Typed workload binding rows for a principal."""
+
+    __tablename__ = "principal_workload_bindings"
+
+    binding_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workload = Column(String(255), nullable=False)
+    binding_type = Column(String(50), nullable=False, default="workload", server_default="workload")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    principal = relationship("Principal", back_populates="workload_bindings")
+
+
+class PrincipalCapabilityGrant(Base):
+    """Typed capability grant rows for a principal."""
+
+    __tablename__ = "principal_capability_grants"
+
+    grant_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    capability = Column(String(255), nullable=False)
+    granted_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    principal = relationship("Principal", back_populates="capability_grants")
 
 
 class ExecutionMandate(Base):
@@ -287,10 +487,6 @@ class ExecutionMandate(Base):
     valid_from = Column(DateTime, nullable=False, index=True)
     valid_until = Column(DateTime, nullable=False, index=True)
     
-    # Scope
-    resource_scope = Column(JSONB, nullable=False)  # List of resource patterns
-    action_scope = Column(JSONB, nullable=False)    # List of allowed actions
-    
     # Cryptographic signature
     signature = Column(String(512), nullable=False)  # ECDSA P-256 signature
     
@@ -308,7 +504,6 @@ class ExecutionMandate(Base):
         String(50), nullable=False, default="directed",
         server_default="directed"
     )  # directed, peer
-    context_tags = Column(JSONB, nullable=True)  # Context tags for dynamic filtering
     
     # Intent constraint (optional)
     intent_hash = Column(String(64), nullable=True)  # SHA-256 hash of intent
@@ -325,9 +520,114 @@ class ExecutionMandate(Base):
     # Relationships
     issuer = relationship("Principal", foreign_keys=[issuer_id], backref="issued_mandates")
     subject = relationship("Principal", foreign_keys=[subject_id], backref="received_mandates")
+    resource_scope_entries = relationship(
+        "MandateResourceScope",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateResourceScope.position",
+    )
+    action_scope_entries = relationship(
+        "MandateActionScope",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateActionScope.position",
+    )
+    context_tag_entries = relationship(
+        "MandateContextTag",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateContextTag.position",
+    )
+
+    @property
+    def resource_scope(self) -> list[str]:
+        return [entry.resource_scope for entry in self.resource_scope_entries]
+
+    @resource_scope.setter
+    def resource_scope(self, values: Optional[list[str]]) -> None:
+        self.resource_scope_entries = [
+            MandateResourceScope(resource_scope=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
+
+    @property
+    def action_scope(self) -> list[str]:
+        return [entry.action_scope for entry in self.action_scope_entries]
+
+    @action_scope.setter
+    def action_scope(self, values: Optional[list[str]]) -> None:
+        self.action_scope_entries = [
+            MandateActionScope(action_scope=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
+
+    @property
+    def context_tags(self) -> list[str]:
+        return [entry.context_tag for entry in self.context_tag_entries]
+
+    @context_tags.setter
+    def context_tags(self, values: Optional[list[str]]) -> None:
+        self.context_tag_entries = [
+            MandateContextTag(context_tag=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
     
     def __repr__(self):
         return f"<ExecutionMandate(mandate_id={self.mandate_id}, subject_id={self.subject_id}, revoked={self.revoked})>"
+
+
+class MandateResourceScope(Base):
+    """Resource scope entries for a mandate."""
+
+    __tablename__ = "mandate_resource_scopes"
+
+    resource_scope_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    resource_scope = Column(String(1000), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="resource_scope_entries")
+
+
+class MandateActionScope(Base):
+    """Action scope entries for a mandate."""
+
+    __tablename__ = "mandate_action_scopes"
+
+    action_scope_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    action_scope = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="action_scope_entries")
+
+
+class MandateContextTag(Base):
+    """Context tag entries for a mandate."""
+
+    __tablename__ = "mandate_context_tags"
+
+    context_tag_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_tag = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="context_tag_entries")
 
 
 class DelegationEdgeModel(Base):
@@ -367,7 +667,6 @@ class DelegationEdgeModel(Base):
     delegation_type = Column(
         String(50), nullable=False, default="directed"
     )  # directed, peer
-    context_tags = Column(JSONB, nullable=True)  # ["production", "read-only"]
     
     # Validity
     granted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -391,6 +690,23 @@ class DelegationEdgeModel(Base):
         foreign_keys=[target_mandate_id],
         backref="incoming_edges",
     )
+    context_tag_entries = relationship(
+        "DelegationEdgeTag",
+        back_populates="edge",
+        cascade="all, delete-orphan",
+        order_by="DelegationEdgeTag.position",
+    )
+
+    @property
+    def context_tags(self) -> list[str]:
+        return [entry.context_tag for entry in self.context_tag_entries]
+
+    @context_tags.setter
+    def context_tags(self, values: Optional[list[str]]) -> None:
+        self.context_tag_entries = [
+            DelegationEdgeTag(context_tag=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
     
     # Composite indexes
     __table_args__ = (
@@ -404,6 +720,24 @@ class DelegationEdgeModel(Base):
             f"{self.source_principal_type}→{self.target_principal_type}, "
             f"type={self.delegation_type}, revoked={self.revoked})>"
         )
+
+
+class DelegationEdgeTag(Base):
+    """Context tag entries for delegation edges."""
+
+    __tablename__ = "delegation_edge_tags"
+
+    edge_tag_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    edge_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("delegation_edges.edge_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_tag = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    edge = relationship("DelegationEdgeModel", back_populates="context_tag_entries")
 
 
 class AuthorityLedgerEvent(Base):
@@ -446,8 +780,6 @@ class AuthorityLedgerEvent(Base):
     requested_action = Column(String(255), nullable=True)
     requested_resource = Column(String(1000), nullable=True)
     
-    # Metadata
-    event_metadata = Column(JSONB, nullable=True)
     correlation_id = Column(String(255), nullable=True, index=True)
     
     # Merkle tree integration
@@ -462,6 +794,37 @@ class AuthorityLedgerEvent(Base):
     principal = relationship("Principal", backref="authority_events")
     mandate = relationship("ExecutionMandate", backref="ledger_events")
     merkle_root = relationship("MerkleRoot", backref="authority_events")
+    event_attributes = relationship(
+        "AuthorityEventAttribute",
+        back_populates="event",
+        cascade="all, delete-orphan",
+        order_by="AuthorityEventAttribute.position",
+    )
+
+    @property
+    def event_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for entry in self.event_attributes:
+            metadata[entry.attribute_key] = _decode_authority_attribute(
+                entry.attribute_value,
+                entry.value_type,
+            )
+        return metadata
+
+    @event_metadata.setter
+    def event_metadata(self, values: Optional[dict[str, Any]]) -> None:
+        metadata = values or {}
+        self.event_attributes = []
+        for index, key in enumerate(sorted(metadata.keys())):
+            encoded_value, value_type = _encode_authority_attribute(metadata[key])
+            self.event_attributes.append(
+                AuthorityEventAttribute(
+                    attribute_key=str(key),
+                    attribute_value=encoded_value,
+                    value_type=value_type,
+                    position=index,
+                )
+            )
     
     # Composite indexes for common queries
     __table_args__ = (
@@ -471,6 +834,64 @@ class AuthorityLedgerEvent(Base):
     
     def __repr__(self):
         return f"<AuthorityLedgerEvent(event_id={self.event_id}, event_type={self.event_type}, decision={self.decision})>"
+
+
+class AuthorityEventAttribute(Base):
+    """Typed authority event attributes replacing JSON metadata."""
+
+    __tablename__ = "authority_event_attributes"
+
+    attribute_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(
+        BigInteger,
+        ForeignKey("authority_ledger_events.event_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    attribute_key = Column(String(255), nullable=False)
+    attribute_value = Column(String(4000), nullable=False)
+    value_type = Column(String(20), nullable=False, default="str", server_default="str")
+    position = Column(Integer, nullable=False, default=0)
+
+    event = relationship("AuthorityLedgerEvent", back_populates="event_attributes")
+
+
+def _encode_authority_attribute(value: Any) -> tuple[str, str]:
+    if value is None:
+        return "", "null"
+    if isinstance(value, bool):
+        return ("true" if value else "false"), "bool"
+    if isinstance(value, int):
+        return str(value), "int"
+    if isinstance(value, float):
+        return str(value), "float"
+    if isinstance(value, str):
+        return value, "str"
+    return json.dumps(value, sort_keys=True), "json"
+
+
+def _decode_authority_attribute(value: str, value_type: str) -> Any:
+    normalized = (value_type or "str").lower()
+    if normalized == "null":
+        return None
+    if normalized == "bool":
+        return value.lower() == "true"
+    if normalized == "int":
+        try:
+            return int(value)
+        except Exception:
+            return 0
+    if normalized == "float":
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    if normalized == "json":
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
 
 
 class AuthorityPolicy(Base):
