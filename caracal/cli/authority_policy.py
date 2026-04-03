@@ -190,12 +190,12 @@ def create(
                 # without requiring separate, hidden setup steps.
                 principal_name = f"principal-{principal_uuid}"
                 principal_owner = "unknown"
-                principal_type = "agent"
+                principal_kind = "worker"
 
                 principal = Principal(
                     principal_id=principal_uuid,
                     name=principal_name,
-                    principal_type=principal_type,
+                    principal_kind=principal_kind,
                     owner=principal_owner,
                     principal_metadata={
                         "auto_provisioned": True,
