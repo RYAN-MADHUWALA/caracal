@@ -21,6 +21,33 @@ from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+
+class AuthorityBoundaryStage:
+    """Boundary-2 validation stages used for telemetry and deny diagnostics."""
+
+    ISSUER_AUTHORITY_CHECKS = "issuer_authority_checks"
+    MANDATE_STATE_VALIDATION = "mandate_state_validation"
+    DELEGATION_PATH_VALIDATION = "delegation_path_validation"
+    ACTION_RESOURCE_AUTHORIZATION_CHECKS = "action_resource_authorization_checks"
+    ALLOW = "allow"
+
+
+class AuthorityReasonCode:
+    """Stable reason codes for authority decisions."""
+
+    ALLOW = "AUTH_ALLOW"
+    MANDATE_MISSING = "AUTH_MANDATE_MISSING"
+    MANDATE_REVOKED = "AUTH_MANDATE_REVOKED"
+    MANDATE_NOT_YET_VALID = "AUTH_MANDATE_NOT_YET_VALID"
+    MANDATE_EXPIRED = "AUTH_MANDATE_EXPIRED"
+    ISSUER_NOT_FOUND = "AUTH_ISSUER_NOT_FOUND"
+    ISSUER_KEY_MISSING = "AUTH_ISSUER_KEY_MISSING"
+    SIGNATURE_INVALID = "AUTH_SIGNATURE_INVALID"
+    SIGNATURE_VERIFICATION_ERROR = "AUTH_SIGNATURE_VERIFICATION_ERROR"
+    ACTION_SCOPE_DENIED = "AUTH_ACTION_SCOPE_DENIED"
+    RESOURCE_SCOPE_DENIED = "AUTH_RESOURCE_SCOPE_DENIED"
+    DELEGATION_PATH_INVALID = "AUTH_DELEGATION_PATH_INVALID"
+
 # Import for type hints (avoid circular import)
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -38,6 +65,8 @@ class AuthorityDecision:
     """
     allowed: bool
     reason: str
+    reason_code: Optional[str] = None
+    boundary_stage: Optional[str] = None
     mandate_id: Optional[UUID] = None
     principal_id: Optional[UUID] = None
     requested_action: Optional[str] = None
@@ -47,6 +76,8 @@ class AuthorityDecision:
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.utcnow()
+        if self.reason_code is None:
+            self.reason_code = AuthorityReasonCode.ALLOW if self.allowed else "AUTH_DENY"
 
 
 class AuthorityEvaluator:
@@ -164,7 +195,7 @@ class AuthorityEvaluator:
     def _record_ledger_event(
         self,
         event_type: str,
-        principal_id: UUID,
+        principal_id: Optional[UUID],
         mandate_id: Optional[UUID] = None,
         decision: Optional[str] = None,
         denial_reason: Optional[str] = None,
@@ -200,6 +231,271 @@ class AuthorityEvaluator:
                 logger.error(f"Failed to record ledger event: {e}", exc_info=True)
         else:
             logger.debug(f"No ledger writer configured, skipping event recording for {event_type}")
+
+    def _deny_decision(
+        self,
+        *,
+        reason: str,
+        reason_code: str,
+        boundary_stage: str,
+        mandate: Optional[ExecutionMandate],
+        requested_action: str,
+        requested_resource: str,
+    ) -> AuthorityDecision:
+        """Create a denied decision and emit stage-aware ledger telemetry."""
+        decision = AuthorityDecision(
+            allowed=False,
+            reason=reason,
+            reason_code=reason_code,
+            boundary_stage=boundary_stage,
+            mandate_id=mandate.mandate_id if mandate else None,
+            principal_id=mandate.subject_id if mandate else None,
+            requested_action=requested_action,
+            requested_resource=requested_resource,
+        )
+        self._record_ledger_event(
+            event_type="denied",
+            principal_id=decision.principal_id,
+            mandate_id=decision.mandate_id,
+            decision="denied",
+            denial_reason=reason,
+            requested_action=requested_action,
+            requested_resource=requested_resource,
+            metadata={
+                "boundary_stage": boundary_stage,
+                "reason_code": reason_code,
+            },
+        )
+        return decision
+
+    def _allow_decision(
+        self,
+        *,
+        reason: str,
+        mandate: ExecutionMandate,
+        requested_action: str,
+        requested_resource: str,
+    ) -> AuthorityDecision:
+        """Create an allow decision and emit stage-aware ledger telemetry."""
+        decision = AuthorityDecision(
+            allowed=True,
+            reason=reason,
+            reason_code=AuthorityReasonCode.ALLOW,
+            boundary_stage=AuthorityBoundaryStage.ALLOW,
+            mandate_id=mandate.mandate_id,
+            principal_id=mandate.subject_id,
+            requested_action=requested_action,
+            requested_resource=requested_resource,
+        )
+        self._record_ledger_event(
+            event_type="validated",
+            principal_id=mandate.subject_id,
+            mandate_id=mandate.mandate_id,
+            decision="allowed",
+            denial_reason=None,
+            requested_action=requested_action,
+            requested_resource=requested_resource,
+            metadata={
+                "boundary_stage": AuthorityBoundaryStage.ALLOW,
+                "reason_code": AuthorityReasonCode.ALLOW,
+            },
+        )
+        return decision
+
+    def _validate_mandate_state(
+        self,
+        mandate: ExecutionMandate,
+        requested_action: str,
+        requested_resource: str,
+        current_time: datetime,
+    ) -> Optional[AuthorityDecision]:
+        """Stage 2: mandate state validation."""
+        if mandate.revoked:
+            reason = f"Mandate {mandate.mandate_id} is revoked"
+            if mandate.revocation_reason:
+                reason += f": {mandate.revocation_reason}"
+            logger.warning(reason)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.MANDATE_REVOKED,
+                boundary_stage=AuthorityBoundaryStage.MANDATE_STATE_VALIDATION,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+        if current_time < mandate.valid_from:
+            reason = f"Mandate {mandate.mandate_id} is not yet valid (starts at {mandate.valid_from})"
+            logger.warning(reason)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.MANDATE_NOT_YET_VALID,
+                boundary_stage=AuthorityBoundaryStage.MANDATE_STATE_VALIDATION,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+        if current_time > mandate.valid_until:
+            reason = f"Mandate {mandate.mandate_id} has expired (expired at {mandate.valid_until})"
+            logger.warning(reason)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.MANDATE_EXPIRED,
+                boundary_stage=AuthorityBoundaryStage.MANDATE_STATE_VALIDATION,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+        return None
+
+    def _validate_issuer_authority(
+        self,
+        mandate: ExecutionMandate,
+        requested_action: str,
+        requested_resource: str,
+    ) -> Optional[AuthorityDecision]:
+        """Stage 1: issuer lookup and signature verification."""
+        try:
+            issuer = self._get_principal(mandate.issuer_id)
+            if not issuer:
+                reason = f"Issuer principal {mandate.issuer_id} not found"
+                logger.error(reason)
+                return self._deny_decision(
+                    reason=reason,
+                    reason_code=AuthorityReasonCode.ISSUER_NOT_FOUND,
+                    boundary_stage=AuthorityBoundaryStage.ISSUER_AUTHORITY_CHECKS,
+                    mandate=mandate,
+                    requested_action=requested_action,
+                    requested_resource=requested_resource,
+                )
+
+            if not issuer.public_key_pem:
+                reason = f"Issuer principal {mandate.issuer_id} has no public key"
+                logger.error(reason)
+                return self._deny_decision(
+                    reason=reason,
+                    reason_code=AuthorityReasonCode.ISSUER_KEY_MISSING,
+                    boundary_stage=AuthorityBoundaryStage.ISSUER_AUTHORITY_CHECKS,
+                    mandate=mandate,
+                    requested_action=requested_action,
+                    requested_resource=requested_resource,
+                )
+
+            mandate_data = {
+                "mandate_id": str(mandate.mandate_id),
+                "issuer_id": str(mandate.issuer_id),
+                "subject_id": str(mandate.subject_id),
+                "valid_from": mandate.valid_from.isoformat(),
+                "valid_until": mandate.valid_until.isoformat(),
+                "resource_scope": mandate.resource_scope,
+                "action_scope": mandate.action_scope,
+                "delegation_type": mandate.delegation_type,
+                "intent_hash": mandate.intent_hash,
+            }
+            signature_valid = verify_mandate_signature(
+                mandate_data,
+                mandate.signature,
+                issuer.public_key_pem,
+            )
+            if not signature_valid:
+                reason = f"Invalid signature for mandate {mandate.mandate_id}"
+                logger.warning(reason)
+                return self._deny_decision(
+                    reason=reason,
+                    reason_code=AuthorityReasonCode.SIGNATURE_INVALID,
+                    boundary_stage=AuthorityBoundaryStage.ISSUER_AUTHORITY_CHECKS,
+                    mandate=mandate,
+                    requested_action=requested_action,
+                    requested_resource=requested_resource,
+                )
+
+            return None
+        except Exception as exc:
+            reason = f"Signature verification failed: {exc}"
+            logger.error(reason, exc_info=True)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.SIGNATURE_VERIFICATION_ERROR,
+                boundary_stage=AuthorityBoundaryStage.ISSUER_AUTHORITY_CHECKS,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+    def _validate_action_and_resource_scope(
+        self,
+        mandate: ExecutionMandate,
+        requested_action: str,
+        requested_resource: str,
+    ) -> Optional[AuthorityDecision]:
+        """Stage 4: action/resource authorization checks."""
+        action_in_scope = False
+        for allowed_action in mandate.action_scope:
+            if self._match_pattern(requested_action, allowed_action):
+                action_in_scope = True
+                break
+
+        if not action_in_scope:
+            reason = (
+                f"Requested action '{requested_action}' is not in mandate scope. "
+                f"Allowed actions: {mandate.action_scope}"
+            )
+            logger.warning(reason)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.ACTION_SCOPE_DENIED,
+                boundary_stage=AuthorityBoundaryStage.ACTION_RESOURCE_AUTHORIZATION_CHECKS,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+        resource_in_scope = False
+        for allowed_resource in mandate.resource_scope:
+            if self._match_pattern(requested_resource, allowed_resource):
+                resource_in_scope = True
+                break
+
+        if not resource_in_scope:
+            reason = (
+                f"Requested resource '{requested_resource}' is not in mandate scope. "
+                f"Allowed resources: {mandate.resource_scope}"
+            )
+            logger.warning(reason)
+            return self._deny_decision(
+                reason=reason,
+                reason_code=AuthorityReasonCode.RESOURCE_SCOPE_DENIED,
+                boundary_stage=AuthorityBoundaryStage.ACTION_RESOURCE_AUTHORIZATION_CHECKS,
+                mandate=mandate,
+                requested_action=requested_action,
+                requested_resource=requested_resource,
+            )
+
+        return None
+
+    def _validate_delegation_path_stage(
+        self,
+        mandate: ExecutionMandate,
+        requested_action: str,
+        requested_resource: str,
+    ) -> Optional[AuthorityDecision]:
+        """Stage 3: delegation path validation."""
+        path_valid = self.check_delegation_path(mandate)
+        if path_valid:
+            return None
+
+        reason = f"Delegation graph path is invalid for mandate {mandate.mandate_id}"
+        logger.warning(reason)
+        return self._deny_decision(
+            reason=reason,
+            reason_code=AuthorityReasonCode.DELEGATION_PATH_INVALID,
+            boundary_stage=AuthorityBoundaryStage.DELEGATION_PATH_VALIDATION,
+            mandate=mandate,
+            requested_action=requested_action,
+            requested_resource=requested_resource,
+        )
     
     def validate_mandate(
         self,
@@ -238,318 +534,39 @@ class AuthorityEvaluator:
         if mandate is None:
             reason = "No mandate provided"
             logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
+            return self._deny_decision(
                 reason=reason,
+                reason_code=AuthorityReasonCode.MANDATE_MISSING,
+                boundary_stage=AuthorityBoundaryStage.MANDATE_STATE_VALIDATION,
+                mandate=None,
                 requested_action=requested_action,
-                requested_resource=requested_resource
+                requested_resource=requested_resource,
             )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=None,
-                mandate_id=None,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
 
         logger.info(
             f"Validating mandate {mandate.mandate_id} for action={requested_action}, "
             f"resource={requested_resource}"
         )
         
-        # Check revocation status first (fail fast)
-        if mandate.revoked:
-            reason = f"Mandate {mandate.mandate_id} is revoked"
-            if mandate.revocation_reason:
-                reason += f": {mandate.revocation_reason}"
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        # Check expiration
-        if current_time < mandate.valid_from:
-            reason = f"Mandate {mandate.mandate_id} is not yet valid (starts at {mandate.valid_from})"
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        if current_time > mandate.valid_until:
-            reason = f"Mandate {mandate.mandate_id} has expired (expired at {mandate.valid_until})"
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        # Verify cryptographic signature
-        try:
-            issuer = self._get_principal(mandate.issuer_id)
-            if not issuer:
-                reason = f"Issuer principal {mandate.issuer_id} not found"
-                logger.error(reason)
-                decision = AuthorityDecision(
-                    allowed=False,
-                    reason=reason,
-                    mandate_id=mandate.mandate_id,
-                    principal_id=mandate.subject_id,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                self._record_ledger_event(
-                    event_type="denied",
-                    principal_id=mandate.subject_id,
-                    mandate_id=mandate.mandate_id,
-                    decision="denied",
-                    denial_reason=reason,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
+        for check in (
+            lambda m, a, r: self._validate_mandate_state(m, a, r, current_time),
+            self._validate_issuer_authority,
+            self._validate_delegation_path_stage,
+            self._validate_action_and_resource_scope,
+        ):
+            decision = check(mandate, requested_action, requested_resource)
+            if decision is not None:
                 return decision
-            
-            if not issuer.public_key_pem:
-                reason = f"Issuer principal {mandate.issuer_id} has no public key"
-                logger.error(reason)
-                decision = AuthorityDecision(
-                    allowed=False,
-                    reason=reason,
-                    mandate_id=mandate.mandate_id,
-                    principal_id=mandate.subject_id,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                self._record_ledger_event(
-                    event_type="denied",
-                    principal_id=mandate.subject_id,
-                    mandate_id=mandate.mandate_id,
-                    decision="denied",
-                    denial_reason=reason,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                return decision
-            
-            # Reconstruct mandate data for signature verification
-            mandate_data = {
-                "mandate_id": str(mandate.mandate_id),
-                "issuer_id": str(mandate.issuer_id),
-                "subject_id": str(mandate.subject_id),
-                "valid_from": mandate.valid_from.isoformat(),
-                "valid_until": mandate.valid_until.isoformat(),
-                "resource_scope": mandate.resource_scope,
-                "action_scope": mandate.action_scope,
-                "delegation_type": mandate.delegation_type,
-                "intent_hash": mandate.intent_hash
-            }
-            
-            signature_valid = verify_mandate_signature(
-                mandate_data,
-                mandate.signature,
-                issuer.public_key_pem
-            )
-            
-            if not signature_valid:
-                reason = f"Invalid signature for mandate {mandate.mandate_id}"
-                logger.warning(reason)
-                decision = AuthorityDecision(
-                    allowed=False,
-                    reason=reason,
-                    mandate_id=mandate.mandate_id,
-                    principal_id=mandate.subject_id,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                self._record_ledger_event(
-                    event_type="denied",
-                    principal_id=mandate.subject_id,
-                    mandate_id=mandate.mandate_id,
-                    decision="denied",
-                    denial_reason=reason,
-                    requested_action=requested_action,
-                    requested_resource=requested_resource
-                )
-                return decision
-            
-        except Exception as e:
-            # Fail-closed: Any error in signature verification results in denial
-            reason = f"Signature verification failed: {e}"
-            logger.error(reason, exc_info=True)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        # Validate action scope
-        action_in_scope = False
-        for allowed_action in mandate.action_scope:
-            if self._match_pattern(requested_action, allowed_action):
-                action_in_scope = True
-                break
-        
-        if not action_in_scope:
-            reason = (
-                f"Requested action '{requested_action}' is not in mandate scope. "
-                f"Allowed actions: {mandate.action_scope}"
-            )
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        # Validate resource scope
-        resource_in_scope = False
-        for allowed_resource in mandate.resource_scope:
-            if self._match_pattern(requested_resource, allowed_resource):
-                resource_in_scope = True
-                break
-        
-        if not resource_in_scope:
-            reason = (
-                f"Requested resource '{requested_resource}' is not in mandate scope. "
-                f"Allowed resources: {mandate.resource_scope}"
-            )
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
-        
-        # Validate delegation path (always graph-based)
-        path_valid = self.check_delegation_path(mandate)
-        if not path_valid:
-            reason = f"Delegation graph path is invalid for mandate {mandate.mandate_id}"
-            logger.warning(reason)
-            decision = AuthorityDecision(
-                allowed=False,
-                reason=reason,
-                mandate_id=mandate.mandate_id,
-                principal_id=mandate.subject_id,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            self._record_ledger_event(
-                event_type="denied",
-                principal_id=mandate.subject_id,
-                mandate_id=mandate.mandate_id,
-                decision="denied",
-                denial_reason=reason,
-                requested_action=requested_action,
-                requested_resource=requested_resource
-            )
-            return decision
         
         # All checks passed - allow the action
         reason = f"Mandate {mandate.mandate_id} is valid for action '{requested_action}' on resource '{requested_resource}'"
         logger.info(reason)
-        decision = AuthorityDecision(
-            allowed=True,
+        return self._allow_decision(
             reason=reason,
-            mandate_id=mandate.mandate_id,
-            principal_id=mandate.subject_id,
+            mandate=mandate,
             requested_action=requested_action,
-            requested_resource=requested_resource
+            requested_resource=requested_resource,
         )
-        self._record_ledger_event(
-            event_type="validated",
-            principal_id=mandate.subject_id,
-            mandate_id=mandate.mandate_id,
-            decision="allowed",
-            denial_reason=None,
-            requested_action=requested_action,
-            requested_resource=requested_resource
-        )
-        return decision
     
     def check_delegation_path(
         self,

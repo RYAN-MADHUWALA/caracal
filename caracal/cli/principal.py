@@ -16,7 +16,7 @@ from uuid import UUID
 
 import click
 
-from caracal.core.principal_keys import generate_and_store_principal_keypair
+from caracal.core.identity import PrincipalRegistry
 from caracal.db.connection import get_db_manager
 from caracal.db.models import Principal
 from caracal.exceptions import (
@@ -48,28 +48,28 @@ def _principal_to_dict(principal) -> dict:
     """Convert DB or legacy principal object to a consistent dict payload."""
     if hasattr(principal, "to_dict"):
         data = principal.to_dict()
-        data.setdefault("principal_type", getattr(principal, "principal_type", "agent"))
+        data.setdefault("principal_kind", getattr(principal, "principal_kind", "worker"))
         data.setdefault("metadata", getattr(principal, "metadata", {}) or {})
         return data
 
     return {
         "principal_id": str(principal.principal_id),
         "name": principal.name,
-        "principal_type": getattr(principal, "principal_type", "agent"),
+        "principal_kind": getattr(principal, "principal_kind", "worker"),
         "owner": principal.owner,
         "created_at": principal.created_at,
         "metadata": getattr(principal, "principal_metadata", {}) or {},
     }
 
 
-def _load_principals_from_db(config, principal_type: str = "all") -> list[dict]:
+def _load_principals_from_db(config, principal_kind: str = "all") -> list[dict]:
     """Load principals from PostgreSQL (primary source for Flow + CLI consistency)."""
     db_manager = get_db_manager(config)
     try:
         with db_manager.session_scope() as db_session:
             query = db_session.query(Principal)
-            if principal_type != "all":
-                query = query.filter_by(principal_type=principal_type)
+            if principal_kind != "all":
+                query = query.filter_by(principal_kind=principal_kind)
             rows = query.order_by(Principal.created_at.asc()).all()
             return [_principal_to_dict(row) for row in rows]
     finally:
@@ -94,10 +94,10 @@ def _get_principal_from_db(config, principal_id: str) -> Optional[dict]:
 @click.command('register')
 @click.option(
     "--type",
-    "principal_type",
-    type=click.Choice(["user", "agent", "service"]),
-    default="agent",
-    help="Type of principal (user, agent, service)",
+    "principal_kind",
+    type=click.Choice(["human", "orchestrator", "worker", "service"]),
+    default="worker",
+    help="Behavioral principal kind",
 )
 @click.option(
     '--name',
@@ -118,7 +118,7 @@ def _get_principal_from_db(config, principal_id: str) -> Optional[dict]:
     help='Metadata key=value pairs (can be specified multiple times)',
 )
 @click.pass_context
-def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
+def register(ctx, name: str, principal_kind: str, email: str, metadata: tuple):
     """
     Register a new AI principal with a unique identity.
     
@@ -152,35 +152,21 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
         db_manager = get_db_manager(cli_ctx.config)
         try:
             with db_manager.session_scope() as db_session:
-                existing = db_session.query(Principal).filter_by(name=name).first()
-                if existing:
-                    raise DuplicatePrincipalNameError(f"Principal with name '{name}' already exists")
-
-                principal_row = Principal(
+                registry = PrincipalRegistry(db_session)
+                identity = registry.register_principal(
                     name=name,
-                    principal_type=principal_type,
                     owner=email,
-                    created_at=datetime.utcnow(),
-                    principal_metadata=metadata_dict or None,
+                    principal_kind=principal_kind,
+                    metadata=metadata_dict or None,
                 )
-                db_session.add(principal_row)
-                db_session.flush()
-
-                keypair = generate_and_store_principal_keypair(principal_row.principal_id)
-                principal_row.public_key_pem = keypair.public_key_pem
-
-                merged_metadata = dict(principal_row.principal_metadata or {})
-                merged_metadata.update(keypair.storage.metadata)
-                principal_row.principal_metadata = merged_metadata
-
                 principal = {
-                    "principal_id": str(principal_row.principal_id),
-                    "name": principal_row.name,
-                    "principal_type": principal_row.principal_type,
-                    "owner": principal_row.owner,
-                    "created_at": principal_row.created_at.isoformat(),
-                    "metadata": principal_row.principal_metadata or {},
-                    "private_key_ref": keypair.storage.reference,
+                    "principal_id": identity.principal_id,
+                    "name": identity.name,
+                    "principal_kind": identity.principal_kind,
+                    "owner": identity.owner,
+                    "created_at": identity.created_at,
+                    "metadata": identity.metadata or {},
+                    "private_key_ref": (identity.metadata or {}).get("private_key_ref", ""),
                 }
         finally:
             db_manager.close()
@@ -190,7 +176,7 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
         click.echo()
         click.echo(f"Principal ID:    {principal['principal_id']}")
         click.echo(f"Name:        {principal['name']}")
-        click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
+        click.echo(f"Kind:        {principal.get('principal_kind', 'worker')}")
 
         click.echo(f"Email:       {principal['owner']}")
         click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
@@ -230,10 +216,10 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
 @click.command('list')
 @click.option(
     "--type",
-    "principal_type",
-    type=click.Choice(["all", "user", "agent", "service"]),
+    "principal_kind",
+    type=click.Choice(["all", "human", "orchestrator", "worker", "service"]),
     default="all",
-    help="Filter by principal type (default: all)",
+    help="Filter by principal kind (default: all)",
 )
 @click.option(
     '--format',
@@ -243,7 +229,7 @@ def register(ctx, name: str, principal_type: str, email: str, metadata: tuple):
     help='Output format (default: table)',
 )
 @click.pass_context
-def list_principals(ctx, principal_type: str, format: str):
+def list_principals(ctx, principal_kind: str, format: str):
     """
     List all registered principals.
     
@@ -259,7 +245,7 @@ def list_principals(ctx, principal_type: str, format: str):
         # Get CLI context
         cli_ctx = ctx.obj
         
-        principals = _load_principals_from_db(cli_ctx.config, principal_type=principal_type)
+        principals = _load_principals_from_db(cli_ctx.config, principal_kind=principal_kind)
         
         if not principals:
             click.echo("No principals registered.")
@@ -276,7 +262,7 @@ def list_principals(ctx, principal_type: str, format: str):
             max_id_len = max(len(str(principal["principal_id"])) for principal in principals)
             max_name_len = max(len(str(principal["name"])) for principal in principals)
             max_email_len = max(len(str(principal["owner"])) for principal in principals)
-            max_type_len = max(len(str(principal.get("principal_type", "agent"))) for principal in principals)
+            max_type_len = max(len(str(principal.get("principal_kind", "worker"))) for principal in principals)
             
             # Ensure minimum widths for headers
             id_width = max(max_id_len, len("Principal ID"))
@@ -285,7 +271,7 @@ def list_principals(ctx, principal_type: str, format: str):
             type_width = max(max_type_len, len("Type"))
             
             # Print header
-            header = f"{'Principal ID':<{id_width}}  {'Type':<{type_width}}  {'Name':<{name_width}}  {'Email':<{email_width}}  Created"
+            header = f"{'Principal ID':<{id_width}}  {'Kind':<{type_width}}  {'Name':<{name_width}}  {'Email':<{email_width}}  Created"
             click.echo(header)
             click.echo("-" * len(header))
             
@@ -295,7 +281,7 @@ def list_principals(ctx, principal_type: str, format: str):
                 created = _format_created(principal.get("created_at"))
                 click.echo(
                     f"{str(principal['principal_id']):<{id_width}}  "
-                    f"{str(principal.get('principal_type', 'agent')):<{type_width}}  "
+                    f"{str(principal.get('principal_kind', 'worker')):<{type_width}}  "
                     f"{str(principal['name']):<{name_width}}  "
                     f"{str(principal['owner']):<{email_width}}  "
                     f"{created}"
@@ -318,10 +304,10 @@ def list_principals(ctx, principal_type: str, format: str):
 )
 @click.option(
     "--type",
-    "principal_type",
-    type=click.Choice(["user", "agent", "service"]),
-    default="agent",
-    help="Type of principal (user, agent, service)",
+    "principal_kind",
+    type=click.Choice(["human", "orchestrator", "worker", "service"]),
+    default="worker",
+    help="Behavioral principal kind",
 )
 @click.option(
     '--format',
@@ -331,7 +317,7 @@ def list_principals(ctx, principal_type: str, format: str):
     help='Output format (default: table)',
 )
 @click.pass_context
-def get(ctx, principal_id: str, principal_type: str, format: str):
+def get(ctx, principal_id: str, principal_kind: str, format: str):
     """
     Get details for a specific principal.
     
@@ -361,7 +347,7 @@ def get(ctx, principal_id: str, principal_type: str, format: str):
             click.echo("=" * 50)
             click.echo(f"Principal ID:    {principal['principal_id']}")
             click.echo(f"Name:        {principal['name']}")
-            click.echo(f"Type:        {principal.get('principal_type', 'agent')}")
+            click.echo(f"Kind:        {principal.get('principal_kind', 'worker')}")
 
             click.echo(f"Email:       {principal['owner']}")
             click.echo(f"Created:     {_format_created(principal.get('created_at'))}")
