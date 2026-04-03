@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from caracal.core.identity import AgentIdentity
+from caracal.core.identity import PrincipalIdentity
 from caracal.core.audit import AuditReference
 
 
@@ -29,7 +29,7 @@ class AuthorityMetadata:
         signature: Optional cryptographic signature
     """
     version: str = "1.0.0"
-    principal_identity: Optional[AgentIdentity] = None
+    principal_identity: Optional[PrincipalIdentity] = None
     mandate_id: Optional[str] = None
     audit_reference: Optional[AuditReference] = None
     delegation_token: Optional[str] = None
@@ -74,7 +74,7 @@ class AuthorityMetadata:
         # Parse nested objects
         principal_identity = None
         if data.get("principal_identity"):
-            principal_identity = AgentIdentity.from_dict(data["principal_identity"])
+            principal_identity = PrincipalIdentity.from_dict(data["principal_identity"])
         
         audit_reference = None
         if data.get("audit_reference"):

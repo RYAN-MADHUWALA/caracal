@@ -58,3 +58,103 @@ def test_register_principal_accepts_explicit_principal_id() -> None:
     assert identity.principal_id == str(explicit_id)
     assert identity.public_key == "pub-key"
     assert identity.metadata.get("private_key_ref") == "/tmp/key.pem"
+
+
+@pytest.mark.unit
+def test_ensure_signing_keys_generates_when_missing() -> None:
+    session = Mock()
+    principal_id = uuid4()
+    row = SimpleNamespace(
+        principal_id=principal_id,
+        principal_kind="worker",
+        name="agent-a",
+        owner="tenant-a",
+        created_at=datetime.utcnow(),
+        principal_metadata={"source": "test"},
+        public_key_pem=None,
+        source_principal_id=None,
+        lifecycle_status="active",
+        attestation_status="unattested",
+    )
+
+    lookup = Mock()
+    lookup.filter_by.return_value.first.return_value = row
+    session.query.return_value = lookup
+    session.flush.side_effect = lambda: None
+    session.commit.side_effect = lambda: None
+
+    from caracal.core import identity as identity_module
+
+    original_has_custody = identity_module.principal_has_key_custody
+    original_generate = identity_module.generate_and_store_principal_keypair
+    identity_module.principal_has_key_custody = Mock(return_value=False)
+    identity_module.generate_and_store_principal_keypair = Mock(
+        return_value=SimpleNamespace(
+            public_key_pem="rotated-pub",
+            storage=SimpleNamespace(metadata={"private_key_ref": "/tmp/new-key.pem"}),
+        )
+    )
+    try:
+        registry = PrincipalRegistry(session)
+        identity = registry.ensure_signing_keys(str(principal_id))
+    finally:
+        identity_module.principal_has_key_custody = original_has_custody
+        identity_module.generate_and_store_principal_keypair = original_generate
+
+    assert row.public_key_pem == "rotated-pub"
+    assert row.principal_metadata.get("private_key_ref") == "/tmp/new-key.pem"
+    assert identity.public_key == "rotated-pub"
+    session.commit.assert_called()
+
+
+@pytest.mark.unit
+def test_rotate_signing_keys_tracks_history_and_updates_metadata() -> None:
+    session = Mock()
+    principal_id = uuid4()
+    row = SimpleNamespace(
+        principal_id=principal_id,
+        principal_kind="human",
+        name="user-a",
+        owner="tenant-a",
+        created_at=datetime.utcnow(),
+        principal_metadata={"source": "test"},
+        public_key_pem="old-pub",
+        source_principal_id=None,
+        lifecycle_status="active",
+        attestation_status="unattested",
+    )
+
+    lookup = Mock()
+    lookup.filter_by.return_value.first.return_value = row
+    session.query.return_value = lookup
+    session.flush.side_effect = lambda: None
+    session.commit.side_effect = lambda: None
+
+    from caracal.core import identity as identity_module
+
+    original_generate = identity_module.generate_and_store_principal_keypair
+    identity_module.generate_and_store_principal_keypair = Mock(
+        return_value=SimpleNamespace(
+            public_key_pem="new-pub",
+            storage=SimpleNamespace(metadata={"private_key_ref": "/tmp/rotated-key.pem"}),
+        )
+    )
+    try:
+        registry = PrincipalRegistry(session)
+        identity = registry.rotate_signing_keys(
+            str(principal_id),
+            reason="Compromised credential",
+            rotated_by="admin-1",
+        )
+    finally:
+        identity_module.generate_and_store_principal_keypair = original_generate
+
+    history = row.principal_metadata.get("key_rotation_history")
+    assert isinstance(history, list)
+    assert history[-1]["old_public_key"] == "old-pub"
+    assert history[-1]["reason"] == "Compromised credential"
+    assert row.principal_metadata.get("private_key_ref") == "/tmp/rotated-key.pem"
+    assert row.principal_metadata.get("key_rotated_by") == "admin-1"
+    assert row.public_key_pem == "new-pub"
+    assert identity.public_key == "new-pub"
+    session.commit.assert_called()
