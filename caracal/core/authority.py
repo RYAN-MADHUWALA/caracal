@@ -233,12 +233,7 @@ class AuthorityEvaluator:
         """
         if current_time is None:
             current_time = datetime.utcnow()
-        
-        logger.info(
-            f"Validating mandate {mandate.mandate_id} for action={requested_action}, "
-            f"resource={requested_resource}"
-        )
-        
+
         # Fail-closed: If mandate is None, deny
         if mandate is None:
             reason = "No mandate provided"
@@ -259,6 +254,11 @@ class AuthorityEvaluator:
                 requested_resource=requested_resource
             )
             return decision
+
+        logger.info(
+            f"Validating mandate {mandate.mandate_id} for action={requested_action}, "
+            f"resource={requested_resource}"
+        )
         
         # Check revocation status first (fail fast)
         if mandate.revoked:
