@@ -113,13 +113,6 @@ class TestPrincipalRegistry:
         self.mock_session.flush = Mock()
         self.mock_session.commit = Mock()
         
-        # Mock the flush to set principal_id
-        def set_principal_id(*args):
-            if hasattr(args[0], 'principal_id'):
-                args[0].principal_id = principal_id
-        
-        self.mock_session.flush.side_effect = set_principal_id
-        
         with patch('caracal.core.identity.generate_and_store_principal_keypair') as mock_gen:
             mock_gen.return_value = Mock(
                 public_key_pem="test_public_key",

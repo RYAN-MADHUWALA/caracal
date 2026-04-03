@@ -29,6 +29,24 @@ from caracal.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _get_cli_config(cli_ctx):
+    """Extract the loaded config object from Click context for runtime and tests."""
+    if cli_ctx is None:
+        raise ValueError("CLI context is missing")
+
+    if hasattr(cli_ctx, "config"):
+        return cli_ctx.config
+
+    if isinstance(cli_ctx, dict):
+        return cli_ctx.get("config")
+
+    getter = getattr(cli_ctx, "get", None)
+    if callable(getter):
+        return getter("config")
+
+    raise ValueError("CLI context does not provide a configuration object")
+
+
 def get_mandate_manager(config):
     """
     Create MandateManager instance from configuration.
@@ -192,6 +210,7 @@ def issue(
     try:
         # Get CLI context
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse UUIDs
         try:
@@ -225,7 +244,7 @@ def issue(
         )
         
         # Create mandate manager
-        mandate_manager, db_manager = get_mandate_manager(cli_ctx.config)
+        mandate_manager, db_manager = get_mandate_manager(config)
         
         try:
             # Issue mandate
@@ -357,6 +376,7 @@ def validate(
     try:
         # Get CLI context
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse UUID
         try:
@@ -374,7 +394,7 @@ def validate(
         )
         
         # Create authority evaluator
-        evaluator, db_manager = get_authority_evaluator(cli_ctx.config)
+        evaluator, db_manager = get_authority_evaluator(config)
         
         try:
             # Get mandate from database
@@ -393,6 +413,7 @@ def validate(
                 requested_action=action,
                 requested_resource=resource
             )
+            decision_label = 'allowed' if decision.allowed else 'denied'
             
             # Commit transaction (to record ledger event)
             db_manager.get_session().commit()
@@ -401,7 +422,7 @@ def validate(
                 # JSON output
                 output = {
                     'mandate_id': str(mandate.mandate_id),
-                    'decision': decision.decision,
+                    'decision': decision_label,
                     'allowed': decision.allowed,
                     'reason': decision.reason,
                     'requested_action': action,
@@ -418,7 +439,7 @@ def validate(
                 
                 click.echo()
                 click.echo(f"Mandate ID:  {mandate.mandate_id}")
-                click.echo(f"Decision:    {decision.decision}")
+                click.echo(f"Decision:    {decision_label.upper()}")
                 click.echo(f"Action:      {action}")
                 click.echo(f"Resource:    {resource}")
                 
@@ -506,6 +527,7 @@ def revoke(
     try:
         # Get CLI context
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse UUIDs
         try:
@@ -516,7 +538,7 @@ def revoke(
             sys.exit(1)
         
         # Create mandate manager
-        mandate_manager, db_manager = get_mandate_manager(cli_ctx.config)
+        mandate_manager, db_manager = get_mandate_manager(config)
         
         try:
             # Revoke mandate
@@ -615,6 +637,7 @@ def list_mandates(
     try:
         # Get CLI context
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse principal ID if provided
         principal_uuid = None
@@ -629,7 +652,7 @@ def list_mandates(
         from caracal.db.connection import get_db_manager
         from caracal.db.models import ExecutionMandate
         
-        db_manager = get_db_manager(cli_ctx.config)
+        db_manager = get_db_manager(config)
         
         try:
             # Query mandates
@@ -820,6 +843,7 @@ def delegate(
     try:
         # Get CLI context
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse UUIDs
         try:
@@ -850,7 +874,7 @@ def delegate(
         )
         
         # Create mandate manager
-        mandate_manager, db_manager = get_mandate_manager(cli_ctx.config)
+        mandate_manager, db_manager = get_mandate_manager(config)
         
         try:
             # Delegate mandate
@@ -947,6 +971,7 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
     """
     try:
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         # Parse root mandate ID if provided
         root_uuid = None
@@ -960,7 +985,7 @@ def graph(ctx, root_mandate_id: Optional[str], format: str):
         from caracal.db.connection import get_db_manager
         from caracal.core.delegation_graph import DelegationGraph
         
-        db_manager = get_db_manager(cli_ctx.config)
+        db_manager = get_db_manager(config)
         
         try:
             session = db_manager.get_session()
@@ -1141,6 +1166,7 @@ def peer_delegate_cmd(
     """
     try:
         cli_ctx = ctx.obj
+        config = _get_cli_config(cli_ctx)
         
         try:
             source_uuid = UUID(source_mandate_id)
@@ -1165,7 +1191,7 @@ def peer_delegate_cmd(
             providers=providers or None,
         )
         
-        mandate_manager, db_manager = get_mandate_manager(cli_ctx.config)
+        mandate_manager, db_manager = get_mandate_manager(config)
         
         try:
             peer_mandate = mandate_manager.peer_delegate(
