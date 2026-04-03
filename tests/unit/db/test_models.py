@@ -35,7 +35,7 @@ class TestPrincipalModel:
         principal = Principal(
             principal_id=uuid4(),
             name="test-agent",
-            principal_type="agent",
+            principal_kind="worker",
             owner="test-owner",
             public_key_pem="test-public-key",
             principal_metadata={"env": "test"}
@@ -43,7 +43,7 @@ class TestPrincipalModel:
         
         # Assert
         assert principal.name == "test-agent"
-        assert principal.principal_type == "agent"
+        assert principal.principal_kind == "worker"
         assert principal.owner == "test-owner"
         assert principal.public_key_pem == "test-public-key"
         assert principal.principal_metadata["env"] == "test"
@@ -55,7 +55,7 @@ class TestPrincipalModel:
         principal = Principal(
             principal_id=principal_id,
             name="test-agent",
-            principal_type="agent",
+            principal_kind="worker",
             owner="test-owner"
         )
         
@@ -66,7 +66,7 @@ class TestPrincipalModel:
         assert "Principal" in repr_str
         assert str(principal_id) in repr_str
         assert "test-agent" in repr_str
-        assert "agent" in repr_str
+        assert "worker" in repr_str
 
 
 @pytest.mark.unit
