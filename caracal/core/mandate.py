@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from caracal.core.crypto import sign_mandate
 from caracal.core.intent import Intent
+from caracal.core.principal_keys import PrincipalKeyStorageError, resolve_principal_private_key
 from caracal.db.models import ExecutionMandate, AuthorityPolicy, Principal
 from caracal.logging_config import get_logger
 
@@ -211,6 +212,7 @@ class MandateManager:
         validity_seconds: int,
         intent: Optional[Intent] = None,
         delegation_type: str = "directed",
+        source_mandate_id: Optional[UUID] = None,
         network_distance: Optional[int] = None,
         enforce_issuer_policy: bool = True,
         context_tags: Optional[List[str]] = None,
@@ -231,6 +233,7 @@ class MandateManager:
             validity_seconds: How long the mandate is valid (in seconds)
             intent: Optional intent to bind the mandate to
             delegation_type: Type of delegation (directed/peer)
+            source_mandate_id: Optional parent mandate ID for delegated mandates
             network_distance: How many additional delegation hops are allowed
             enforce_issuer_policy: Whether to validate against issuer authority policy
             context_tags: Context tags for dynamic authority filtering
@@ -362,11 +365,18 @@ class MandateManager:
             error_msg = f"Issuer principal {issuer_id} not found"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
-        
-        if not issuer_principal.private_key_pem:
-            error_msg = f"Issuer principal {issuer_id} has no private key"
+
+        try:
+            issuer_private_key = resolve_principal_private_key(
+                principal_id=issuer_principal.principal_id,
+                principal_metadata=issuer_principal.principal_metadata,
+            )
+        except PrincipalKeyStorageError as exc:
+            error_msg = (
+                f"Issuer principal {issuer_id} has no resolvable private key metadata"
+            )
             logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from exc
         
         # Create mandate data for signing
         mandate_data = {
@@ -383,7 +393,7 @@ class MandateManager:
         
         # Sign mandate with issuer's private key
         try:
-            signature = sign_mandate(mandate_data, issuer_principal.private_key_pem)
+            signature = sign_mandate(mandate_data, issuer_private_key)
         except Exception as e:
             error_msg = f"Failed to sign mandate: {e}"
             logger.error(error_msg, exc_info=True)
@@ -408,6 +418,7 @@ class MandateManager:
             delegation_type=delegation_type,
             context_tags=context_tags,
             intent_hash=intent_hash,
+            source_mandate_id=source_mandate_id,
             network_distance=resolved_network_distance,
         )
         
@@ -667,6 +678,7 @@ class MandateManager:
                 validity_seconds=validity_seconds,
                 intent=None,
                 delegation_type=delegation_type,
+                source_mandate_id=source_mandate_id,
                 network_distance=delegated_depth,
                 enforce_issuer_policy=False,
                 context_tags=context_tags,
