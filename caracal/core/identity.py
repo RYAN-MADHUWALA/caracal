@@ -273,6 +273,64 @@ class PrincipalRegistry:
         rows = self.session.query(Principal).order_by(Principal.created_at.asc()).all()
         return [self._to_identity(row) for row in rows]
 
+    def ensure_signing_keys(self, principal_id: str) -> PrincipalIdentity:
+        """Ensure a principal has custody-backed ES256 key material."""
+        principal = self._get_row(principal_id)
+        principal_metadata = dict(principal.principal_metadata or {})
+
+        if principal.public_key_pem and principal_has_key_custody(principal.principal_id, self.session):
+            return self._to_identity(principal)
+
+        generated = generate_and_store_principal_keypair(
+            principal.principal_id,
+            db_session=self.session,
+        )
+        principal.public_key_pem = generated.public_key_pem
+        principal_metadata.update(generated.storage.metadata)
+        principal.principal_metadata = principal_metadata
+        self.session.flush()
+        self.session.commit()
+        return self._to_identity(principal)
+
+    def rotate_signing_keys(
+        self,
+        principal_id: str,
+        reason: str = "Key rotation",
+        rotated_by: Optional[str] = None,
+    ) -> PrincipalIdentity:
+        """Rotate custody-backed signing keys for a principal."""
+        principal = self._get_row(principal_id)
+        principal_metadata = dict(principal.principal_metadata or {})
+
+        rotation_history = principal_metadata.get("key_rotation_history")
+        if not isinstance(rotation_history, list):
+            rotation_history = []
+
+        rotation_history.append(
+            {
+                "rotated_at": datetime.utcnow().isoformat(),
+                "old_public_key": principal.public_key_pem,
+                "reason": reason,
+            }
+        )
+        principal_metadata["key_rotation_history"] = rotation_history
+
+        generated = generate_and_store_principal_keypair(
+            principal.principal_id,
+            db_session=self.session,
+        )
+        principal.public_key_pem = generated.public_key_pem
+        principal_metadata.update(generated.storage.metadata)
+        principal_metadata["key_rotation_reason"] = reason
+        principal_metadata["key_rotated_at"] = datetime.utcnow().isoformat() + "Z"
+        if rotated_by:
+            principal_metadata["key_rotated_by"] = str(rotated_by)
+        principal.principal_metadata = principal_metadata
+
+        self.session.flush()
+        self.session.commit()
+        return self._to_identity(principal)
+
     def generate_delegation_token(
         self,
         source_principal_id: str,
@@ -341,7 +399,3 @@ class PrincipalRegistry:
             principal_metadata=row.principal_metadata,
         )
 
-
-# Backward-compatible aliases
-AgentRegistry = PrincipalRegistry
-AgentIdentity = PrincipalIdentity
