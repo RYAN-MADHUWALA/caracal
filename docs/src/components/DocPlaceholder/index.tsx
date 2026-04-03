@@ -24,7 +24,7 @@ export default function DocPlaceholder({
   return (
     <div className="caracal-placeholder">
       <div className="caracal-placeholder__notice">
-        Structure is locked for this page. Full documentation content is intentionally deferred until approval.
+        This page defines the topic map and related entry points for this section.
       </div>
 
       <p className="caracal-placeholder__summary">{summary}</p>
@@ -44,13 +44,13 @@ export default function DocPlaceholder({
               ))}
             </ul>
           ) : (
-            <p>None defined yet.</p>
+            <p>No prerequisites are listed for this topic.</p>
           )}
         </section>
 
         <section className="caracal-placeholder__panel">
           <h2>Quick Start / Overview</h2>
-          <p>This section will open with the shortest successful path for the intended audience.</p>
+          <p>This section is where the main entry path for the topic is organized.</p>
         </section>
 
         <section className="caracal-placeholder__panel">
@@ -62,23 +62,23 @@ export default function DocPlaceholder({
               ))}
             </ul>
           ) : (
-            <p>Detailed topics will be added in the content phase.</p>
+            <p>This section collects the core concepts and behaviors for the topic.</p>
           )}
         </section>
 
         <section className="caracal-placeholder__panel">
           <h2>Examples</h2>
-          <p>Copy-pastable examples will be added only after the structure and writing standards are approved.</p>
+          <p>Examples, sample flows, and concrete usage patterns belong in this section.</p>
         </section>
 
         <section className="caracal-placeholder__panel">
           <h2>Edge Cases</h2>
-          <p>Failure modes, limits, and surprising behaviors will be captured here during the content phase.</p>
+          <p>Failure modes, limits, and operational edge cases belong in this section.</p>
         </section>
 
         <section className="caracal-placeholder__panel">
           <h2>Troubleshooting</h2>
-          <p>Diagnostic checks, expected outputs, and escalation paths will be added here.</p>
+          <p>Diagnostic checks, expected outputs, and escalation guidance belong in this section.</p>
         </section>
 
         <section className="caracal-placeholder__panel">
@@ -92,7 +92,7 @@ export default function DocPlaceholder({
               ))}
             </ul>
           ) : (
-            <p>Cross-links will be added with the page content.</p>
+            <p>Related pages appear here when adjacent topics are available.</p>
           )}
         </section>
       </div>
