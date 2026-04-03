@@ -28,7 +28,7 @@ from caracal.exceptions import (
     TokenExpiredError,
     TokenValidationError,
 )
-from caracal.core.principal_keys import PrincipalKeyStorageError, resolve_principal_private_key
+from caracal.core.principal_keys import PrincipalKeyStorageError
 from caracal.core.error_handling import (
     get_error_handler,
     ErrorCategory,
@@ -170,12 +170,11 @@ class DelegationTokenManager:
                 f"Source principal with ID '{source_principal_id}' does not exist"
             )
         
-        # Resolve source private key through the principal key storage abstraction.
+        # Resolve source private key through the registry custody abstraction.
         try:
-            private_key_pem = resolve_principal_private_key(
-                principal_id=source_principal_id,
-                principal_metadata=source_principal.metadata,
-            )
+            if not hasattr(self.principal_registry, "resolve_private_key"):
+                raise PrincipalKeyStorageError("Principal registry does not implement resolve_private_key")
+            private_key_pem = self.principal_registry.resolve_private_key(str(source_principal_id))
         except PrincipalKeyStorageError as exc:
             logger.error("Source principal %s private key resolution failed: %s", source_principal_id, exc)
             raise InvalidDelegationTokenError(

@@ -369,6 +369,7 @@ class MandateManager:
         try:
             issuer_private_key = resolve_principal_private_key(
                 principal_id=issuer_principal.principal_id,
+                db_session=self.db_session,
                 principal_metadata=issuer_principal.principal_metadata,
             )
         except PrincipalKeyStorageError as exc:
@@ -639,7 +640,7 @@ class MandateManager:
             if validity_seconds <= 0:
                 raise ValueError("Source mandate is practically expired, cannot delegate")
         
-        # Get principal types for direction validation
+        # Get principal kinds for direction validation
         source_principal = self._get_principal(source_mandate.subject_id)
         target_principal = self._get_principal(target_subject_id)
         
@@ -650,8 +651,8 @@ class MandateManager:
         
         # Validate delegation direction
         DelegationGraph.validate_delegation_direction(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
 
         source_depth = int(source_mandate.network_distance or 0)
@@ -664,8 +665,8 @@ class MandateManager:
         
         # Determine delegation type
         delegation_type = DelegationGraph.get_delegation_type(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
         
         # Issue the delegated mandate
@@ -696,7 +697,7 @@ class MandateManager:
             logger.info(
                 f"Successfully delegated mandate {delegated_mandate.mandate_id} "
                 f"from source {source_mandate_id} to subject {target_subject_id} "
-                f"[{source_principal.principal_type}→{target_principal.principal_type}]"
+                f"[{source_principal.principal_kind}→{target_principal.principal_kind}]"
             )
             
             return delegated_mandate
@@ -750,7 +751,7 @@ class MandateManager:
         if not source_mandate:
             raise ValueError(f"Source mandate {source_mandate_id} not found")
         
-        # Get principal types
+        # Get principal kinds
         source_principal = self._get_principal(source_mandate.subject_id)
         target_principal = self._get_principal(target_subject_id)
         
@@ -759,17 +760,17 @@ class MandateManager:
         if not target_principal:
             raise ValueError(f"Target principal {target_subject_id} not found")
         
-        # Peer delegation requires same principal type
-        if source_principal.principal_type != target_principal.principal_type:
+        # Peer delegation requires same principal kind
+        if source_principal.principal_kind != target_principal.principal_kind:
             raise ValueError(
-                f"Peer delegation requires same principal types. "
-                f"Got {source_principal.principal_type} → {target_principal.principal_type}"
+                f"Peer delegation requires same principal kinds. "
+                f"Got {source_principal.principal_kind} → {target_principal.principal_kind}"
             )
         
         # Validate direction (same type peer must be allowed)
         DelegationGraph.validate_delegation_direction(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
         
         # Delegate using the standard flow (will set type='peer' automatically)
