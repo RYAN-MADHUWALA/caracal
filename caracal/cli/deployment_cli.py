@@ -413,7 +413,7 @@ def workspace_switch(name: str):
             console.print(f"[red]Error:[/red] Workspace not found: {name}")
             sys.exit(1)
 
-        # Set as default workspace (also syncs workspaces.json default).
+        # Set as default workspace.
         config_manager.set_default_workspace(name)
         
         console.print(f"[green]✓[/green] Switched to workspace: {name}")
@@ -1143,9 +1143,10 @@ def provider_add(
         gateway_url = (
             edition_manager.get_gateway_url()
             or os.environ.get("CARACAL_ENTERPRISE_URL")
+            or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
             or os.environ.get("CARACAL_GATEWAY_URL")
         )
-        if edition_manager.is_enterprise() and gateway_url:
+        if edition_manager.is_enterprise():
             raise click.ClickException(
                 "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
             )
@@ -1228,61 +1229,40 @@ def provider_list(workspace: Optional[str], format: str):
             gateway_url = (
                 edition_manager.get_gateway_url()
                 or os.environ.get("CARACAL_ENTERPRISE_URL")
+                or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
                 or os.environ.get("CARACAL_GATEWAY_URL")
             )
-            if gateway_url:
-                gateway_client = GatewayClient(
-                    gateway_url=gateway_url,
-                    config_manager=config_manager,
-                    workspace=workspace,
+            if not gateway_url:
+                raise click.ClickException(
+                    "Enterprise edition requires gateway URL configuration. "
+                    "Local broker fallback is not allowed in hard-cut mode."
                 )
-                try:
-                    providers = asyncio.run(gateway_client.get_available_providers())
-                finally:
-                    asyncio.run(gateway_client.close())
 
-                providers_data = [
-                    {
-                        "name": provider.name,
-                        "service_type": provider.service_type,
-                        "auth_scheme": provider.auth_scheme,
-                        "base_url": provider.metadata.get("base_url") if isinstance(provider.metadata, dict) else None,
-                        "version": provider.version,
-                        "status": provider.status,
-                        "tags": provider.tags,
-                        "provider_definition": provider.provider_definition,
-                        "resources": provider.resources,
-                        "actions": provider.actions,
-                    }
-                    for provider in providers
-                ]
-            else:
-                logger.warning(
-                    "provider_list_gateway_url_missing_fallback",
-                    workspace=workspace,
-                )
-                console.print(
-                    "[yellow]Warning:[/yellow] Enterprise edition is active but gateway URL is not configured; "
-                    "showing local provider registry."
-                )
-                broker, registry = _build_oss_broker(config_manager, workspace)
-                providers = broker.list_providers()
-                for provider in providers:
-                    stored = registry.get(provider.name, {})
-                    providers_data.append(
-                        {
-                            "name": provider.name,
-                            "service_type": provider.service_type,
-                            "auth_scheme": provider.auth_scheme,
-                            "base_url": provider.base_url,
-                            "version": provider.version,
-                            "status": provider.status,
-                            "tags": stored.get("tags", []),
-                            "provider_definition": stored.get("provider_definition"),
-                            "resources": stored.get("resources", []),
-                            "actions": stored.get("actions", []),
-                        }
-                    )
+            gateway_client = GatewayClient(
+                gateway_url=gateway_url,
+                config_manager=config_manager,
+                workspace=workspace,
+            )
+            try:
+                providers = asyncio.run(gateway_client.get_available_providers())
+            finally:
+                asyncio.run(gateway_client.close())
+
+            providers_data = [
+                {
+                    "name": provider.name,
+                    "service_type": provider.service_type,
+                    "auth_scheme": provider.auth_scheme,
+                    "base_url": provider.metadata.get("base_url") if isinstance(provider.metadata, dict) else None,
+                    "version": provider.version,
+                    "status": provider.status,
+                    "tags": provider.tags,
+                    "provider_definition": provider.provider_definition,
+                    "resources": provider.resources,
+                    "actions": provider.actions,
+                }
+                for provider in providers
+            ]
         else:
             broker, registry = _build_oss_broker(config_manager, workspace)
             providers = broker.list_providers()
@@ -1360,46 +1340,35 @@ def provider_test(name: str, workspace: Optional[str]):
                 gateway_url = (
                     edition_manager.get_gateway_url()
                     or os.environ.get("CARACAL_ENTERPRISE_URL")
+                    or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
                     or os.environ.get("CARACAL_GATEWAY_URL")
                 )
-                if gateway_url:
-                    gateway_client = GatewayClient(
-                        gateway_url=gateway_url,
-                        config_manager=config_manager,
-                        workspace=workspace,
+                if not gateway_url:
+                    raise click.ClickException(
+                        "Enterprise edition requires gateway URL configuration. "
+                        "Local broker fallback is not allowed in hard-cut mode."
                     )
-                    try:
-                        gateway_health = asyncio.run(gateway_client.check_connection())
-                        providers = asyncio.run(gateway_client.get_available_providers())
-                    finally:
-                        asyncio.run(gateway_client.close())
 
-                    selected = next((p for p in providers if p.name == name), None)
-                    is_healthy = bool(gateway_health.healthy and selected and selected.available)
-                    error_message = None
-                    if not gateway_health.healthy:
-                        error_message = gateway_health.error
-                    elif not selected:
-                        error_message = "Provider not found in gateway registry"
-                    elif not selected.available:
-                        error_message = "Provider is currently unavailable"
-                else:
-                    logger.warning(
-                        "provider_test_gateway_url_missing_fallback",
-                        workspace=workspace,
-                    )
-                    console.print(
-                        "[yellow]Warning:[/yellow] Enterprise edition is active but gateway URL is not configured; "
-                        "testing against local provider registry."
-                    )
-                    broker, _ = _build_oss_broker(config_manager, workspace)
-                    try:
-                        health = asyncio.run(broker.test_provider(name))
-                    finally:
-                        asyncio.run(broker.close())
+                gateway_client = GatewayClient(
+                    gateway_url=gateway_url,
+                    config_manager=config_manager,
+                    workspace=workspace,
+                )
+                try:
+                    gateway_health = asyncio.run(gateway_client.check_connection())
+                    providers = asyncio.run(gateway_client.get_available_providers())
+                finally:
+                    asyncio.run(gateway_client.close())
 
-                    is_healthy = health.is_healthy
-                    error_message = health.error_message
+                selected = next((p for p in providers if p.name == name), None)
+                is_healthy = bool(gateway_health.healthy and selected and selected.available)
+                error_message = None
+                if not gateway_health.healthy:
+                    error_message = gateway_health.error
+                elif not selected:
+                    error_message = "Provider not found in gateway registry"
+                elif not selected.available:
+                    error_message = "Provider is currently unavailable"
             else:
                 broker, _ = _build_oss_broker(config_manager, workspace)
                 try:
