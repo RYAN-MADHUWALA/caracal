@@ -1,8 +1,13 @@
+import { searchIndexUrl } from "@generated/@easyops-cn/docusaurus-search-local/default/generated-constants";
+
 export type SearchDocEntry = {
   title: string;
   url: string;
   breadcrumbs: string[];
-  type: "doc";
+  description: string;
+  searchText: string;
+  parentTitle?: string;
+  type: "page" | "heading" | "section";
 };
 
 export type NavigationAction = {
@@ -60,8 +65,54 @@ const navigationActions: NavigationAction[] = [
 
 let searchDocsPromise: Promise<SearchDocEntry[]> | null = null;
 
+type RawSearchDocument = {
+  i?: number;
+  t?: string;
+  u?: string;
+  b?: string[];
+  s?: string;
+  h?: string;
+  p?: number;
+};
+
 function normalize(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function dedupeStrings(values: Array<string | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function summarize(text: string, limit = 140): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return "";
+  }
+
+  if (compact.length <= limit) {
+    return compact;
+  }
+
+  return `${compact.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function buildDescription(entry: SearchDocEntry): string {
+  if (entry.type === "page") {
+    return entry.breadcrumbs.join(" / ") || "Documentation";
+  }
+
+  const location = dedupeStrings([entry.breadcrumbs.join(" / "), entry.parentTitle]).join(" / ");
+  if (entry.type === "heading") {
+    return location || "Documentation";
+  }
+
+  return dedupeStrings([location, entry.description]).join(" • ");
 }
 
 function includesAllTerms(haystack: string, query: string): boolean {
@@ -101,41 +152,110 @@ function scoreMatch(parts: string[], query: string): number {
 
 export async function loadSearchDocs(baseUrl: string): Promise<SearchDocEntry[]> {
   if (!searchDocsPromise) {
-    searchDocsPromise = fetch(`${baseUrl}search-index.json`)
+    const resolvedSearchIndexUrl = `${baseUrl}${searchIndexUrl.replace("{dir}", "").replace(/^\//, "")}`;
+
+    searchDocsPromise = fetch(resolvedSearchIndexUrl)
       .then((response) => response.json())
-      .then((payload: Array<{ documents?: Array<Record<string, unknown>> }>) => {
-        const map = new Map<string, SearchDocEntry>();
+      .then((payload: Array<{ documents?: RawSearchDocument[] }>) => {
+        const rawDocuments = payload.flatMap((group) => group.documents ?? []);
+        const pageEntries = new Map<number, SearchDocEntry>();
+        const searchEntries = new Map<string, SearchDocEntry>();
 
-        payload.forEach((group) => {
-          (group.documents ?? []).forEach((entry) => {
-            if ("h" in entry) {
-              return;
-            }
+        rawDocuments.forEach((entry) => {
+          const id = typeof entry.i === "number" ? entry.i : null;
+          const title = typeof entry.t === "string" ? entry.t : null;
+          const url = typeof entry.u === "string" ? entry.u : null;
+          const breadcrumbs = Array.isArray(entry.b)
+            ? entry.b.filter((item): item is string => typeof item === "string")
+            : [];
 
-            const title = typeof entry.t === "string" ? entry.t : null;
-            const url = typeof entry.u === "string" ? entry.u : null;
+          if (id === null || !title || !url || "p" in entry || "h" in entry) {
+            return;
+          }
 
-            if (!title || !url) {
-              return;
-            }
-
-            const breadcrumbs = Array.isArray(entry.b)
-              ? entry.b.filter((item): item is string => typeof item === "string")
-              : [];
-
-            const key = `${url}::${title}`;
-            if (!map.has(key)) {
-              map.set(key, {
-                title,
-                url,
-                breadcrumbs,
-                type: "doc",
-              });
-            }
+          pageEntries.set(id, {
+            title,
+            url,
+            breadcrumbs,
+            description: breadcrumbs.join(" / ") || "Documentation",
+            searchText: [title, ...breadcrumbs, url].join(" "),
+            type: "page",
           });
         });
 
-        return Array.from(map.values());
+        rawDocuments.forEach((entry) => {
+          const url = typeof entry.u === "string" ? entry.u : null;
+          const text = typeof entry.t === "string" ? entry.t : "";
+          const parent =
+            typeof entry.p === "number" ? pageEntries.get(entry.p) : undefined;
+          const hash = typeof entry.h === "string" ? entry.h : "";
+
+          if (!url) {
+            return;
+          }
+
+          if (!hash) {
+            if (parent && text) {
+              parent.searchText = `${parent.searchText} ${text}`.trim();
+              if (parent.description === "Documentation") {
+                parent.description = summarize(text);
+              }
+            }
+            return;
+          }
+
+          const resolvedUrl = `${url}${hash}`;
+          const locationBreadcrumbs = parent?.breadcrumbs ?? [];
+          const parentTitle = parent?.title;
+
+          if (typeof entry.s === "string" && entry.s.trim()) {
+            const sectionEntry: SearchDocEntry = {
+              title: entry.s,
+              url: resolvedUrl,
+              breadcrumbs: locationBreadcrumbs,
+              description: summarize(text),
+              searchText: [entry.s, text, parentTitle, ...locationBreadcrumbs, resolvedUrl]
+                .filter(Boolean)
+                .join(" "),
+              parentTitle,
+              type: "section",
+            };
+
+            searchEntries.set(
+              `${sectionEntry.type}::${sectionEntry.url}::${sectionEntry.title}`,
+              sectionEntry,
+            );
+            return;
+          }
+
+          if (text.trim()) {
+            const headingEntry: SearchDocEntry = {
+              title: text,
+              url: resolvedUrl,
+              breadcrumbs: locationBreadcrumbs,
+              description: parentTitle ? `In ${parentTitle}` : "Documentation",
+              searchText: [text, parentTitle, ...locationBreadcrumbs, resolvedUrl]
+                .filter(Boolean)
+                .join(" "),
+              parentTitle,
+              type: "heading",
+            };
+
+            searchEntries.set(
+              `${headingEntry.type}::${headingEntry.url}::${headingEntry.title}`,
+              headingEntry,
+            );
+          }
+        });
+
+        pageEntries.forEach((entry) => {
+          searchEntries.set(`${entry.type}::${entry.url}::${entry.title}`, entry);
+        });
+
+        return Array.from(searchEntries.values()).map((entry) => ({
+          ...entry,
+          description: buildDescription(entry),
+        }));
       });
   }
 
@@ -169,7 +289,7 @@ export function getDocResults(docs: SearchDocEntry[], query: string, limit = 8):
 
   return docs
     .map((doc) => {
-      const parts = [doc.title, ...doc.breadcrumbs, doc.url];
+      const parts = [doc.title, doc.parentTitle ?? "", doc.description, ...doc.breadcrumbs, doc.searchText, doc.url];
       const haystack = parts.join(" ").toLowerCase();
       return {
         doc,
