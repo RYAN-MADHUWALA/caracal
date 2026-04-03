@@ -26,17 +26,16 @@ def config_encrypt_group():
 
 @config_encrypt_group.command(name="status")
 def key_status() -> None:
-    """Show local key material status for config encryption."""
+    """Show config encryption backend status."""
     try:
         from caracal.config.encryption import get_key_status
 
         status = get_key_status()
         click.echo("Config Encryption Key Status")
-        click.echo(f"  Home             : {status['home']}")
-        click.echo(f"  Master key       : {'present' if status['master_key_present'] else 'missing'}")
-        click.echo(f"  Installation salt: {'present' if status['salt_present'] else 'missing'}")
-        click.echo(f"  DEKs             : {status['dek_count']}")
-        click.echo(f"  Key audit log    : {status['key_audit_log']}")
+        click.echo(f"  Backend          : {status['backend']}")
+        click.echo(f"  KMS key          : {status.get('kms_key_id') or 'not configured'}")
+        click.echo(f"  KMS region       : {status.get('kms_region') or 'default session region'}")
+        click.echo(f"  Configured       : {'yes' if status.get('configured') else 'no'}")
     except Exception as exc:
         click.echo(f"Error reading key status: {exc}", err=True)
         logger.error(f"Failed to read key status: {exc}", exc_info=True)

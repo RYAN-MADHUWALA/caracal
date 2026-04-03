@@ -1263,12 +1263,12 @@ def _step_principal(wizard: Wizard) -> Any:
         return False, "Please enter a valid email address."
     
     console.print(f"  [{Colors.NEUTRAL}]Let's register your first principal.")
-    console.print(f"  [{Colors.DIM}]This will be the first agent, user, or service you want to start with.[/]")
+    console.print(f"  [{Colors.DIM}]This will be the first human, orchestrator, worker, or service you want to start with.[/]")
     console.print()
     
-    principal_type = prompt.select(
-        "Principal type",
-        choices=["user", "agent", "service"],
+    principal_kind = prompt.select(
+        "Principal kind",
+        choices=["human", "orchestrator", "worker", "service"],
     )
     
     name = prompt.text(
@@ -1284,14 +1284,14 @@ def _step_principal(wizard: Wizard) -> Any:
     wizard.context["first_principal"] = {
         "name": name,
         "owner": owner,
-        "type": principal_type,
+        "kind": principal_kind,
     }
     
     console.print()
     console.print(f"  [{Colors.INFO}]{Icons.INFO} Principal will be registered after setup completes.[/]")
     console.print(f"  [{Colors.DIM}]Name: {name}[/]")
     console.print(f"  [{Colors.DIM}]Owner: {owner}[/]")
-    console.print(f"  [{Colors.DIM}]Type: {principal_type}[/]")
+    console.print(f"  [{Colors.DIM}]Kind: {principal_kind}[/]")
     
     return wizard.context["first_principal"]
 
@@ -1622,7 +1622,7 @@ def run_onboarding(
         from caracal.config import load_config
         from caracal.db.connection import DatabaseConfig, DatabaseConnectionManager, get_db_manager
         from caracal.db.models import Principal, AuthorityPolicy
-        from caracal.core.principal_keys import generate_and_store_principal_keypair
+        from caracal.core.identity import PrincipalRegistry
         from datetime import datetime
         from uuid import uuid4
         from caracal.flow.workspace import get_workspace
@@ -1826,23 +1826,16 @@ def run_onboarding(
                     else:
                         console.print(f"  [{Colors.INFO}]{Icons.INFO} Generating cryptographic keys...[/]")
 
-                        principal_uuid = uuid4()
-                        generated = generate_and_store_principal_keypair(principal_uuid)
-                        
-                        principal = Principal(
-                            principal_id=principal_uuid,
+                        registry = PrincipalRegistry(db_session)
+                        identity = registry.register_principal(
                             name=principal_data["name"],
-                            principal_type=principal_data["type"],
                             owner=principal_data["owner"],
-                            public_key_pem=generated.public_key_pem,
-                            principal_metadata=generated.storage.metadata,
-                            created_at=datetime.utcnow(),
+                            principal_kind=principal_data["kind"],
+                            metadata=None,
+                            generate_keys=True,
                         )
-                        
-                        db_session.add(principal)
-                        db_session.flush()
-                        
-                        principal_id = principal.principal_id
+
+                        principal_id = UUID(str(identity.principal_id))
                         console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal registered successfully.[/]")
                         console.print(f"  [{Colors.DIM}]Principal ID: {principal_id}[/]")
             except Exception as e:
