@@ -5,20 +5,20 @@ Caracal, a product of Garudex Labs
 Graph-based authority delegation engine for Caracal Core.
 
 This module provides the DelegationGraph class for managing authority
-delegation as a directed graph across principal types (user, agent, service).
-Authority flows downward: user → agent → service, with peer delegation
-allowed between users and between agents.
+delegation as a directed graph across principal kinds.
+Authority flows downward from human to orchestration and workers, then to services.
 
 Delegation direction rules:
-  ✅ user → agent     (human grants authority to AI)
-  ✅ user → service   (human grants authority to service)
-  ✅ user → user      (peer: team lead delegates to member)
-  ✅ agent → service   (AI delegates to service for task)
-  ✅ agent → agent     (peer: AI-to-AI coordination)
-  ❌ service → service (services are leaf executors)
-  ❌ agent → user      (AI cannot grant authority to humans)
-  ❌ service → user    (services cannot grant to humans)
-  ❌ service → agent   (services cannot grant to AI)
+    ✅ human → orchestrator
+    ✅ human → worker
+    ✅ human → service
+    ✅ orchestrator → worker
+    ✅ orchestrator → service
+    ✅ worker → service
+    ✅ human ↔ human
+    ✅ orchestrator ↔ orchestrator
+    ✅ worker ↔ worker
+    ❌ service → *
 """
 
 from dataclasses import dataclass, field
@@ -38,32 +38,42 @@ logger = get_logger(__name__)
 # Delegation Direction Rules
 # ============================================================================
 
-# (source_type, target_type) -> allowed
+# (source_kind, target_kind) -> allowed
 ALLOWED_DELEGATIONS: Dict[Tuple[str, str], bool] = {
     # Downward delegation (authority flows down)
-    ("user", "agent"): True,
-    ("user", "service"): True,
-    ("agent", "service"): True,
+    ("human", "orchestrator"): True,
+    ("human", "worker"): True,
+    ("human", "service"): True,
+    ("orchestrator", "worker"): True,
+    ("orchestrator", "service"): True,
+    ("worker", "service"): True,
     # Peer delegation (same level coordination)
-    ("user", "user"): True,
-    ("agent", "agent"): True,
+    ("human", "human"): True,
+    ("orchestrator", "orchestrator"): True,
+    ("worker", "worker"): True,
     # Blocked: services are leaf executors, no upward delegation
     ("service", "service"): False,
-    ("service", "agent"): False,
-    ("service", "user"): False,
-    ("agent", "user"): False,
+    ("service", "worker"): False,
+    ("service", "orchestrator"): False,
+    ("service", "human"): False,
+    ("worker", "human"): False,
+    ("orchestrator", "human"): False,
+    ("worker", "orchestrator"): False,
 }
 
 # Human-readable descriptions for error messages
 DELEGATION_BLOCK_REASONS: Dict[Tuple[str, str], str] = {
-    ("service", "service"): "Services are leaf executors and cannot delegate to other services",
-    ("service", "agent"): "Services cannot grant authority to AI agents",
-    ("service", "user"): "Services cannot grant authority to users",
-    ("agent", "user"): "AI agents cannot grant authority back to users",
+    ("service", "service"): "Services are terminal executors and cannot delegate",
+    ("service", "worker"): "Services cannot grant authority to worker principals",
+    ("service", "orchestrator"): "Services cannot grant authority to orchestrator principals",
+    ("service", "human"): "Services cannot grant authority to human principals",
+    ("worker", "human"): "Worker principals cannot grant authority back to human principals",
+    ("orchestrator", "human"): "Orchestrator principals cannot grant authority back to human principals",
+    ("worker", "orchestrator"): "Worker principals cannot elevate authority to orchestrators",
 }
 
-# Valid principal types
-VALID_PRINCIPAL_TYPES = {"user", "agent", "service"}
+# Valid principal kinds
+VALID_PRINCIPAL_KINDS = {"human", "orchestrator", "worker", "service"}
 
 
 # ============================================================================
@@ -108,7 +118,7 @@ class DelegationEdge:
 @dataclass
 class DelegationGraphTopology:
     """Represents the full delegation graph topology."""
-    nodes: List[dict]   # [{mandate_id, subject_id, principal_type, ...}]
+    nodes: List[dict]   # [{mandate_id, subject_id, principal_kind, ...}]
     edges: List[dict]   # [{edge_id, source, target, type, ...}]
     stats: dict         # {total_nodes, total_edges, by_type, ...}
 
@@ -119,12 +129,12 @@ class DelegationGraphTopology:
 
 class DelegationGraph:
     """
-    Manages authority delegation topology across principal types.
+    Manages authority delegation topology across principal kinds.
 
     Supports paths like:
-      user → agent → service  (directed)
-      agent ↔ agent            (peer)
-      user → service           (direct cross-type)
+            human → orchestrator → worker → service  (directed)
+            worker ↔ worker                            (peer)
+            human → service                            (direct cross-kind)
 
     Enforces delegation direction rules at edge creation time.
     """
@@ -172,8 +182,8 @@ class DelegationGraph:
         Check if delegation from source_type to target_type is allowed.
 
         Args:
-            source_type: Principal type of the delegator (user/agent/service)
-            target_type: Principal type of the delegate (user/agent/service)
+            source_type: Principal kind of the delegator
+            target_type: Principal kind of the delegate
 
         Returns:
             True if the delegation direction is allowed
@@ -181,10 +191,10 @@ class DelegationGraph:
         Raises:
             ValueError: If either type is invalid or delegation is blocked
         """
-        if source_type not in VALID_PRINCIPAL_TYPES:
-            raise ValueError(f"Invalid source principal type: '{source_type}'. Must be one of {VALID_PRINCIPAL_TYPES}")
-        if target_type not in VALID_PRINCIPAL_TYPES:
-            raise ValueError(f"Invalid target principal type: '{target_type}'. Must be one of {VALID_PRINCIPAL_TYPES}")
+        if source_type not in VALID_PRINCIPAL_KINDS:
+            raise ValueError(f"Invalid source principal kind: '{source_type}'. Must be one of {VALID_PRINCIPAL_KINDS}")
+        if target_type not in VALID_PRINCIPAL_KINDS:
+            raise ValueError(f"Invalid target principal kind: '{target_type}'. Must be one of {VALID_PRINCIPAL_KINDS}")
 
         key = (source_type, target_type)
         allowed = ALLOWED_DELEGATIONS.get(key, False)
@@ -286,7 +296,7 @@ class DelegationGraph:
                 f"does not match edge source={source_mandate_id}"
             )
 
-        # Get principal types
+        # Get principal kinds
         source_principal = self.db_session.query(Principal).filter(
             Principal.principal_id == source_mandate.subject_id
         ).first()
@@ -299,8 +309,8 @@ class DelegationGraph:
         if not target_principal:
             raise ValueError(f"Target principal {target_mandate.subject_id} not found")
 
-        source_type = source_principal.principal_type
-        target_type = target_principal.principal_type
+        source_type = source_principal.principal_kind
+        target_type = target_principal.principal_kind
 
         # Validate delegation direction
         self.validate_delegation_direction(source_type, target_type)
@@ -492,11 +502,11 @@ class DelegationGraph:
         active_only: bool = True,
     ) -> List[DelegationEdge]:
         """
-        Get delegation edges filtered by principal types.
+        Get delegation edges filtered by principal kinds.
 
         Args:
-            source_type: Filter by source principal type
-            target_type: Filter by target principal type
+            source_type: Filter by source principal kind
+            target_type: Filter by target principal kind
             active_only: Only return non-revoked, non-expired edges
 
         Returns:
@@ -673,7 +683,7 @@ class DelegationGraph:
 
         # Build nodes
         nodes = []
-        by_type_count = {"user": 0, "agent": 0, "service": 0}
+        by_type_count = {"human": 0, "orchestrator": 0, "worker": 0, "service": 0}
         for mid in mandate_ids:
             mandate = self.db_session.query(ExecutionMandate).filter(
                 ExecutionMandate.mandate_id == mid
@@ -682,13 +692,13 @@ class DelegationGraph:
                 principal = self.db_session.query(Principal).filter(
                     Principal.principal_id == mandate.subject_id
                 ).first()
-                ptype = principal.principal_type if principal else "unknown"
+                ptype = principal.principal_kind if principal else "unknown"
                 by_type_count[ptype] = by_type_count.get(ptype, 0) + 1
                 nodes.append({
                     "mandate_id": str(mid),
                     "subject_id": str(mandate.subject_id),
                     "subject_name": principal.name if principal else "unknown",
-                    "principal_type": ptype,
+                    "principal_kind": ptype,
                     "resource_scope": mandate.resource_scope,
                     "action_scope": mandate.action_scope,
                     "active": not mandate.revoked,
@@ -815,7 +825,7 @@ class DelegationGraph:
                 "mandate_id": node_id,
                 "subject_id": node.get("subject_id"),
                 "subject_name": node.get("subject_name"),
-                "principal_type": node.get("principal_type"),
+                "principal_kind": node.get("principal_kind"),
                 "distance": distance_map[node_id],
                 "source_count": len(inbound),
                 "target_count": len(outbound),
