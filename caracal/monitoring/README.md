@@ -11,10 +11,6 @@ The monitoring module instruments all major components of the pre-execution auth
 - **Database**: Query metrics, connection pool statistics
 - **Circuit Breakers**: State tracking for downstream health
 
-## Requirements
-
-- Requirements: 17.7, 22.1 (Authority Governance Compliance)
-
 ## Installation
 
 The `prometheus-client` package is included in Caracal Core dependencies:
