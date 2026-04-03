@@ -202,8 +202,6 @@ def main():
     print("\nFor more information, see:")
     print("  - caracal/core/retry.py")
     print("  - tests/unit/test_retry.py")
-    print("  - Requirements: 23.1")
-
 
 if __name__ == "__main__":
     main()
