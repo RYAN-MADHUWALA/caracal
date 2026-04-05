@@ -200,6 +200,7 @@ class SessionManager:
         self._denylist = denylist_backend
         self._audit_sink = audit_sink
         self._db_session_manager = db_session_manager
+        self._local_revoked_tokens: dict[str, datetime] = {}
         self._caveat_mode = resolved_caveat_mode
         self._caveat_chain_hmac_key = resolved_caveat_hmac_key
         self._issuer = issuer
@@ -478,6 +479,7 @@ class SessionManager:
             source_remaining_caveats=source_remaining_caveats,
             issued_at=now,
         )
+        self._mark_token_revoked_local(source_token_jti, source_exp_dt)
         if self._db_session_manager is None:
             await self._denylist.add(source_token_jti, source_exp_dt)
 
@@ -558,6 +560,7 @@ class SessionManager:
                 await self._denylist.add(handoff_jti, exp_dt)
             else:
                 self._consume_handoff_transfer(handoff_jti=handoff_jti)
+            self._mark_token_revoked_local(handoff_jti, exp_dt)
 
         self._record_audit_event(
             event_type="handoff_token_consumed",
@@ -675,15 +678,16 @@ class SessionManager:
 
     async def revoke_token(self, token: str) -> None:
         """Revoke a token by storing its JTI in deny-list storage."""
-        if self._denylist is None:
-            return
-
         claims = self.decode_unverified(token)
         jti = str(claims.get("jti") or "").strip()
         if not jti:
             return
 
         exp_dt = self._claim_expiry_datetime(claims)
+        self._mark_token_revoked_local(jti, exp_dt)
+        if self._denylist is None:
+            return
+
         await self._denylist.add(jti, exp_dt)
 
     def decode_unverified(self, token: str) -> dict[str, Any]:
@@ -752,13 +756,59 @@ class SessionManager:
     async def _assert_not_revoked(self, claims: dict[str, Any]) -> None:
         token_jti = str(claims.get("jti") or "").strip()
 
-        if token_jti and self._is_token_revoked_by_handoff_store(token_jti):
+        if token_jti and self._is_token_revoked_local(token_jti):
             raise SessionRevokedError("Session token has been revoked")
 
-        if self._denylist is None:
-            return
-        if token_jti and await self._denylist.contains(token_jti):
+        if self._denylist is not None and token_jti and await self._denylist.contains(token_jti):
+            self._mark_token_revoked_local(token_jti, self._claim_expiry_datetime(claims))
             raise SessionRevokedError("Session token has been revoked")
+
+        if token_jti and self._is_token_revoked_by_handoff_store(token_jti):
+            self._mark_token_revoked_local(token_jti, self._claim_expiry_datetime(claims))
+            raise SessionRevokedError("Session token has been revoked")
+
+    def _mark_token_revoked_local(self, token_jti: str, expires_at: datetime) -> None:
+        normalized_jti = str(token_jti or "").strip()
+        if not normalized_jti:
+            return
+
+        normalized_expiry = expires_at
+        if normalized_expiry.tzinfo is None:
+            normalized_expiry = normalized_expiry.replace(tzinfo=timezone.utc)
+
+        self._local_revoked_tokens[normalized_jti] = normalized_expiry
+        if len(self._local_revoked_tokens) <= 4096:
+            return
+
+        now = datetime.now(timezone.utc)
+        expired = [
+            jti
+            for jti, expiry in self._local_revoked_tokens.items()
+            if (expiry if expiry.tzinfo is not None else expiry.replace(tzinfo=timezone.utc)) <= now
+        ]
+        for jti in expired:
+            self._local_revoked_tokens.pop(jti, None)
+
+        overflow = len(self._local_revoked_tokens) - 4096
+        if overflow <= 0:
+            return
+        for jti, _expiry in sorted(self._local_revoked_tokens.items(), key=lambda item: item[1])[:overflow]:
+            self._local_revoked_tokens.pop(jti, None)
+
+    def _is_token_revoked_local(self, token_jti: str) -> bool:
+        normalized_jti = str(token_jti or "").strip()
+        if not normalized_jti:
+            return False
+
+        expiry = self._local_revoked_tokens.get(normalized_jti)
+        if expiry is None:
+            return False
+
+        normalized_expiry = expiry if expiry.tzinfo is not None else expiry.replace(tzinfo=timezone.utc)
+        if normalized_expiry <= datetime.now(timezone.utc):
+            self._local_revoked_tokens.pop(normalized_jti, None)
+            return False
+        return True
 
     def _is_token_revoked_by_handoff_store(self, token_jti: str) -> bool:
         token_jti = str(token_jti or "").strip()

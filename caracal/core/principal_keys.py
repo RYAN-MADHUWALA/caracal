@@ -270,9 +270,3 @@ def _upsert_custody_record(
 
     custody.vault_details.vault_key_ref = storage.reference
     custody.vault_details.vault_namespace = vault_namespace
-
-
-def backup_local_private_key(principal_id: UUID) -> Optional[str]:
-    """Compatibility no-op: local key files are not used in hard-cut mode."""
-    _ = principal_id
-    return None
