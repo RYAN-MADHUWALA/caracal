@@ -110,3 +110,45 @@ def test_non_human_session_requires_identity_triplet_for_ais(
 
     with pytest.raises(RuntimeError, match="principal, organization, and tenant"):
         client._resolve_enterprise_auth_headers()
+
+
+@pytest.mark.unit
+def test_resolve_revocation_webhook_target_uses_override_and_cached_sync_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        enterprise_sync,
+        "load_enterprise_config",
+        lambda: {"sync_api_key": "sync-key-1"},
+    )
+
+    webhook_url, sync_api_key = enterprise_sync.resolve_revocation_webhook_target(
+        webhook_url_override="https://enterprise.example/custom-revocations",
+    )
+
+    assert webhook_url == "https://enterprise.example/custom-revocations"
+    assert sync_api_key == "sync-key-1"
+
+
+@pytest.mark.unit
+def test_resolve_revocation_webhook_target_builds_default_sync_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        enterprise_sync,
+        "load_enterprise_config",
+        lambda: {
+            "enterprise_api_url": "https://enterprise.example",
+            "sync_api_key": "sync-key-2",
+        },
+    )
+    monkeypatch.setattr(
+        enterprise_sync,
+        "_resolve_api_url",
+        lambda override=None: (override or "https://enterprise.example").rstrip("/"),
+    )
+
+    webhook_url, sync_api_key = enterprise_sync.resolve_revocation_webhook_target()
+
+    assert webhook_url == "https://enterprise.example/api/sync/revocation-events"
+    assert sync_api_key == "sync-key-2"

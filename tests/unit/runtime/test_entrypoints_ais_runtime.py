@@ -27,6 +27,21 @@ from caracal.identity.attestation_nonce import (
 from caracal.runtime import entrypoints
 
 
+class _OpenSourceEditionManager:
+    def get_edition(self):
+        return "opensource"
+
+
+class _EnterpriseEditionManager:
+    def get_edition(self):
+        from caracal.deployment.edition import Edition
+
+        return Edition.ENTERPRISE
+
+    def get_gateway_url(self) -> str:
+        return "https://enterprise.example"
+
+
 @dataclass
 class _FakeAisProcess:
     poll_values: list[int | None]
@@ -549,7 +564,10 @@ async def test_create_runtime_revocation_event_publisher_uses_configured_channel
             return 1
 
     monkeypatch.setenv(entrypoints.AIS_REVOCATION_EVENTS_CHANNEL_ENV, "caracal:revocation:runtime")
-    publisher = entrypoints._create_runtime_revocation_event_publisher(redis_client=_FakeRedis())
+    publisher = entrypoints._create_runtime_revocation_event_publisher(
+        redis_client=_FakeRedis(),
+        edition_manager=_OpenSourceEditionManager(),
+    )
 
     await publisher.publish_principal_revocation_event(
         event_type="principal_revoked",
@@ -578,7 +596,25 @@ def test_create_ttl_revocation_orchestrator_factory_assigns_publisher() -> None:
 
     orchestrator_factory = entrypoints._create_ttl_revocation_orchestrator_factory(
         redis_client=_FakeRedis(),
+        edition_manager=_OpenSourceEditionManager(),
     )
     orchestrator = orchestrator_factory(SimpleNamespace())
 
     assert orchestrator.revocation_event_publisher is not None
+
+
+@pytest.mark.unit
+def test_create_runtime_revocation_event_publisher_uses_enterprise_webhook_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        entrypoints.AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV,
+        "https://enterprise.example/custom-revocations",
+    )
+    monkeypatch.setenv(entrypoints.AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV, "sync-key-1")
+
+    publisher = entrypoints._create_runtime_revocation_event_publisher(
+        edition_manager=_EnterpriseEditionManager(),
+    )
+
+    assert publisher.__class__.__name__ == "EnterpriseWebhookRevocationEventPublisher"
