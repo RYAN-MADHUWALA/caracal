@@ -16,6 +16,7 @@ from uuid import UUID
 import click
 
 from caracal.core.identity import PrincipalRegistry
+from caracal.identity.service import IdentityService
 from caracal.db.connection import get_db_manager
 from caracal.db.models import Principal
 from caracal.exceptions import (
@@ -142,7 +143,8 @@ def register(ctx, name: str, principal_kind: str, email: str, metadata: tuple):
         try:
             with db_manager.session_scope() as db_session:
                 registry = PrincipalRegistry(db_session)
-                identity = registry.register_principal(
+                identity_service = IdentityService(principal_registry=registry)
+                identity = identity_service.register_principal(
                     name=name,
                     owner=email,
                     principal_kind=principal_kind,
