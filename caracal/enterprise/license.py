@@ -174,20 +174,20 @@ def _normalize_enterprise_url(raw: Optional[str]) -> Optional[str]:
 
 
 def load_enterprise_config() -> Dict[str, Any]:
-    """Load enterprise config from PostgreSQL runtime metadata."""
+    """Load enterprise config from dedicated enterprise runtime persistence."""
     try:
         from caracal.config import load_config
         from caracal.db.connection import get_db_manager
-        from caracal.db.models import SyncMetadata
+        from caracal.db.models import EnterpriseRuntimeConfig
 
         db_manager = get_db_manager(load_config())
         try:
             with db_manager.session_scope() as session:
-                row = session.query(SyncMetadata).filter_by(workspace=_ENTERPRISE_CONFIG_WORKSPACE_KEY).first()
-                if row and isinstance(row.sync_metadata_data, dict):
-                    payload = row.sync_metadata_data.get("enterprise_config")
-                    if isinstance(payload, dict):
-                        return dict(payload)
+                row = session.query(EnterpriseRuntimeConfig).filter_by(
+                    runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+                ).first()
+                if row and isinstance(row.config_data, dict):
+                    return dict(row.config_data)
         finally:
             db_manager.close()
     except Exception as exc:
@@ -218,43 +218,42 @@ def resolve_revocation_webhook_target(
 
 
 def save_enterprise_config(data: Dict[str, Any]) -> None:
-    """Persist enterprise config to PostgreSQL runtime metadata."""
+    """Persist enterprise config to dedicated enterprise runtime persistence."""
     from caracal.config import load_config
     from caracal.db.connection import get_db_manager
-    from caracal.db.models import SyncMetadata
+    from caracal.db.models import EnterpriseRuntimeConfig
 
     db_manager = get_db_manager(load_config())
     try:
         with db_manager.session_scope() as session:
-            row = session.query(SyncMetadata).filter_by(workspace=_ENTERPRISE_CONFIG_WORKSPACE_KEY).first()
+            row = session.query(EnterpriseRuntimeConfig).filter_by(
+                runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+            ).first()
             if row is None:
-                row = SyncMetadata(
-                    workspace=_ENTERPRISE_CONFIG_WORKSPACE_KEY,
-                    sync_enabled=False,
-                    sync_metadata_data={},
+                row = EnterpriseRuntimeConfig(
+                    runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY,
+                    config_data={},
                 )
                 session.add(row)
                 session.flush()
 
-            metadata = dict(row.sync_metadata_data or {})
-            metadata["enterprise_config"] = dict(data)
-            row.sync_metadata_data = metadata
-            row.remote_url = data.get("enterprise_api_url") or row.remote_url
-            row.sync_enabled = bool(data.get("valid", False))
+            row.config_data = dict(data)
     finally:
         db_manager.close()
 
 
 def clear_enterprise_config() -> None:
-    """Clear enterprise config from PostgreSQL runtime metadata."""
+    """Clear enterprise config from dedicated enterprise runtime persistence."""
     from caracal.config import load_config
     from caracal.db.connection import get_db_manager
-    from caracal.db.models import SyncMetadata
+    from caracal.db.models import EnterpriseRuntimeConfig
 
     db_manager = get_db_manager(load_config())
     try:
         with db_manager.session_scope() as session:
-            row = session.query(SyncMetadata).filter_by(workspace=_ENTERPRISE_CONFIG_WORKSPACE_KEY).first()
+            row = session.query(EnterpriseRuntimeConfig).filter_by(
+                runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+            ).first()
             if row:
                 session.delete(row)
     finally:
