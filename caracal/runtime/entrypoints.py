@@ -1701,7 +1701,7 @@ def _resolve_enterprise_revocation_sync_api_key() -> str | None:
         return configured
 
     try:
-        from caracal.enterprise.sync import resolve_revocation_webhook_target
+        from caracal.enterprise.license import resolve_revocation_webhook_target
 
         _, resolved = resolve_revocation_webhook_target()
         return resolved or None
@@ -1711,7 +1711,7 @@ def _resolve_enterprise_revocation_sync_api_key() -> str | None:
 
 def _create_enterprise_revocation_event_publisher(*, edition_manager: object | None = None):
     from caracal.core.revocation_publishers import EnterpriseWebhookRevocationEventPublisher
-    from caracal.enterprise.sync import resolve_revocation_webhook_target
+    from caracal.enterprise.license import resolve_revocation_webhook_target
 
     configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip() or None
     configured_sync_api_key = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip() or None
