@@ -37,15 +37,30 @@ _FORBIDDEN_COMPAT_ENV_VARS = (
     "CARACAL_DUAL_WRITE_WINDOW",
 )
 _REQUIRED_SECRET_BACKEND_ENV = "CARACAL_PRINCIPAL_KEY_BACKEND"
-_ALLOWED_SECRET_BACKENDS = ("aws_kms",)
+_ALLOWED_SECRET_BACKENDS = ("vault",)
+_REQUIRED_VAULT_ENV_VARS = (
+    "CARACAL_VAULT_URL",
+    "CARACAL_VAULT_TOKEN",
+    "CARACAL_VAULT_SIGNING_KEY_REF",
+    "CARACAL_VAULT_SESSION_PUBLIC_KEY_REF",
+)
+_VAULT_MODE_ENV = "CARACAL_VAULT_MODE"
+_HARDCUT_MODE_ENV = "CARACAL_HARDCUT_MODE"
+_LOCAL_VAULT_MODE_VALUES = ("local", "dev", "development")
 _FORBIDDEN_CONFIG_MARKERS = (
     "enterprise.json",
     "workspaces.json",
     "sqlite://",
     "sqlite+",
     "caracal_principal_key_backend=local",
+    "caracal_principal_key_backend=aws_kms",
     "principal_key_backend = local",
+    "principal_key_backend = aws_kms",
     "principal_key_backend: local",
+    "principal_key_backend: aws_kms",
+    "caracal_aws_kms_",
+    "aws_kms_key_id",
+    "aws_region",
     "dual-write",
     "dual_write",
     "compat alias",
@@ -153,16 +168,33 @@ def _secret_backend_violations(env_vars: Mapping[str, str | None] | None) -> lis
     if not backend_value:
         return [
             f"{_REQUIRED_SECRET_BACKEND_ENV} is not set. "
-            "Hard-cut mode requires an explicit managed secret backend (aws_kms)."
+            "Hard-cut mode requires an explicit managed secret backend (vault)."
         ]
 
-    if backend_value in _ALLOWED_SECRET_BACKENDS:
-        return []
+    if backend_value not in _ALLOWED_SECRET_BACKENDS:
+        return [
+            f"{_REQUIRED_SECRET_BACKEND_ENV}={backend_value!r} is forbidden in hard-cut mode. "
+            "Local/file-backed secret backends are not allowed."
+        ]
 
-    return [
-        f"{_REQUIRED_SECRET_BACKEND_ENV}={backend_value!r} is forbidden in hard-cut mode. "
-        "Local/file-backed secret backends are not allowed."
-    ]
+    violations: list[str] = []
+    for env_key in _REQUIRED_VAULT_ENV_VARS:
+        value = (env_vars.get(env_key) or "").strip()
+        if value:
+            continue
+        violations.append(
+            f"{env_key} is required when {_REQUIRED_SECRET_BACKEND_ENV}=vault in hard-cut mode."
+        )
+
+    vault_mode = (env_vars.get(_VAULT_MODE_ENV) or "").strip().lower()
+    hardcut_mode = (env_vars.get(_HARDCUT_MODE_ENV) or "").strip().lower()
+    if hardcut_mode in {"1", "true", "yes", "on"} and vault_mode in _LOCAL_VAULT_MODE_VALUES:
+        violations.append(
+            f"{_VAULT_MODE_ENV}={vault_mode!r} is forbidden when {_HARDCUT_MODE_ENV} is enabled. "
+            "Local vault mode is development-only."
+        )
+
+    return violations
 
 
 def _is_truthy(value: str | None) -> bool:

@@ -119,11 +119,6 @@ class DecryptionError(EncryptionError):
     pass
 
 
-class KeyringError(EncryptionError):
-    """Raised when system keyring operations fail."""
-    pass
-
-
 class SecretNotFoundError(EncryptionError):
     """Raised when a secret is not found in the vault."""
     pass
