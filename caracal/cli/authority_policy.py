@@ -170,6 +170,8 @@ def create(
         )
         
         # Create database connection
+        from caracal.core.identity import PrincipalRegistry
+        from caracal.identity.service import IdentityService
         from caracal.db.connection import get_db_manager
         from caracal.db.models import AuthorityPolicy, Principal
         from uuid import uuid4
@@ -190,20 +192,28 @@ def create(
                 # without requiring separate, hidden setup steps.
                 principal_name = f"principal-{principal_uuid}"
                 principal_owner = "unknown"
-                principal_type = "agent"
+                principal_kind = "worker"
 
-                principal = Principal(
-                    principal_id=principal_uuid,
+                registry = PrincipalRegistry(session)
+                identity_service = IdentityService(principal_registry=registry)
+                identity = identity_service.register_principal(
                     name=principal_name,
-                    principal_type=principal_type,
                     owner=principal_owner,
-                    principal_metadata={
+                    principal_kind=principal_kind,
+                    metadata={
                         "auto_provisioned": True,
                         "source": "caracal policy create",
                     },
+                    principal_id=str(principal_uuid),
+                    generate_keys=True,
                 )
-                session.add(principal)
-                session.flush()
+                principal = session.query(Principal).filter(
+                    Principal.principal_id == UUID(str(identity.principal_id))
+                ).first()
+                if principal is None:
+                    raise RuntimeError(
+                        f"Auto-provisioned principal could not be reloaded: {identity.principal_id}"
+                    )
                 principal_auto_created = True
             
             # Create policy

@@ -15,7 +15,7 @@ from uuid import UUID
 import click
 
 from caracal.core.delegation import DelegationTokenManager
-from caracal.core.principal_keys import generate_and_store_principal_keypair
+from caracal.core.identity import PrincipalRegistry
 from caracal.db.connection import get_db_manager
 from caracal.db.models import AuthorityPolicy, Principal
 from caracal.exceptions import CaracalError, PrincipalNotFoundError
@@ -57,31 +57,32 @@ class _DBPrincipalRegistryAdapter:
             db_manager.close()
 
     def ensure_signing_keys(self, principal_id: str, delegation_manager: DelegationTokenManager) -> None:
-        """Ensure principal has ES256 signing keys stored in PostgreSQL metadata."""
+        """Ensure principal has ES256 signing keys stored in custody tables."""
         try:
-            principal_uuid = UUID(principal_id)
+            UUID(principal_id)
         except ValueError as exc:
             raise PrincipalNotFoundError(f"Invalid principal ID: {principal_id}") from exc
 
         db_manager = get_db_manager(self._config)
         try:
             with db_manager.session_scope() as session:
-                row = session.query(Principal).filter_by(principal_id=principal_uuid).first()
-                if not row:
-                    raise PrincipalNotFoundError(f"Principal not found: {principal_id}")
+                registry = PrincipalRegistry(session)
+                registry.ensure_signing_keys(principal_id)
+        finally:
+            db_manager.close()
 
-                metadata = dict(row.principal_metadata or {})
-                has_private_material = any(
-                    k in metadata
-                    for k in ("private_key_ref", "aws_kms_ciphertext_b64")
-                )
-                if row.public_key_pem and has_private_material:
-                    return
+    def get_signing_key_reference(self, principal_id: str) -> str:
+        """Resolve signing key reference from custody records."""
+        try:
+            UUID(principal_id)
+        except ValueError as exc:
+            raise PrincipalNotFoundError(f"Invalid principal ID: {principal_id}") from exc
 
-                generated = generate_and_store_principal_keypair(row.principal_id)
-                row.public_key_pem = generated.public_key_pem
-                metadata.update(generated.storage.metadata)
-                row.principal_metadata = metadata
+        db_manager = get_db_manager(self._config)
+        try:
+            with db_manager.session_scope() as session:
+                registry = PrincipalRegistry(session)
+                return registry.get_signing_key_reference(principal_id)
         finally:
             db_manager.close()
 
@@ -93,6 +94,19 @@ class _DBPrincipalRegistryAdapter:
 def _get_delegation_manager(config) -> tuple[_DBPrincipalRegistryAdapter, DelegationTokenManager]:
     registry = _DBPrincipalRegistryAdapter(config)
     return registry, DelegationTokenManager(principal_registry=registry)
+
+
+def _get_cli_config(ctx_obj):
+    """Resolve CLI config from Click context object.
+
+    Supports both object-style contexts with a ``config`` attribute and
+    dict-style contexts used in tests (``{"config": ...}``).
+    """
+    if ctx_obj is None:
+        return None
+    if isinstance(ctx_obj, dict):
+        return ctx_obj.get("config")
+    return getattr(ctx_obj, "config", None)
 
 
 @click.command('generate')
@@ -108,14 +122,6 @@ def _get_delegation_manager(config) -> tuple[_DBPrincipalRegistryAdapter, Delega
     required=True,
     help='Target principal ID (subject)',
 )
-@click.option(
-    '--authority-scope',
-    '-l',
-    required=True,
-    type=float,
-    help='Maximum authority scope allowed',
-)
-
 @click.option(
     '--expiration',
     '-e',
@@ -153,10 +159,16 @@ def _get_delegation_manager(config) -> tuple[_DBPrincipalRegistryAdapter, Delega
     multiple=True,
     help='Context tags for the delegation token',
 )
+@click.option(
+    '--source-mandate-id',
+    multiple=True,
+    help='Canonical source mandate lineage ID (can be specified multiple times)',
+)
 @click.pass_context
-def generate(ctx, source_id: str, target_id: str, authority_scope: float, 
+def generate(ctx, source_id: str, target_id: str,
              expiration: int, operations: tuple,
-             delegation_type: str, source_type: str, target_type: str, context_tags: tuple):
+             delegation_type: str, source_type: str, target_type: str, context_tags: tuple,
+             source_mandate_id: tuple):
     """
     Generate a delegation token for a target principal.
     
@@ -168,19 +180,19 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
         caracal delegation generate \
             --source-id 550e8400-e29b-41d4-a716-446655440000 \
             --target-id 660e8400-e29b-41d4-a716-446655440001 \
-            --authority-scope 100.00
+            --source-mandate-id 770e8400-e29b-41d4-a716-446655440002
         
         caracal delegation generate -p source-uuid -c target-uuid \
-            -l 50.00 --expiration 3600 \
+            --expiration 3600 \
             --delegation-type directed --source-type user --target-type agent \
             -o api_call -o mcp_tool
     """
     try:
         # Get CLI context
-        cli_ctx = ctx.obj
+        config = _get_cli_config(ctx.obj)
         
         # Build PostgreSQL-backed principal adapter + delegation manager
-        registry, delegation_manager = _get_delegation_manager(cli_ctx.config)
+        registry, delegation_manager = _get_delegation_manager(config)
         registry.assert_exists(source_id)
         registry.assert_exists(target_id)
         registry.ensure_signing_keys(source_id, delegation_manager)
@@ -190,6 +202,16 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
         
         # Parse context tags
         tags_list = list(context_tags) if context_tags else None
+
+        authority_sources = None
+        if source_mandate_id:
+            authority_sources = []
+            for mandate_id in source_mandate_id:
+                try:
+                    authority_sources.append(str(UUID(mandate_id)))
+                except ValueError:
+                    click.echo(f"Error: Invalid source mandate ID format: {mandate_id}", err=True)
+                    sys.exit(1)
         
         # Generate token
         token = delegation_manager.generate_token(
@@ -200,16 +222,19 @@ def generate(ctx, source_id: str, target_id: str, authority_scope: float,
             delegation_type=delegation_type,
             source_principal_type=source_type,
             target_principal_type=target_type,
-            context_tags=tags_list
+            context_tags=tags_list,
+            authority_sources=authority_sources,
         )
         
         # Display success message
         click.echo("✓ Delegation token generated successfully!")
         click.echo()
-        click.echo(f"Source Agent:    {source_id}")
-        click.echo(f"Target Agent:    {target_id}")
-        click.echo(f"Authority Scope: {authority_scope}")
+        click.echo(f"Source Principal: {source_id}")
+        click.echo(f"Target Principal: {target_id}")
+        click.echo(f"Delegation Type:  {delegation_type}")
         click.echo(f"Expires In:      {expiration} seconds")
+        if authority_sources:
+            click.echo(f"Source Mandates: {', '.join(authority_sources)}")
         click.echo()
         click.echo("Token:")
         click.echo(token)
@@ -255,12 +280,11 @@ def list_delegations(ctx, principal_id: str, format: str):
     """
     try:
         # Get CLI context
-        cli_ctx = ctx.obj
-        
-        from caracal.db.connection import get_db_manager
+        config = _get_cli_config(ctx.obj)
+
         from caracal.db.models import DelegationEdgeModel
         
-        db_manager = get_db_manager(cli_ctx.config)
+        db_manager = get_db_manager(config)
         
         try:
             session = db_manager.get_session()
@@ -285,7 +309,7 @@ def list_delegations(ctx, principal_id: str, format: str):
                         (DelegationEdgeModel.target_mandate_id.in_(mandate_ids))
                     )
                 else:
-                    click.echo(f"No mandates found for agent: {principal_id}")
+                    click.echo(f"No mandates found for principal: {principal_id}")
                     return
             
             edges = query.all()
@@ -372,10 +396,10 @@ def validate(ctx, token: str):
     """
     try:
         # Get CLI context
-        cli_ctx = ctx.obj
+        config = _get_cli_config(ctx.obj)
         
         # Create PostgreSQL-backed delegation manager
-        _, delegation_manager = _get_delegation_manager(cli_ctx.config)
+        _, delegation_manager = _get_delegation_manager(config)
         
         # Validate token
         claims = delegation_manager.validate_token(token)
@@ -385,14 +409,16 @@ def validate(ctx, token: str):
         click.echo()
         click.echo("Token Claims:")
         click.echo("=" * 50)
-        click.echo(f"Issuer (source):     {claims.issuer}")
-        click.echo(f"Subject (target):     {claims.subject}")
+        click.echo(f"Source Principal:    {claims.issuer}")
+        click.echo(f"Target Principal:    {claims.subject}")
         click.echo(f"Audience:            {claims.audience}")
         click.echo(f"Token ID:            {claims.token_id}")
         click.echo(f"Issued At:           {claims.issued_at}")
         click.echo(f"Expires At:          {claims.expiration}")
         click.echo(f"Allowed Operations:  {', '.join(claims.allowed_operations)}")
-        click.echo(f"Max Delegation Depth: {claims.max_delegation_depth}")
+        click.echo(f"Delegation Type:     {claims.delegation_type}")
+        if getattr(claims, "authority_sources", None):
+            click.echo(f"Source Mandates:     {', '.join(claims.authority_sources)}")
         
     except CaracalError as e:
         click.echo(f"Error: {e}", err=True)
@@ -430,17 +456,17 @@ def revoke(ctx, policy_id: str, confirm: bool):
     """
     try:
         # Get CLI context
-        cli_ctx = ctx.obj
+        config = _get_cli_config(ctx.obj)
+
+        try:
+            policy_uuid = UUID(policy_id)
+        except ValueError:
+            click.echo(f"Error: Invalid policy ID format: {policy_id}", err=True)
+            sys.exit(1)
         
-        db_manager = get_db_manager(cli_ctx.config)
+        db_manager = get_db_manager(config)
         try:
             with db_manager.session_scope() as session:
-                try:
-                    policy_uuid = UUID(policy_id)
-                except ValueError:
-                    click.echo(f"Error: Invalid policy ID format: {policy_id}", err=True)
-                    sys.exit(1)
-
                 policy = session.query(AuthorityPolicy).filter_by(policy_id=policy_uuid).first()
                 if not policy:
                     click.echo(f"Error: Policy not found: {policy_id}", err=True)

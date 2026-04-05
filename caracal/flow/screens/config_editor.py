@@ -69,7 +69,7 @@ def show_config_editor(console: Console, state: FlowState) -> None:
 def _view_configuration(console: Console, state: FlowState) -> None:
     """View current configuration."""
     from caracal.deployment.mode import ModeManager
-    from caracal.deployment.edition import EditionManager
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
     from caracal.deployment.config_manager import ConfigManager
     
     console.clear()
@@ -89,9 +89,8 @@ def _view_configuration(console: Console, state: FlowState) -> None:
         console.print(f"  [{Colors.INFO}]Mode:[/] [{Colors.SUCCESS}]{mode_str}[/]")
         
         # Edition
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        edition_str = "Enterprise" if edition.is_enterprise else "Open Source"
+        edition_adapter = get_deployment_edition_adapter()
+        edition_str = edition_adapter.display_name()
         
         console.print(f"  [{Colors.INFO}]Edition:[/] [{Colors.SUCCESS}]{edition_str}[/]")
         console.print()
@@ -184,7 +183,7 @@ def _set_mode(console: Console, state: FlowState) -> None:
 
 def _set_edition(console: Console, state: FlowState) -> None:
     """Show auto edition policy information."""
-    from caracal.deployment.edition import EditionManager
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
     
     console.clear()
     console.print(Panel(
@@ -195,14 +194,14 @@ def _set_edition(console: Console, state: FlowState) -> None:
     console.print()
     
     try:
-        edition_mgr = EditionManager()
-        current_edition = edition_mgr.get_edition()
+        edition_adapter = get_deployment_edition_adapter()
+        current_edition_is_enterprise = edition_adapter.uses_gateway_execution()
 
-        console.print(f"  [{Colors.INFO}]Current edition:[/] {'Enterprise' if current_edition.is_enterprise else 'Open Source'} [dim](auto)[/]")
+        console.print(f"  [{Colors.INFO}]Current edition:[/] {edition_adapter.display_name()} [dim](auto)[/]")
         console.print()
         console.print(f"  [{Colors.INFO}]Edition is automatically determined by connectivity:[/]")
-        console.print(f"    - [{Colors.SUCCESS}]Enterprise[/] when connected via [bold]caracal sync connect[/bold]")
-        console.print(f"    - [{Colors.SUCCESS}]Open Source[/] after [bold]caracal sync disconnect[/bold]")
+        console.print(f"    - [{Colors.SUCCESS}]Enterprise[/] when connected via [bold]caracal enterprise login[/bold]")
+        console.print(f"    - [{Colors.SUCCESS}]Open Source[/] after [bold]caracal enterprise disconnect[/bold]")
         console.print()
         console.print(f"  [{Colors.DIM}]Manual edition switching is disabled for security and consistency.[/]")
         

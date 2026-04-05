@@ -15,8 +15,9 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from caracal.core.crypto import sign_mandate
+from caracal.core.identity import PrincipalRegistry
 from caracal.core.intent import Intent
+from caracal.core.signing_service import SigningService, SigningServiceError, SigningServiceKeyError
 from caracal.db.models import ExecutionMandate, AuthorityPolicy, Principal
 from caracal.logging_config import get_logger
 
@@ -39,7 +40,15 @@ class MandateManager:
     
     """
     
-    def __init__(self, db_session: Session, ledger_writer=None, mandate_cache=None, rate_limiter=None, delegation_graph=None):
+    def __init__(
+        self,
+        db_session: Session,
+        ledger_writer=None,
+        mandate_cache=None,
+        rate_limiter=None,
+        delegation_graph=None,
+        signing_service: Optional[SigningService] = None,
+    ):
         """
         Initialize MandateManager.
         
@@ -55,6 +64,7 @@ class MandateManager:
         self.mandate_cache = mandate_cache
         self.rate_limiter = rate_limiter
         self.delegation_graph = delegation_graph
+        self._signing_service = signing_service or SigningService(PrincipalRegistry(db_session))
         logger.info(
             f"MandateManager initialized (cache_enabled={mandate_cache is not None}, "
             f"rate_limiter_enabled={rate_limiter is not None}, "
@@ -211,6 +221,7 @@ class MandateManager:
         validity_seconds: int,
         intent: Optional[Intent] = None,
         delegation_type: str = "directed",
+        source_mandate_id: Optional[UUID] = None,
         network_distance: Optional[int] = None,
         enforce_issuer_policy: bool = True,
         context_tags: Optional[List[str]] = None,
@@ -231,6 +242,7 @@ class MandateManager:
             validity_seconds: How long the mandate is valid (in seconds)
             intent: Optional intent to bind the mandate to
             delegation_type: Type of delegation (directed/peer)
+            source_mandate_id: Optional parent mandate ID for delegated mandates
             network_distance: How many additional delegation hops are allowed
             enforce_issuer_policy: Whether to validate against issuer authority policy
             context_tags: Context tags for dynamic authority filtering
@@ -362,12 +374,7 @@ class MandateManager:
             error_msg = f"Issuer principal {issuer_id} not found"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
-        
-        if not issuer_principal.private_key_pem:
-            error_msg = f"Issuer principal {issuer_id} has no private key"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-        
+
         # Create mandate data for signing
         mandate_data = {
             "mandate_id": str(mandate_id),
@@ -381,10 +388,17 @@ class MandateManager:
             "intent_hash": intent_hash
         }
         
-        # Sign mandate with issuer's private key
+        # Sign mandate via centralized signing service; mandate manager never handles raw private keys.
         try:
-            signature = sign_mandate(mandate_data, issuer_principal.private_key_pem)
-        except Exception as e:
+            signature = self._signing_service.sign_canonical_payload_for_principal(
+                principal_id=str(issuer_principal.principal_id),
+                payload=mandate_data,
+            )
+        except SigningServiceKeyError as e:
+            error_msg = f"Issuer principal {issuer_id} has no resolvable private key metadata"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        except SigningServiceError as e:
             error_msg = f"Failed to sign mandate: {e}"
             logger.error(error_msg, exc_info=True)
             raise RuntimeError(error_msg)
@@ -408,6 +422,7 @@ class MandateManager:
             delegation_type=delegation_type,
             context_tags=context_tags,
             intent_hash=intent_hash,
+            source_mandate_id=source_mandate_id,
             network_distance=resolved_network_distance,
         )
         
@@ -628,7 +643,7 @@ class MandateManager:
             if validity_seconds <= 0:
                 raise ValueError("Source mandate is practically expired, cannot delegate")
         
-        # Get principal types for direction validation
+        # Get principal kinds for direction validation
         source_principal = self._get_principal(source_mandate.subject_id)
         target_principal = self._get_principal(target_subject_id)
         
@@ -639,8 +654,8 @@ class MandateManager:
         
         # Validate delegation direction
         DelegationGraph.validate_delegation_direction(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
 
         source_depth = int(source_mandate.network_distance or 0)
@@ -653,8 +668,8 @@ class MandateManager:
         
         # Determine delegation type
         delegation_type = DelegationGraph.get_delegation_type(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
         
         # Issue the delegated mandate
@@ -667,6 +682,7 @@ class MandateManager:
                 validity_seconds=validity_seconds,
                 intent=None,
                 delegation_type=delegation_type,
+                source_mandate_id=source_mandate_id,
                 network_distance=delegated_depth,
                 enforce_issuer_policy=False,
                 context_tags=context_tags,
@@ -684,7 +700,7 @@ class MandateManager:
             logger.info(
                 f"Successfully delegated mandate {delegated_mandate.mandate_id} "
                 f"from source {source_mandate_id} to subject {target_subject_id} "
-                f"[{source_principal.principal_type}→{target_principal.principal_type}]"
+                f"[{source_principal.principal_kind}→{target_principal.principal_kind}]"
             )
             
             return delegated_mandate
@@ -738,7 +754,7 @@ class MandateManager:
         if not source_mandate:
             raise ValueError(f"Source mandate {source_mandate_id} not found")
         
-        # Get principal types
+        # Get principal kinds
         source_principal = self._get_principal(source_mandate.subject_id)
         target_principal = self._get_principal(target_subject_id)
         
@@ -747,17 +763,17 @@ class MandateManager:
         if not target_principal:
             raise ValueError(f"Target principal {target_subject_id} not found")
         
-        # Peer delegation requires same principal type
-        if source_principal.principal_type != target_principal.principal_type:
+        # Peer delegation requires same principal kind
+        if source_principal.principal_kind != target_principal.principal_kind:
             raise ValueError(
-                f"Peer delegation requires same principal types. "
-                f"Got {source_principal.principal_type} → {target_principal.principal_type}"
+                f"Peer delegation requires same principal kinds. "
+                f"Got {source_principal.principal_kind} → {target_principal.principal_kind}"
             )
         
         # Validate direction (same type peer must be allowed)
         DelegationGraph.validate_delegation_direction(
-            source_principal.principal_type,
-            target_principal.principal_type
+            source_principal.principal_kind,
+            target_principal.principal_kind
         )
         
         # Delegate using the standard flow (will set type='peer' automatically)

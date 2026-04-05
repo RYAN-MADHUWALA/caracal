@@ -20,8 +20,6 @@
 #   --drop-database     Drop database before restore (default: false)
 
 #   --confirm           Skip confirmation prompt (default: false)
-#
-# Requirements: Deployment
 
 set -euo pipefail
 

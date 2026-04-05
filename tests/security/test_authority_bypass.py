@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from caracal.core.authority import AuthorityEvaluator, AuthorityDecision
 from caracal.db.models import ExecutionMandate, Principal, AuthorityPolicy
-from caracal.core.crypto import sign_mandate
+from tests.helpers.crypto_signing import sign_mandate_for_test
 
 
 @pytest.mark.security
@@ -65,7 +65,7 @@ class TestAuthorityBypassAttempts:
             "intent_hash": None
         }
         
-        signature = sign_mandate(mandate_data, issuer.private_key_pem)
+        signature = sign_mandate_for_test(mandate_data, issuer.private_key_pem)
         
         mandate = ExecutionMandate(
             mandate_id=uuid4(),
@@ -114,7 +114,7 @@ class TestAuthorityBypassAttempts:
             "intent_hash": None
         }
         
-        signature = sign_mandate(mandate_data, issuer.private_key_pem)
+        signature = sign_mandate_for_test(mandate_data, issuer.private_key_pem)
         
         mandate = ExecutionMandate(
             mandate_id=uuid4(),
@@ -163,7 +163,7 @@ class TestAuthorityBypassAttempts:
             "intent_hash": None
         }
         
-        signature = sign_mandate(mandate_data, issuer.private_key_pem)
+        signature = sign_mandate_for_test(mandate_data, issuer.private_key_pem)
         
         mandate = ExecutionMandate(
             mandate_id=uuid4(),
@@ -199,28 +199,31 @@ class TestAuthorityBypassAttempts:
         """Test that scope escalation attempts are rejected."""
         issuer = crypto_fixtures["issuer"]
         subject = crypto_fixtures["subject"]
+        mandate_id = uuid4()
+        valid_from = datetime.utcnow()
+        valid_until = valid_from + timedelta(hours=1)
         
         # Create a mandate with limited scope
         mandate_data = {
-            "mandate_id": str(uuid4()),
+            "mandate_id": str(mandate_id),
             "issuer_id": str(issuer.principal_id),
             "subject_id": str(subject.principal_id),
-            "valid_from": datetime.utcnow().isoformat(),
-            "valid_until": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+            "valid_from": valid_from.isoformat(),
+            "valid_until": valid_until.isoformat(),
             "resource_scope": ["test:read-only"],  # Limited scope
             "action_scope": ["read"],  # Only read action
             "delegation_type": "directed",
             "intent_hash": None
         }
         
-        signature = sign_mandate(mandate_data, issuer.private_key_pem)
+        signature = sign_mandate_for_test(mandate_data, issuer.private_key_pem)
         
         mandate = ExecutionMandate(
-            mandate_id=uuid4(),
+            mandate_id=mandate_id,
             issuer_id=issuer.principal_id,
             subject_id=subject.principal_id,
-            valid_from=datetime.utcnow(),
-            valid_until=datetime.utcnow() + timedelta(hours=1),
+            valid_from=valid_from,
+            valid_until=valid_until,
             resource_scope=["test:read-only"],
             action_scope=["read"],
             signature=signature,
@@ -248,28 +251,31 @@ class TestAuthorityBypassAttempts:
         """Test that resource escalation attempts are rejected."""
         issuer = crypto_fixtures["issuer"]
         subject = crypto_fixtures["subject"]
+        mandate_id = uuid4()
+        valid_from = datetime.utcnow()
+        valid_until = valid_from + timedelta(hours=1)
         
         # Create a mandate with limited resource scope
         mandate_data = {
-            "mandate_id": str(uuid4()),
+            "mandate_id": str(mandate_id),
             "issuer_id": str(issuer.principal_id),
             "subject_id": str(subject.principal_id),
-            "valid_from": datetime.utcnow().isoformat(),
-            "valid_until": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+            "valid_from": valid_from.isoformat(),
+            "valid_until": valid_until.isoformat(),
             "resource_scope": ["test:specific-resource"],  # Specific resource only
             "action_scope": ["read"],
             "delegation_type": "directed",
             "intent_hash": None
         }
         
-        signature = sign_mandate(mandate_data, issuer.private_key_pem)
+        signature = sign_mandate_for_test(mandate_data, issuer.private_key_pem)
         
         mandate = ExecutionMandate(
-            mandate_id=uuid4(),
+            mandate_id=mandate_id,
             issuer_id=issuer.principal_id,
             subject_id=subject.principal_id,
-            valid_from=datetime.utcnow(),
-            valid_until=datetime.utcnow() + timedelta(hours=1),
+            valid_from=valid_from,
+            valid_until=valid_until,
             resource_scope=["test:specific-resource"],
             action_scope=["read"],
             signature=signature,

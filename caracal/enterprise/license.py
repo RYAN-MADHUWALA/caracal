@@ -6,9 +6,9 @@ Enterprise license validation.
 
 This module provides license validation for Caracal Enterprise features.
 It calls the Caracal Enterprise API to validate license tokens and
-manage sync configuration.  When the API is unreachable — or no
-enterprise URL is configured — it falls back to cached license data
-stored in the workspace config.
+manage sync configuration. Hard-cut validation is fail-closed: cached
+runtime metadata can support startup/status surfaces, but live license
+validation never falls back to offline acceptance.
 """
 
 import json
@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 # Enterprise config file helpers
 # ---------------------------------------------------------------------------
 
-_ENTERPRISE_CONFIG_NAME = "enterprise.json"
 _DEFAULT_ENTERPRISE_URL = "https://www.garudexlabs.com"
 _ALLOWED_ENTERPRISE_HOSTS = {"localhost", "garudexlabs.com", "www.garudexlabs.com"}
+_ENTERPRISE_CONFIG_WORKSPACE_KEY = "__enterprise_runtime__"
 
 
 def _is_allowed_enterprise_host(host: str) -> bool:
@@ -173,40 +173,91 @@ def _normalize_enterprise_url(raw: Optional[str]) -> Optional[str]:
     return value.rstrip("/")
 
 
-def _get_enterprise_config_path() -> Path:
-    """Return path to the enterprise config in the active workspace."""
-    try:
-        from caracal.flow.workspace import get_workspace
-        ws = get_workspace()
-        return ws.root / _ENTERPRISE_CONFIG_NAME
-    except Exception:
-        return Path.home() / ".caracal" / _ENTERPRISE_CONFIG_NAME
-
-
 def load_enterprise_config() -> Dict[str, Any]:
-    """Load persisted enterprise config (license, sync key, API URL, etc.)."""
-    path = _get_enterprise_config_path()
-    if path.exists():
+    """Load enterprise config from dedicated enterprise runtime persistence."""
+    try:
+        from caracal.config import load_config
+        from caracal.db.connection import get_db_manager
+        from caracal.db.models import EnterpriseRuntimeConfig
+
+        db_manager = get_db_manager(load_config())
         try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Failed to read enterprise config %s: %s", path, exc)
+            with db_manager.session_scope() as session:
+                row = session.query(EnterpriseRuntimeConfig).filter_by(
+                    runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+                ).first()
+                if row and isinstance(row.config_data, dict):
+                    return dict(row.config_data)
+        finally:
+            db_manager.close()
+    except Exception as exc:
+        logger.warning("Failed to load enterprise config from PostgreSQL: %s", exc)
+
     return {}
 
 
+def resolve_revocation_webhook_target(
+    *,
+    webhook_url_override: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve revocation webhook URL and sync API key from enterprise runtime config."""
+    normalized_override = str(webhook_url_override or "").strip() or None
+
+    config = load_enterprise_config()
+    sync_api_key = str(config.get("sync_api_key") or "").strip() or None
+
+    if normalized_override:
+        return normalized_override, sync_api_key
+
+    configured_base = str(config.get("enterprise_api_url") or "").strip() or None
+    resolved_base = _resolve_api_url(configured_base)
+    if not resolved_base:
+        return None, sync_api_key
+
+    return f"{resolved_base.rstrip('/')}/api/sync/revocation-events", sync_api_key
+
+
 def save_enterprise_config(data: Dict[str, Any]) -> None:
-    """Persist enterprise config to the workspace."""
-    path = _get_enterprise_config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, default=str))
-    logger.debug("Enterprise config saved to %s", path)
+    """Persist enterprise config to dedicated enterprise runtime persistence."""
+    from caracal.config import load_config
+    from caracal.db.connection import get_db_manager
+    from caracal.db.models import EnterpriseRuntimeConfig
+
+    db_manager = get_db_manager(load_config())
+    try:
+        with db_manager.session_scope() as session:
+            row = session.query(EnterpriseRuntimeConfig).filter_by(
+                runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+            ).first()
+            if row is None:
+                row = EnterpriseRuntimeConfig(
+                    runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY,
+                    config_data={},
+                )
+                session.add(row)
+                session.flush()
+
+            row.config_data = dict(data)
+    finally:
+        db_manager.close()
 
 
 def clear_enterprise_config() -> None:
-    """Remove enterprise config from the workspace."""
-    path = _get_enterprise_config_path()
-    if path.exists():
-        path.unlink()
+    """Clear enterprise config from dedicated enterprise runtime persistence."""
+    from caracal.config import load_config
+    from caracal.db.connection import get_db_manager
+    from caracal.db.models import EnterpriseRuntimeConfig
+
+    db_manager = get_db_manager(load_config())
+    try:
+        with db_manager.session_scope() as session:
+            row = session.query(EnterpriseRuntimeConfig).filter_by(
+                runtime_key=_ENTERPRISE_CONFIG_WORKSPACE_KEY
+            ).first()
+            if row:
+                session.delete(row)
+    finally:
+        db_manager.close()
 
 
 def _get_or_create_client_instance_id() -> str:
@@ -433,12 +484,8 @@ class EnterpriseLicenseValidator:
     The validator calls the Enterprise API's ``/api/license/validate`` endpoint.
     On successful validation, it:
     - Persists the license key, tier, features, expiry, and sync API key
-      to the workspace's ``enterprise.json`` so subsequent runs auto-connect.
+            to enterprise runtime metadata so subsequent runs auto-connect.
     - Returns a ``LicenseValidationResult`` with full details.
-    
-    When the Enterprise API is unreachable, the validator checks for cached
-    license data.  If the cached license has not expired it returns a valid
-    result with the cached information.
     
     Enterprise License Token Format:
         Tokens are generated by the Enterprise API and typically look like:
@@ -497,8 +544,13 @@ class EnterpriseLicenseValidator:
         license_token = license_token.strip()
 
         if not self._api_url:
-            logger.info("No enterprise URL configured; falling back to cached license")
-            return self._validate_from_cache(license_token)
+            return LicenseValidationResult(
+                valid=False,
+                message=(
+                    "Enterprise API URL is not configured. "
+                    "License validation requires a live Enterprise API in hard-cut mode."
+                ),
+            )
 
         # --- Try Enterprise API ---
         try:
@@ -579,14 +631,16 @@ class EnterpriseLicenseValidator:
                 )
 
         except ConnectionError as exc:
-            logger.warning("Enterprise API unreachable: %s — trying cached license", exc)
-            return self._validate_from_cache(license_token)
+            logger.warning("Enterprise API unreachable during license validation: %s", exc)
+            return LicenseValidationResult(
+                valid=False,
+                message=(
+                    f"Cannot reach the Enterprise API at {self._api_url}. "
+                    "License validation requires a live Enterprise API in hard-cut mode."
+                ),
+            )
         except Exception as exc:
             logger.error("Unexpected error during license validation: %s", exc)
-            cached_result = self._validate_from_cache(license_token)
-            if cached_result.valid:
-                return cached_result
-
             return LicenseValidationResult(
                 valid=False,
                 message=(
@@ -706,50 +760,3 @@ class EnterpriseLicenseValidator:
         
         save_enterprise_config(data)
         self._cached_config = data
-
-    def _validate_from_cache(self, license_token: str) -> LicenseValidationResult:
-        """Attempt to validate from cached license data when API is unreachable."""
-        cfg = self._load_config()
-        
-        if not cfg.get("license_key"):
-            return LicenseValidationResult(
-                valid=False,
-                message=(
-                    "Cannot reach the Enterprise API and no cached license found. "
-                    "Ensure the Enterprise API is running or check your network connection. "
-                    "Visit https://garudexlabs.com for more information."
-                ),
-            )
-        
-        # Check that the token matches the cached one
-        if cfg["license_key"] != license_token:
-            return LicenseValidationResult(
-                valid=False,
-                message=(
-                    "License token does not match the cached license. "
-                    "Cannot validate offline with a different token."
-                ),
-            )
-        
-        # Check expiry
-        expires_at = None
-        if cfg.get("expires_at"):
-            try:
-                expires_at = datetime.fromisoformat(cfg["expires_at"])
-                if expires_at < datetime.utcnow():
-                    return LicenseValidationResult(
-                        valid=False,
-                        message="Cached license has expired. Connect to the Enterprise API to renew.",
-                    )
-            except (ValueError, TypeError):
-                pass
-        
-        return LicenseValidationResult(
-            valid=True,
-            message="License validated from cache (Enterprise API unreachable).",
-            features_available=cfg.get("feature_names", []),
-            expires_at=expires_at,
-            tier=cfg.get("tier"),
-            sync_api_key=cfg.get("sync_api_key"),
-            enterprise_api_url=cfg.get("enterprise_api_url"),
-        )

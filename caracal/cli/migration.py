@@ -10,9 +10,11 @@ Provides commands for:
 - Backup management
 """
 
+import json
 import sys
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, List
 
 import click
 
@@ -20,12 +22,149 @@ from caracal.cli.context import pass_context, CLIContext
 from caracal.deployment.migration import MigrationManager
 from caracal.deployment.edition import Edition
 from caracal.deployment.exceptions import MigrationError
+from caracal.runtime.hardcut_preflight import (
+    HardCutPreflightError,
+    assert_migration_cli_allowed,
+    assert_migration_hardcut,
+)
 
 
 @click.group(name="migrate")
 def migrate_group():
     """Manage migration operations."""
     pass
+
+
+def _enforce_hardcut_migration_policy() -> None:
+    try:
+        assert_migration_cli_allowed()
+    except HardCutPreflightError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _enforce_explicit_hardcut_migration_policy() -> None:
+    """Allow explicit credential migration only when hard-cut preflight passes."""
+    try:
+        assert_migration_hardcut(
+            database_urls={},
+            check_jsonb=False,
+            env_vars=os.environ,
+        )
+    except HardCutPreflightError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _parse_credential_exports(export_items: List[str]) -> Dict[str, str]:
+    """Parse repeated KEY=VALUE items into a dictionary."""
+    parsed: Dict[str, str] = {}
+    for raw in export_items:
+        if "=" not in raw:
+            raise click.ClickException(
+                f"Invalid --import-credential value '{raw}'. Expected KEY=VALUE format."
+            )
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise click.ClickException("Credential key must not be empty.")
+        parsed[key] = value
+    return parsed
+
+
+@migrate_group.command(name="oss-to-enterprise")
+@click.option("--workspace", "workspace", type=str, default=None, help="Target workspace (defaults to all workspaces)")
+@click.option("--gateway-url", "gateway_url", type=str, required=True, help="Enterprise gateway URL")
+@click.option("--gateway-token", "gateway_token", type=str, default=None, help="Optional enterprise gateway token")
+@click.option(
+    "--migrate-credential",
+    "migrate_credentials",
+    multiple=True,
+    help="Credential key to migrate (repeatable). Defaults to all credentials when omitted.",
+)
+@click.option("--dry-run", is_flag=True, help="Preview decisions without writing custody metadata")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON result")
+@pass_context
+def migrate_oss_to_enterprise(
+    ctx: CLIContext,
+    workspace: Optional[str],
+    gateway_url: str,
+    gateway_token: Optional[str],
+    migrate_credentials: tuple[str, ...],
+    dry_run: bool,
+    output_json: bool,
+):
+    """Explicitly migrate local credentials to enterprise custody pointers (additive)."""
+    _enforce_explicit_hardcut_migration_policy()
+
+    manager = MigrationManager()
+    result = manager.migrate_credentials_oss_to_enterprise(
+        gateway_url=gateway_url,
+        gateway_token=gateway_token,
+        workspace=workspace,
+        include_credentials=list(migrate_credentials) or None,
+        dry_run=dry_run,
+    )
+
+    if output_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    click.echo("Open Source -> Enterprise credential migration completed.")
+    click.echo(f"  Workspaces: {', '.join(result['workspaces']) if result['workspaces'] else '(none)'}")
+    click.echo(f"  Credentials selected: {result['credentials_selected']}")
+    click.echo(f"  Dry run: {'yes' if dry_run else 'no'}")
+
+
+@migrate_group.command(name="enterprise-to-oss")
+@click.option("--workspace", "workspace", type=str, default=None, help="Target workspace (defaults to all workspaces)")
+@click.option(
+    "--migrate-credential",
+    "migrate_credentials",
+    multiple=True,
+    help="Credential key to migrate (repeatable). Defaults to all enterprise-marked credentials when omitted.",
+)
+@click.option(
+    "--import-credential",
+    "import_credentials",
+    multiple=True,
+    help="Credential export payload in KEY=VALUE form (repeatable)",
+)
+@click.option("--deactivate-license", is_flag=True, help="Deactivate enterprise license after successful migration")
+@click.option("--dry-run", is_flag=True, help="Preview decisions without writing local secrets/custody metadata")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON result")
+@pass_context
+def migrate_enterprise_to_oss(
+    ctx: CLIContext,
+    workspace: Optional[str],
+    migrate_credentials: tuple[str, ...],
+    import_credentials: tuple[str, ...],
+    deactivate_license: bool,
+    dry_run: bool,
+    output_json: bool,
+):
+    """Explicitly migrate enterprise credentials into local encrypted storage."""
+    _enforce_explicit_hardcut_migration_policy()
+
+    exports = _parse_credential_exports(list(import_credentials)) if import_credentials else None
+
+    manager = MigrationManager()
+    result = manager.migrate_credentials_enterprise_to_oss(
+        workspace=workspace,
+        include_credentials=list(migrate_credentials) or None,
+        exported_credentials=exports,
+        deactivate_license=deactivate_license,
+        dry_run=dry_run,
+    )
+
+    if output_json:
+        click.echo(json.dumps(result, indent=2))
+        return
+
+    click.echo("Enterprise -> Open Source credential migration completed.")
+    click.echo(f"  Workspaces: {', '.join(result['workspaces']) if result['workspaces'] else '(none)'}")
+    click.echo(f"  Credentials selected: {result['credentials_selected']}")
+    click.echo(f"  Credentials imported locally: {result['credentials_imported']}")
+    click.echo(f"  License deactivated: {'yes' if result['license_deactivated'] else 'no'}")
+    click.echo(f"  Dry run: {'yes' if dry_run else 'no'}")
 
 
 @migrate_group.command(name="repo-to-package")
@@ -74,6 +213,8 @@ def migrate_repo_to_package(
         caracal migrate repo-to-package --repository-path ~/caracal
         caracal migrate repo-to-package --dry-run
     """
+    _enforce_hardcut_migration_policy()
+
     try:
         migration_manager = MigrationManager()
         
@@ -181,9 +322,11 @@ def migrate_switch_edition(
         # Dry run to see what would happen
         caracal migrate switch-edition enterprise --gateway-url https://gateway.example.com --dry-run
     """
+    _enforce_hardcut_migration_policy()
+
     try:
         migration_manager = MigrationManager()
-        current_edition = migration_manager.edition_manager.get_edition()
+        current_edition = migration_manager.edition_adapter.get_edition()
         target_edition_enum = Edition(target_edition.lower())
         
         # Validate requirements
@@ -269,6 +412,8 @@ def migrate_list_backups(ctx: CLIContext, output_json: bool):
         caracal migrate list-backups
         caracal migrate list-backups --json
     """
+    _enforce_hardcut_migration_policy()
+
     try:
         migration_manager = MigrationManager()
         backups = migration_manager.list_backups()
@@ -318,6 +463,8 @@ def migrate_restore_backup(ctx: CLIContext, backup_path: Path, confirm: bool):
         caracal migrate restore-backup /path/to/backup.tar.gz
         caracal migrate restore-backup /path/to/backup.tar.gz --confirm
     """
+    _enforce_hardcut_migration_policy()
+
     try:
         if not confirm:
             click.echo("WARNING: This will replace your current configuration with the backup.")

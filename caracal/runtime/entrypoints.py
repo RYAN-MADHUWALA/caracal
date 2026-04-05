@@ -11,11 +11,18 @@ import json
 import os
 import platform
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Callable, Sequence
 
+from caracal.runtime.hardcut_preflight import assert_runtime_hardcut
 from caracal.storage.layout import resolve_caracal_home
 
 COMPOSE_FILE_ENV = "CARACAL_DOCKER_COMPOSE_FILE"
@@ -25,6 +32,33 @@ HOST_IO_ROOT_ENV = "CARACAL_HOST_IO_ROOT"
 HOST_IO_ROOT_IN_CONTAINER = "/caracal-host-io"
 NETWORK_IN_USE_MARKER = "Resource is still in use"
 PURGE_CONFIRMATION_TEXT = "purge"
+
+AIS_STARTUP_NONCE_ENV = "CARACAL_AIS_ATTESTATION_NONCE"
+AIS_STARTUP_PRINCIPAL_ENV = "CARACAL_AIS_ATTESTATION_PRINCIPAL_ID"
+AIS_API_PREFIX_ENV = "CARACAL_AIS_API_PREFIX"
+AIS_UNIX_SOCKET_PATH_ENV = "CARACAL_AIS_UNIX_SOCKET_PATH"
+AIS_LISTEN_HOST_ENV = "CARACAL_AIS_LISTEN_HOST"
+AIS_LISTEN_PORT_ENV = "CARACAL_AIS_LISTEN_PORT"
+AIS_HEALTHCHECK_TIMEOUT_ENV = "CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS"
+AIS_HEALTHCHECK_INTERVAL_ENV = "CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS"
+AIS_STARTUP_TIMEOUT_ENV = "CARACAL_AIS_STARTUP_TIMEOUT_SECONDS"
+AIS_MAX_RESTARTS_ENV = "CARACAL_AIS_MAX_RESTARTS"
+AIS_DEFAULT_API_PREFIX = "/v1/ais"
+AIS_DEFAULT_UNIX_SOCKET_PATH = "/tmp/caracal-ais.sock"
+AIS_DEFAULT_LISTEN_HOST = "127.0.0.1"
+AIS_DEFAULT_LISTEN_PORT = 7079
+AIS_SESSION_SIGNING_KEY_REF_ENV = "CARACAL_VAULT_SIGNING_KEY_REF"
+AIS_SESSION_VERIFY_KEY_REF_ENV = "CARACAL_VAULT_SESSION_PUBLIC_KEY_REF"
+AIS_SESSION_ALGORITHM_ENV = "CARACAL_SESSION_SIGNING_ALGORITHM"
+AIS_SESSION_ALGORITHM_FALLBACK_ENV = "CARACAL_SESSION_JWT_ALGORITHM"
+AIS_SESSION_CAVEAT_MODE_ENV = "CARACAL_SESSION_CAVEAT_MODE"
+AIS_SESSION_CAVEAT_HMAC_KEY_ENV = "CARACAL_SESSION_CAVEAT_HMAC_KEY"
+AIS_REVOCATION_EVENTS_CHANNEL_ENV = "CARACAL_REVOCATION_EVENTS_CHANNEL"
+AIS_DEFAULT_REVOCATION_EVENTS_CHANNEL = "caracal:identity:revocation_events"
+AIS_REVOCATION_PUBLISHER_MODE_ENV = "CARACAL_REVOCATION_PUBLISHER_MODE"
+AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV = "CARACAL_ENTERPRISE_REVOCATION_WEBHOOK_URL"
+AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV = "CARACAL_ENTERPRISE_SYNC_API_KEY"
+AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH = "/api/sync/revocation-events"
 
 _EMBEDDED_COMPOSE_FILE = resolve_caracal_home(require_explicit=False) / "runtime" / "docker-compose.image.yml"
 _EMBEDDED_COMPOSE_CONTENT = """name: caracal
@@ -47,6 +81,24 @@ services:
             timeout: 5s
             retries: 10
             start_period: 10s
+        restart: unless-stopped
+        networks:
+            - caracal-runtime
+
+    vault:
+        image: ${CARACAL_VAULT_SIDECAR_IMAGE:-infisical/infisical:latest}
+        environment:
+            NODE_ENV: production
+        ports:
+            - "${CARACAL_VAULT_SIDECAR_PORT:-8080}:8080"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - wget -q -O /dev/null http://127.0.0.1:8080 || exit 1
+            interval: 15s
+            timeout: 5s
+            retries: 20
+            start_period: 30s
         restart: unless-stopped
         networks:
             - caracal-runtime
@@ -90,14 +142,28 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
             CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -114,13 +180,21 @@ services:
             REDIS_HOST: redis
             REDIS_PORT: 6379
             REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+            CARACAL_AIS_ATTESTATION_NONCE: ${CARACAL_AIS_ATTESTATION_NONCE:-}
+            CARACAL_AIS_ATTESTATION_PRINCIPAL_ID: ${CARACAL_AIS_ATTESTATION_PRINCIPAL_ID:-}
+            CARACAL_AIS_API_PREFIX: ${CARACAL_AIS_API_PREFIX:-/v1/ais}
+            CARACAL_AIS_UNIX_SOCKET_PATH: ${CARACAL_AIS_UNIX_SOCKET_PATH:-/tmp/caracal-ais.sock}
+            CARACAL_AIS_LISTEN_HOST: ${CARACAL_AIS_LISTEN_HOST:-127.0.0.1}
+            CARACAL_AIS_LISTEN_PORT: ${CARACAL_AIS_LISTEN_PORT:-7079}
+            CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS: ${CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS:-3}
+            CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS: ${CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS:-10}
+            CARACAL_AIS_STARTUP_TIMEOUT_SECONDS: ${CARACAL_AIS_STARTUP_TIMEOUT_SECONDS:-30}
+            CARACAL_AIS_MAX_RESTARTS: ${CARACAL_AIS_MAX_RESTARTS:-3}
             LOG_LEVEL: ${LOG_LEVEL:-INFO}
         command:
-            - python
-            - -m
-            - caracal.mcp.service
+            - caracal
+            - runtime-mcp
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         ports:
             - ${CARACAL_API_PORT:-8000}:8080
@@ -147,13 +221,27 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -174,7 +262,6 @@ services:
         command:
             - caracal
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         stdin_open: true
         tty: true
@@ -190,13 +277,27 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -221,7 +322,6 @@ services:
             - -m
             - caracal.flow.main
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         stdin_open: true
         tty: true
@@ -231,7 +331,6 @@ services:
 volumes:
     postgres_data:
     redis_data:
-    caracal_state:
 
 networks:
     caracal-runtime:
@@ -336,11 +435,17 @@ def _run_host_orchestrator(args: Sequence[str]) -> int:
 
 def _host_up(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
+    assert_runtime_hardcut(
+        compose_file=compose_file,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
     compose_cmd = _compose_cmd(compose_file)
     uses_local_build = _service_uses_local_build(compose_file, "mcp")
 
     if not namespace.no_pull:
-        pull_services = ["postgres", "redis"]
+        pull_services = ["postgres", "redis", "vault"]
         if not uses_local_build:
             pull_services.insert(0, "mcp")
 
@@ -354,7 +459,7 @@ def _host_up(namespace: argparse.Namespace) -> int:
         up_cmd.append("--build")
 
     up_result = subprocess.run(
-        [*up_cmd, "postgres", "redis", "mcp"],
+        [*up_cmd, "postgres", "redis", "vault", "mcp"],
         check=False,
     )
     return up_result.returncode
@@ -410,7 +515,6 @@ def _host_purge(namespace: argparse.Namespace) -> int:
         "networks": [],
         "images": [],
         "paths": [],
-        "keyring": [],
     }
     failures: list[str] = []
 
@@ -443,9 +547,6 @@ def _host_purge(namespace: argparse.Namespace) -> int:
             removed["paths"].append(str(path))
         else:
             failures.append(f"path:{path}")
-
-    if _purge_keyring_credentials():
-        removed["keyring"].append("caracal/encryption_key")
 
     _print_purge_summary(removed)
 
@@ -931,23 +1032,15 @@ def _completion_artifact_paths() -> set[Path]:
 
 
 def _load_registered_workspace_paths() -> list[Path]:
-    registry_path = _caracal_home_dir() / "workspaces.json"
-    if not registry_path.exists():
-        return []
-
     try:
-        payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        from caracal.flow.workspace import WorkspaceManager
+    except Exception:
         return []
 
-    workspaces = payload.get("workspaces", [])
-    if not isinstance(workspaces, list):
-        return []
+    workspaces = WorkspaceManager.list_workspaces()
 
     paths: list[Path] = []
     for workspace in workspaces:
-        if not isinstance(workspace, dict):
-            continue
         raw_path = workspace.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             continue
@@ -975,19 +1068,6 @@ def _handle_remove_readonly(func, path: str, exc_info) -> None:
     func(path)
 
 
-def _purge_keyring_credentials() -> bool:
-    try:
-        import keyring
-    except Exception:
-        return False
-
-    try:
-        keyring.delete_password("caracal", "encryption_key")
-        return True
-    except Exception:
-        return False
-
-
 def _print_purge_summary(removed: dict[str, list[str]]) -> None:
     labels = {
         "containers": "containers",
@@ -995,11 +1075,10 @@ def _print_purge_summary(removed: dict[str, list[str]]) -> None:
         "networks": "networks",
         "images": "images",
         "paths": "paths",
-        "keyring": "keyring entries",
     }
 
     found_any = False
-    for key in ("containers", "volumes", "networks", "images", "paths", "keyring"):
+    for key in ("containers", "volumes", "networks", "images", "paths"):
         values = removed.get(key, [])
         if not values:
             continue
@@ -1074,6 +1153,12 @@ def _host_cli(namespace: argparse.Namespace) -> int:
 
 def _host_flow(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
+    assert_runtime_hardcut(
+        compose_file=compose_file,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
     compose_cmd = _compose_cmd(compose_file)
     uses_local_build = _service_uses_local_build(compose_file, "flow")
 
@@ -1085,10 +1170,8 @@ def _host_flow(namespace: argparse.Namespace) -> int:
         if build_result.returncode != 0:
             return build_result.returncode
 
-    # Flow setup only needs postgres/redis to be available; launching through
-    # the dedicated flow service avoids hard dependency on mcp container state.
     start_result = subprocess.run(
-        compose_cmd + ["up", "-d", "postgres", "redis"],
+        compose_cmd + ["up", "-d", "postgres", "redis", "vault"],
         check=False,
     )
     if start_result.returncode != 0:
@@ -1248,9 +1331,977 @@ def _resolve_compose_command() -> list[str]:
 
 
 def _run_local_caracal(args: Sequence[str]) -> None:
+    if args and args[0] == "runtime-mcp":
+        raise SystemExit(_run_runtime_mcp())
+
+    if args and args[0] == "ais-serve":
+        raise SystemExit(_run_ais_server())
+
     from caracal.runtime.restricted_shell import run_restricted_command
 
+    assert_runtime_hardcut(
+        compose_file=None,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
+
     raise SystemExit(run_restricted_command(list(args)))
+
+
+def _parse_int_env(env_key: str, default: int) -> int:
+    raw_value = (os.environ.get(env_key) or "").strip()
+    if not raw_value:
+        return default
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{env_key} must be an integer value") from exc
+
+
+def _create_ais_server_config():
+    from caracal.identity import AISServerConfig
+
+    return AISServerConfig(
+        api_prefix=(os.environ.get(AIS_API_PREFIX_ENV) or AIS_DEFAULT_API_PREFIX).strip() or AIS_DEFAULT_API_PREFIX,
+        unix_socket_path=os.environ.get(AIS_UNIX_SOCKET_PATH_ENV, AIS_DEFAULT_UNIX_SOCKET_PATH),
+        listen_host=(os.environ.get(AIS_LISTEN_HOST_ENV) or AIS_DEFAULT_LISTEN_HOST).strip() or AIS_DEFAULT_LISTEN_HOST,
+        listen_port=_parse_int_env(AIS_LISTEN_PORT_ENV, AIS_DEFAULT_LISTEN_PORT),
+    )
+
+
+def _consume_ais_startup_attestation(
+    *,
+    nonce_manager_factory: Callable[[], object] | None = None,
+) -> str:
+    from caracal.identity import (
+        AttestationNonceConsumedError,
+        AttestationNonceManager,
+        AttestationNonceValidationError,
+    )
+    from caracal.redis.client import RedisClient
+
+    startup_nonce = (os.environ.get(AIS_STARTUP_NONCE_ENV) or "").strip()
+    if not startup_nonce:
+        raise RuntimeError(
+            f"{AIS_STARTUP_NONCE_ENV} is required for AIS startup attestation"
+        )
+
+    expected_principal = (os.environ.get(AIS_STARTUP_PRINCIPAL_ENV) or "").strip() or None
+
+    if nonce_manager_factory is None:
+        redis_host = (os.environ.get("REDIS_HOST") or "localhost").strip() or "localhost"
+        redis_port = _parse_int_env("REDIS_PORT", 6379)
+        redis_password = (os.environ.get("REDIS_PASSWORD") or "").strip() or None
+        redis_client = RedisClient(host=redis_host, port=redis_port, password=redis_password)
+        manager = AttestationNonceManager(redis_client)
+    else:
+        manager = nonce_manager_factory()
+
+    consume_nonce = getattr(manager, "consume_nonce", None)
+    if not callable(consume_nonce):
+        raise RuntimeError("AIS nonce manager does not expose consume_nonce")
+
+    try:
+        principal_id = consume_nonce(startup_nonce, expected_principal_id=expected_principal)
+    except (AttestationNonceConsumedError, AttestationNonceValidationError) as exc:
+        raise RuntimeError("AIS startup attestation nonce is invalid or already consumed") from exc
+
+    normalized_principal = str(principal_id or "").strip()
+    if not normalized_principal:
+        raise RuntimeError("AIS startup attestation returned an empty principal_id")
+    return normalized_principal
+
+
+def _complete_ais_startup_attestation(
+    principal_id: str,
+    *,
+    db_manager: object | None = None,
+    principal_ttl_manager: object | None = None,
+) -> None:
+    from datetime import datetime
+    from uuid import UUID
+
+    from caracal.core.identity import PrincipalRegistry
+    from caracal.db.models import Principal, PrincipalAttestationStatus, PrincipalLifecycleStatus
+    from caracal.identity.principal_ttl import PrincipalTTLManager
+
+    resolved_db_manager = db_manager or _create_ais_db_manager()
+    resolved_ttl_manager = principal_ttl_manager
+    if resolved_ttl_manager is None:
+        resolved_ttl_manager = PrincipalTTLManager(_create_runtime_redis_client())
+    normalized_principal = str(principal_id or "").strip()
+    if not normalized_principal:
+        raise RuntimeError("AIS startup attestation cannot complete for an empty principal_id")
+
+    try:
+        principal_uuid = UUID(normalized_principal)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"AIS startup attestation principal '{normalized_principal}' is not a valid UUID"
+        ) from exc
+
+    with resolved_db_manager.session_scope() as session:
+        principal = (
+            session.query(Principal)
+            .filter(Principal.principal_id == principal_uuid)
+            .first()
+        )
+        if principal is None:
+            raise RuntimeError(
+                f"AIS startup attestation principal '{normalized_principal}' was not found"
+            )
+
+        principal.attestation_status = PrincipalAttestationStatus.ATTESTED.value
+        principal_metadata = dict(principal.principal_metadata or {})
+        principal_metadata["attestation_status"] = PrincipalAttestationStatus.ATTESTED.value
+        principal_metadata["attested_at"] = datetime.utcnow().isoformat() + "Z"
+        principal.principal_metadata = principal_metadata
+        session.flush()
+
+        activate_principal = getattr(resolved_ttl_manager, "activate_principal", None)
+        if callable(activate_principal):
+            activate_principal(normalized_principal)
+
+        PrincipalRegistry(session).transition_lifecycle_status(
+            normalized_principal,
+            PrincipalLifecycleStatus.ACTIVE.value,
+            actor_principal_id=normalized_principal,
+        )
+
+
+def _resolve_runtime_redis_url() -> str:
+    redis_url = (os.environ.get("REDIS_URL") or "").strip()
+    if redis_url:
+        return redis_url
+
+    host = (os.environ.get("REDIS_HOST") or "localhost").strip() or "localhost"
+    port = _parse_int_env("REDIS_PORT", 6379)
+    password = (os.environ.get("REDIS_PASSWORD") or "").strip()
+    if password:
+        encoded_password = urllib.parse.quote(password, safe="")
+        return f"redis://:{encoded_password}@{host}:{port}/0"
+    return f"redis://{host}:{port}/0"
+
+
+def _resolve_ais_vault_secret(secret_ref: str) -> str:
+    from caracal.core.vault import gateway_context, get_vault
+
+    normalized_ref = str(secret_ref or "").strip().strip("/")
+    if not normalized_ref:
+        raise RuntimeError("AIS vault secret reference cannot be empty")
+
+    org_id = (
+        os.environ.get("CARACAL_VAULT_PROJECT_ID")
+        or os.environ.get("CARACAL_VAULT_PROJECT_SLUG")
+        or os.environ.get("CARACAL_VAULT_ORG_ID")
+        or "caracal"
+    )
+    env_id = (
+        os.environ.get("CARACAL_VAULT_ENVIRONMENT")
+        or os.environ.get("CARACAL_VAULT_ENV")
+        or os.environ.get("CARACAL_VAULT_ENV_ID")
+        or "runtime"
+    )
+
+    with gateway_context():
+        return get_vault().get(org_id=str(org_id), env_id=str(env_id), name=normalized_ref)
+
+
+def _resolve_ais_vault_context() -> tuple[str, str]:
+    org_id = (
+        os.environ.get("CARACAL_VAULT_PROJECT_ID")
+        or os.environ.get("CARACAL_VAULT_PROJECT_SLUG")
+        or os.environ.get("CARACAL_VAULT_ORG_ID")
+        or "caracal"
+    )
+    env_id = (
+        os.environ.get("CARACAL_VAULT_ENVIRONMENT")
+        or os.environ.get("CARACAL_VAULT_ENV")
+        or os.environ.get("CARACAL_VAULT_ENV_ID")
+        or "runtime"
+    )
+    return str(org_id), str(env_id)
+
+
+def _bootstrap_runtime_vault_refs() -> None:
+    from caracal.core.vault import gateway_context, get_vault
+
+    signing_key_ref = (os.environ.get(AIS_SESSION_SIGNING_KEY_REF_ENV) or "").strip().strip("/")
+    verify_key_ref = (os.environ.get(AIS_SESSION_VERIFY_KEY_REF_ENV) or "").strip().strip("/")
+    if not signing_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_SIGNING_KEY_REF_ENV} is required to bootstrap AIS session signing"
+        )
+    if not verify_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_VERIFY_KEY_REF_ENV} is required to bootstrap AIS session verification"
+        )
+
+    org_id, env_id = _resolve_ais_vault_context()
+    algorithm = (
+        os.environ.get(AIS_SESSION_ALGORITHM_ENV)
+        or os.environ.get(AIS_SESSION_ALGORITHM_FALLBACK_ENV)
+        or "RS256"
+    ).strip().upper()
+
+    with gateway_context():
+        get_vault().ensure_asymmetric_keypair(
+            org_id=org_id,
+            env_id=env_id,
+            private_key_name=signing_key_ref,
+            public_key_name=verify_key_ref,
+            algorithm=algorithm,
+            actor="runtime-bootstrap",
+        )
+
+
+def _resolve_session_signing_algorithm() -> str:
+    configured = (
+        os.environ.get(AIS_SESSION_ALGORITHM_ENV)
+        or os.environ.get(AIS_SESSION_ALGORITHM_FALLBACK_ENV)
+        or ""
+    ).strip()
+    if configured:
+        return configured.upper()
+
+    return "RS256"
+
+
+def _create_ais_session_manager():
+    from caracal.core.session_manager import RedisSessionDenylistBackend, SessionManager
+    from caracal.core.signing_service import VaultReferenceJwtSigner
+
+    signing_key_ref = (os.environ.get(AIS_SESSION_SIGNING_KEY_REF_ENV) or "").strip()
+    if not signing_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_SIGNING_KEY_REF_ENV} is required to issue AIS session tokens"
+        )
+
+    verify_key_ref = (os.environ.get(AIS_SESSION_VERIFY_KEY_REF_ENV) or "").strip()
+    if not verify_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_VERIFY_KEY_REF_ENV} is required to validate AIS session tokens"
+        )
+    verify_key = _resolve_ais_vault_secret(verify_key_ref)
+
+    caveat_mode = (os.environ.get(AIS_SESSION_CAVEAT_MODE_ENV) or "caveat_chain").strip().lower()
+    caveat_hmac_key = (os.environ.get(AIS_SESSION_CAVEAT_HMAC_KEY_ENV) or "").strip()
+    if caveat_mode == "caveat_chain" and not caveat_hmac_key:
+        raise RuntimeError(
+            f"{AIS_SESSION_CAVEAT_HMAC_KEY_ENV} is required when {AIS_SESSION_CAVEAT_MODE_ENV}=caveat_chain"
+        )
+    org_id, env_id = _resolve_ais_vault_context()
+
+    return SessionManager(
+        token_signer=VaultReferenceJwtSigner(
+            org_id=org_id,
+            env_id=env_id,
+            key_name=signing_key_ref,
+            actor="runtime-ais-session-manager",
+        ),
+        verify_key=verify_key,
+        algorithm=_resolve_session_signing_algorithm(),
+        denylist_backend=RedisSessionDenylistBackend(_resolve_runtime_redis_url()),
+        db_session_manager=_create_ais_db_manager(),
+        caveat_mode=caveat_mode,
+        caveat_chain_hmac_key=caveat_hmac_key,
+        issuer="caracal-runtime-ais",
+        audience="caracal-session",
+    )
+
+
+def _create_ais_db_manager():
+    from caracal.config import load_config
+    from caracal.db.connection import get_db_manager
+
+    resolved_config_path = os.environ.get("CARACAL_CONFIG_PATH")
+    core_config = load_config(resolved_config_path, suppress_missing_file_log=True, emit_logs=False)
+    return get_db_manager(core_config)
+
+
+def _create_runtime_redis_client():
+    from caracal.redis.client import RedisClient
+
+    redis_host = (os.environ.get("REDIS_HOST") or "localhost").strip() or "localhost"
+    redis_port = _parse_int_env("REDIS_PORT", 6379)
+    redis_password = (os.environ.get("REDIS_PASSWORD") or "").strip() or None
+    return RedisClient(host=redis_host, port=redis_port, password=redis_password)
+
+
+def _resolve_runtime_revocation_publisher_mode(*, edition_manager: object | None = None) -> str:
+    explicit_mode = (os.environ.get(AIS_REVOCATION_PUBLISHER_MODE_ENV) or "").strip().lower()
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
+
+    adapter = edition_manager or get_deployment_edition_adapter()
+    resolve_mode = getattr(adapter, "resolve_revocation_publisher_mode", None)
+    if callable(resolve_mode):
+        return resolve_mode(explicit_mode=explicit_mode)
+
+    if explicit_mode:
+        if explicit_mode in {"redis", "enterprise_webhook"}:
+            return explicit_mode
+        raise RuntimeError(
+            f"{AIS_REVOCATION_PUBLISHER_MODE_ENV} must be one of: redis, enterprise_webhook"
+        )
+
+    resolved_is_enterprise = getattr(adapter, "is_enterprise", None)
+    if callable(resolved_is_enterprise):
+        return "enterprise_webhook" if bool(resolved_is_enterprise()) else "redis"
+
+    resolved_get_edition = getattr(adapter, "get_edition", None)
+    if not callable(resolved_get_edition):
+        raise RuntimeError("Unable to resolve runtime revocation publisher mode from edition adapter")
+
+    edition = resolved_get_edition()
+
+    normalized = str(getattr(edition, "value", edition) or "").strip().lower()
+    return "enterprise_webhook" if normalized == "enterprise" else "redis"
+
+
+def _resolve_enterprise_revocation_webhook_url(*, edition_manager: object | None = None) -> str:
+    configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip()
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
+
+    adapter = edition_manager or get_deployment_edition_adapter()
+    resolve_target = getattr(adapter, "resolve_enterprise_revocation_target", None)
+    if callable(resolve_target):
+        webhook_url, _sync_api_key = resolve_target(webhook_url_override=configured_url or None)
+        return webhook_url
+
+    if configured_url:
+        return configured_url
+
+    require_gateway_url = getattr(adapter, "require_gateway_url", None)
+    if callable(require_gateway_url):
+        gateway_url = str(require_gateway_url() or "").strip()
+    else:
+        resolved_gateway_url = getattr(adapter, "get_gateway_url", None)
+        if not callable(resolved_gateway_url):
+            raise RuntimeError("Enterprise revocation webhook URL is not configured")
+        gateway_url = str(resolved_gateway_url() or "").strip()
+
+    if not gateway_url:
+        raise RuntimeError("Enterprise revocation webhook URL is not configured")
+
+    return f"{gateway_url.rstrip('/')}{AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH}"
+
+
+def _create_enterprise_revocation_event_publisher(*, edition_manager: object | None = None):
+    from caracal.core.revocation_publishers import EnterpriseWebhookRevocationEventPublisher
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
+
+    configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip() or None
+    configured_sync_api_key = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip() or None
+    adapter = edition_manager or get_deployment_edition_adapter()
+    resolve_target = getattr(adapter, "resolve_enterprise_revocation_target", None)
+    if callable(resolve_target):
+        webhook_url, sync_api_key = resolve_target(
+            webhook_url_override=configured_url,
+            sync_api_key_override=configured_sync_api_key,
+        )
+    else:
+        webhook_url = _resolve_enterprise_revocation_webhook_url(edition_manager=adapter)
+        sync_api_key = configured_sync_api_key
+
+    return EnterpriseWebhookRevocationEventPublisher(
+        webhook_url=webhook_url,
+        sync_api_key=sync_api_key,
+    )
+
+
+def _create_runtime_revocation_event_publisher(
+    *,
+    redis_client: object | None = None,
+    edition_manager: object | None = None,
+):
+    from caracal.core.revocation_publishers import RedisPubSubRevocationEventPublisher
+
+    publisher_mode = _resolve_runtime_revocation_publisher_mode(edition_manager=edition_manager)
+    if publisher_mode == "enterprise_webhook":
+        return _create_enterprise_revocation_event_publisher(edition_manager=edition_manager)
+
+    resolved_channel = (
+        os.environ.get(AIS_REVOCATION_EVENTS_CHANNEL_ENV) or AIS_DEFAULT_REVOCATION_EVENTS_CHANNEL
+    ).strip()
+    if not resolved_channel:
+        raise RuntimeError(f"{AIS_REVOCATION_EVENTS_CHANNEL_ENV} cannot be empty")
+
+    resolved_redis_client = redis_client or _create_runtime_redis_client()
+    return RedisPubSubRevocationEventPublisher(
+        resolved_redis_client,
+        channel=resolved_channel,
+    )
+
+
+def _create_ttl_revocation_orchestrator_factory(
+    *,
+    redis_client: object | None = None,
+    edition_manager: object | None = None,
+):
+    from caracal.core.revocation import PrincipalRevocationOrchestrator
+
+    publisher = _create_runtime_revocation_event_publisher(
+        redis_client=redis_client,
+        edition_manager=edition_manager,
+    )
+
+    def _factory(session: object) -> PrincipalRevocationOrchestrator:
+        return PrincipalRevocationOrchestrator(
+            db_session=session,
+            revocation_event_publisher=publisher,
+        )
+
+    return _factory
+
+
+def _run_sync(coro):
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+    failure: dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - defensive edge case
+            failure["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "error" in failure:
+        raise failure["error"]
+    return result.get("value")
+
+
+def _serialize_issued_session(issued: object) -> dict[str, Any]:
+    access_expires_at = getattr(issued, "access_expires_at", None)
+    refresh_expires_at = getattr(issued, "refresh_expires_at", None)
+    serialized_access_exp = access_expires_at.isoformat() if access_expires_at is not None else None
+    serialized_refresh_exp = refresh_expires_at.isoformat() if refresh_expires_at is not None else None
+    return {
+        "access_token": getattr(issued, "access_token"),
+        "access_expires_at": serialized_access_exp,
+        "expires_at": serialized_access_exp,
+        "session_id": getattr(issued, "session_id", None),
+        "token_jti": getattr(issued, "token_jti", None),
+        "refresh_token": getattr(issued, "refresh_token", None),
+        "refresh_expires_at": serialized_refresh_exp,
+        "refresh_jti": getattr(issued, "refresh_jti", None),
+    }
+
+
+def _build_ais_handlers(
+    *,
+    db_manager: object | None = None,
+    session_manager: object | None = None,
+    redis_client: object | None = None,
+):
+    from datetime import timedelta
+
+    from fastapi import HTTPException
+    from caracal.core.identity import PrincipalRegistry
+    from caracal.core.session_manager import SessionKind, SessionValidationError
+    from caracal.core.signing_service import SigningService
+    from caracal.core.spawn import SpawnManager
+    from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
+    from caracal.identity import AISHandlers
+    from caracal.identity.attestation_nonce import AttestationNonceManager
+    from caracal.identity.principal_ttl import PrincipalTTLManager
+    from caracal.identity.service import IdentityService
+
+    resolved_db_manager = db_manager or _create_ais_db_manager()
+    resolved_session_manager = session_manager or _create_ais_session_manager()
+    resolved_redis_client = redis_client or _create_runtime_redis_client()
+
+    def _raise_http_error(exc: Exception) -> None:
+        if isinstance(exc, HTTPException):
+            raise exc
+        if isinstance(exc, PrincipalNotFoundError):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if isinstance(exc, DuplicatePrincipalNameError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if isinstance(exc, SessionValidationError):
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=f"AIS runtime operation failed: {exc}") from exc
+
+    def _get_identity(principal_id: str) -> dict[str, Any] | None:
+        try:
+            with resolved_db_manager.session_scope() as session:
+                identity_service = IdentityService(principal_registry=PrincipalRegistry(session))
+                identity = identity_service.get_principal(principal_id)
+                return identity.to_dict() if identity is not None else None
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _issue_token(request: object) -> dict[str, Any]:
+        try:
+            session_kind = SessionKind(str(getattr(request, "session_kind", "automation")).strip().lower())
+            issued = resolved_session_manager.issue_session(
+                subject_id=str(getattr(request, "principal_id")),
+                organization_id=str(getattr(request, "organization_id")),
+                tenant_id=str(getattr(request, "tenant_id")),
+                session_kind=session_kind,
+                workspace_id=getattr(request, "workspace_id", None),
+                directory_scope=getattr(request, "directory_scope", None),
+                include_refresh=bool(getattr(request, "include_refresh", True)),
+                extra_claims=getattr(request, "extra_claims", None),
+            )
+            return _serialize_issued_session(issued)
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _sign_payload(request: object) -> dict[str, Any]:
+        try:
+            with resolved_db_manager.session_scope() as session:
+                principal_registry = PrincipalRegistry(session)
+                signing_service = SigningService(principal_registry)
+                signature = signing_service.sign_canonical_payload_for_principal(
+                    principal_id=str(getattr(request, "principal_id")),
+                    payload=dict(getattr(request, "payload", {}) or {}),
+                )
+            return {"signature": signature}
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _spawn_principal(request: object) -> dict[str, Any]:
+        try:
+            with resolved_db_manager.session_scope() as session:
+                principal_registry = PrincipalRegistry(session)
+                spawn_manager = SpawnManager(
+                    session,
+                    attestation_nonce_manager=AttestationNonceManager(resolved_redis_client),
+                    principal_ttl_manager=PrincipalTTLManager(resolved_redis_client),
+                )
+                identity_service = IdentityService(
+                    principal_registry=principal_registry,
+                    spawn_manager=spawn_manager,
+                )
+                spawn_result = identity_service.spawn_principal(
+                    issuer_principal_id=str(getattr(request, "issuer_principal_id")),
+                    principal_name=str(getattr(request, "principal_name")),
+                    principal_kind=str(getattr(request, "principal_kind")),
+                    owner=str(getattr(request, "owner")),
+                    resource_scope=list(getattr(request, "resource_scope", []) or []),
+                    action_scope=list(getattr(request, "action_scope", []) or []),
+                    validity_seconds=int(getattr(request, "validity_seconds")),
+                    idempotency_key=str(getattr(request, "idempotency_key")),
+                    source_mandate_id=getattr(request, "source_mandate_id", None),
+                    network_distance=getattr(request, "network_distance", None),
+                )
+            return {
+                "principal_id": spawn_result.principal_id,
+                "principal_name": spawn_result.principal_name,
+                "principal_kind": spawn_result.principal_kind,
+                "mandate_id": spawn_result.mandate_id,
+                "attestation_bootstrap_artifact": spawn_result.attestation_bootstrap_artifact,
+                "attestation_nonce": spawn_result.attestation_nonce,
+                "idempotent_replay": spawn_result.idempotent_replay,
+            }
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _derive_task_token(request: object) -> dict[str, Any]:
+        try:
+            issued = resolved_session_manager.issue_task_token(
+                parent_access_token=str(getattr(request, "parent_access_token")),
+                task_id=str(getattr(request, "task_id")),
+                caveats=list(getattr(request, "caveats", []) or []),
+                ttl=timedelta(seconds=int(getattr(request, "ttl_seconds", 300))),
+            )
+            return _serialize_issued_session(issued)
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _issue_handoff_token(request: object) -> dict[str, Any]:
+        try:
+            token = _run_sync(
+                resolved_session_manager.issue_handoff_token(
+                    source_access_token=str(getattr(request, "source_access_token")),
+                    target_subject_id=str(getattr(request, "target_subject_id")),
+                    caveats=getattr(request, "caveats", None),
+                    ttl=timedelta(seconds=int(getattr(request, "ttl_seconds", 120))),
+                )
+            )
+            return {"handoff_token": token}
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    def _refresh_session(request: object) -> dict[str, Any]:
+        try:
+            issued = _run_sync(
+                resolved_session_manager.refresh_session(
+                    str(getattr(request, "refresh_token")),
+                )
+            )
+            return _serialize_issued_session(issued)
+        except Exception as exc:
+            _raise_http_error(exc)
+
+    return AISHandlers(
+        get_identity=_get_identity,
+        issue_token=_issue_token,
+        sign_payload=_sign_payload,
+        spawn_principal=_spawn_principal,
+        derive_task_token=_derive_task_token,
+        issue_handoff_token=_issue_handoff_token,
+        refresh_session=_refresh_session,
+    )
+
+
+def _reconcile_principal_ttl_expiries(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+) -> int:
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    resolved_redis_client = None
+    if principal_ttl_manager is None or expiry_processor is None:
+        resolved_redis_client = _create_runtime_redis_client()
+
+    resolved_manager = principal_ttl_manager or PrincipalTTLManager(resolved_redis_client)
+    resolved_processor = expiry_processor or PrincipalTTLExpiryProcessor(
+        db_manager=_create_ais_db_manager(),
+        revocation_orchestrator_factory=_create_ttl_revocation_orchestrator_factory(
+            redis_client=resolved_redis_client,
+        ),
+    )
+
+    reconcile = getattr(resolved_manager, "reconcile_expired_principals", None)
+    process = getattr(resolved_processor, "process", None)
+    acknowledge = getattr(resolved_manager, "ack_expired_work_item", None)
+    if not callable(reconcile) or not callable(process) or not callable(acknowledge):
+        raise RuntimeError("Principal TTL reconciliation dependencies are incomplete")
+
+    processed = 0
+    for work_item in reconcile():
+        process(work_item)
+        acknowledge(work_item)
+        processed += 1
+    return processed
+
+
+def _run_principal_ttl_listener(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+    stop_event: threading.Event | None = None,
+    poll_timeout_seconds: float = 1.0,
+) -> None:
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    resolved_redis_client = None
+    if principal_ttl_manager is None or expiry_processor is None:
+        resolved_redis_client = _create_runtime_redis_client()
+
+    resolved_manager = principal_ttl_manager or PrincipalTTLManager(resolved_redis_client)
+    resolved_processor = expiry_processor or PrincipalTTLExpiryProcessor(
+        db_manager=_create_ais_db_manager(),
+        revocation_orchestrator_factory=_create_ttl_revocation_orchestrator_factory(
+            redis_client=resolved_redis_client,
+        ),
+    )
+
+    iter_messages = getattr(resolved_manager, "iter_expiry_messages", None)
+    claim_message = getattr(resolved_manager, "claim_expiry_message", None)
+    process = getattr(resolved_processor, "process", None)
+    acknowledge = getattr(resolved_manager, "ack_expired_work_item", None)
+    if not callable(iter_messages) or not callable(claim_message) or not callable(process) or not callable(acknowledge):
+        raise RuntimeError("Principal TTL listener dependencies are incomplete")
+
+    for message in iter_messages(poll_timeout_seconds=poll_timeout_seconds):
+        if stop_event is not None and stop_event.is_set():
+            return
+        work_item = claim_message(message)
+        if work_item is None:
+            continue
+        process(work_item)
+        acknowledge(work_item)
+
+
+def _start_principal_ttl_listener(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+    poll_timeout_seconds: float = 1.0,
+) -> tuple[threading.Thread, threading.Event]:
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_run_principal_ttl_listener,
+        kwargs={
+            "principal_ttl_manager": principal_ttl_manager,
+            "expiry_processor": expiry_processor,
+            "stop_event": stop_event,
+            "poll_timeout_seconds": poll_timeout_seconds,
+        },
+        daemon=True,
+        name="caracal-principal-ttl-listener",
+    )
+    thread.start()
+    return thread, stop_event
+
+
+def _run_ais_server() -> int:
+    import asyncio
+
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
+    from caracal.identity import create_ais_app, resolve_ais_listen_target
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    ttl_listener_stop: threading.Event | None = None
+
+    try:
+        get_deployment_edition_adapter(enforce_startup_license_validation=True)
+        startup_principal = _consume_ais_startup_attestation()
+        resolved_db_manager = _create_ais_db_manager()
+        resolved_redis_client = _create_runtime_redis_client()
+        principal_ttl_manager = PrincipalTTLManager(resolved_redis_client)
+        expiry_processor = PrincipalTTLExpiryProcessor(
+            db_manager=resolved_db_manager,
+            revocation_orchestrator_factory=_create_ttl_revocation_orchestrator_factory(
+                redis_client=resolved_redis_client,
+            ),
+        )
+        _complete_ais_startup_attestation(
+            startup_principal,
+            db_manager=resolved_db_manager,
+            principal_ttl_manager=principal_ttl_manager,
+        )
+        _reconcile_principal_ttl_expiries(
+            principal_ttl_manager=principal_ttl_manager,
+            expiry_processor=expiry_processor,
+        )
+        _, ttl_listener_stop = _start_principal_ttl_listener(
+            principal_ttl_manager=principal_ttl_manager,
+            expiry_processor=expiry_processor,
+        )
+        ais_config = _create_ais_server_config()
+        listen_target = resolve_ais_listen_target(ais_config)
+        app = create_ais_app(
+            _build_ais_handlers(
+                db_manager=resolved_db_manager,
+                redis_client=resolved_redis_client,
+            ),
+            ais_config,
+        )
+    except Exception as exc:
+        print(f"Error: AIS startup failed: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        import uvicorn
+
+        if listen_target.transport == "unix":
+            if listen_target.unix_socket_path is None:
+                raise RuntimeError("AIS Unix socket path is not configured")
+
+            socket_path = Path(listen_target.unix_socket_path)
+            socket_path.parent.mkdir(parents=True, exist_ok=True)
+            if socket_path.exists():
+                socket_path.unlink()
+
+            config = uvicorn.Config(
+                app=app,
+                uds=listen_target.unix_socket_path,
+                log_level=(os.environ.get("LOG_LEVEL") or "info").lower(),
+            )
+        else:
+            if listen_target.host is None or listen_target.port is None:
+                raise RuntimeError("AIS TCP listen target is not fully configured")
+            config = uvicorn.Config(
+                app=app,
+                host=listen_target.host,
+                port=listen_target.port,
+                log_level=(os.environ.get("LOG_LEVEL") or "info").lower(),
+            )
+
+        server = uvicorn.Server(config)
+        asyncio.run(server.serve())
+        return 0
+    except Exception as exc:
+        print(f"Error: AIS runtime server crashed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if ttl_listener_stop is not None:
+            ttl_listener_stop.set()
+
+
+def _start_ais_subprocess() -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from caracal.runtime.entrypoints import _run_ais_server; raise SystemExit(_run_ais_server())",
+        ],
+        env=dict(os.environ),
+        stdout=None,
+        stderr=None,
+    )
+
+
+def _terminate_subprocess(process: subprocess.Popen[bytes] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    process.kill()
+    process.wait(timeout=5)
+
+
+def _check_ais_health_tcp(host: str, port: int, api_prefix: str, timeout_seconds: float) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://{host}:{port}{api_prefix}/health",
+            timeout=timeout_seconds,
+        ) as response:
+            return int(getattr(response, "status", 0)) == 200
+    except Exception:
+        return False
+
+
+def _check_ais_health_unix(socket_path: str, api_prefix: str, timeout_seconds: float) -> bool:
+    if not socket_path:
+        return False
+
+    if not Path(socket_path).exists():
+        return False
+
+    request = (
+        f"GET {api_prefix}/health HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout_seconds)
+            client.connect(socket_path)
+            client.sendall(request)
+            response_head = client.recv(256).decode("ascii", errors="ignore")
+            return response_head.startswith("HTTP/1.1 200") or response_head.startswith("HTTP/1.0 200")
+    except Exception:
+        return False
+
+
+def _check_ais_health(config: object, timeout_seconds: float) -> bool:
+    from caracal.identity import resolve_ais_listen_target
+
+    listen_target = resolve_ais_listen_target(config)
+    api_prefix = getattr(config, "api_prefix", AIS_DEFAULT_API_PREFIX)
+    if listen_target.transport == "unix":
+        return _check_ais_health_unix(
+            listen_target.unix_socket_path or "",
+            api_prefix,
+            timeout_seconds,
+        )
+
+    return _check_ais_health_tcp(
+        listen_target.host or AIS_DEFAULT_LISTEN_HOST,
+        int(listen_target.port or AIS_DEFAULT_LISTEN_PORT),
+        api_prefix,
+        timeout_seconds,
+    )
+
+
+def _wait_for_ais_healthy(config: object, timeout_seconds: int, probe_timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(timeout_seconds, 1)
+    while time.monotonic() < deadline:
+        if _check_ais_health(config, probe_timeout_seconds):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _run_runtime_mcp() -> int:
+    assert_runtime_hardcut(
+        compose_file=None,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
+    _bootstrap_runtime_vault_refs()
+
+    ais_config = _create_ais_server_config()
+    startup_timeout = _parse_int_env(AIS_STARTUP_TIMEOUT_ENV, 30)
+    probe_timeout = float(_parse_int_env(AIS_HEALTHCHECK_TIMEOUT_ENV, 3))
+    monitor_interval = float(_parse_int_env(AIS_HEALTHCHECK_INTERVAL_ENV, 10))
+    max_restarts = _parse_int_env(AIS_MAX_RESTARTS_ENV, 3)
+
+    ais_process = _start_ais_subprocess()
+    if not _wait_for_ais_healthy(ais_config, startup_timeout, probe_timeout):
+        _terminate_subprocess(ais_process)
+        print("Error: AIS failed startup health checks", file=sys.stderr)
+        return 1
+
+    mcp_process = subprocess.Popen([sys.executable, "-m", "caracal.mcp.service"], env=dict(os.environ))
+
+    restart_count = 0
+    try:
+        while True:
+            mcp_exit = mcp_process.poll()
+            if mcp_exit is not None:
+                _terminate_subprocess(ais_process)
+                return int(mcp_exit)
+
+            ais_exited = ais_process.poll() is not None
+            ais_unhealthy = not _check_ais_health(ais_config, probe_timeout)
+            if ais_exited or ais_unhealthy:
+                restart_count += 1
+                _terminate_subprocess(ais_process)
+
+                if restart_count > max_restarts:
+                    print("Error: AIS exceeded restart limit; stopping runtime", file=sys.stderr)
+                    _terminate_subprocess(mcp_process)
+                    return 1
+
+                ais_process = _start_ais_subprocess()
+                if not _wait_for_ais_healthy(ais_config, startup_timeout, probe_timeout):
+                    print("Error: AIS failed health checks after restart", file=sys.stderr)
+                    _terminate_subprocess(ais_process)
+                    _terminate_subprocess(mcp_process)
+                    return 1
+
+            time.sleep(max(monitor_interval, 1.0))
+    except KeyboardInterrupt:
+        _terminate_subprocess(mcp_process)
+        _terminate_subprocess(ais_process)
+        return int(signal.SIGINT)
+
+
+def _runtime_database_url_candidates() -> dict[str, str | None]:
+    return {
+        "DATABASE_URL": os.getenv("DATABASE_URL"),
+        "CARACAL_DATABASE_URL": os.getenv("CARACAL_DATABASE_URL"),
+        "CARACAL_DB_URL": os.getenv("CARACAL_DB_URL"),
+    }
+
+
+def _runtime_hardcut_env() -> dict[str, str]:
+    normalized = dict(os.environ)
+    normalized.setdefault("CARACAL_PRINCIPAL_KEY_BACKEND", "vault")
+    normalized.setdefault("CARACAL_VAULT_URL", "http://127.0.0.1:8080")
+    normalized.setdefault("CARACAL_VAULT_SIGNING_KEY_REF", "keys/mandate-signing")
+    normalized.setdefault("CARACAL_VAULT_SESSION_PUBLIC_KEY_REF", "keys/session-public")
+    normalized.setdefault("CARACAL_SESSION_SIGNING_ALGORITHM", "RS256")
+    return normalized
 
 
 def _is_truthy(value: str | None) -> bool:

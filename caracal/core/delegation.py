@@ -18,9 +18,6 @@ from typing import Dict, List, Optional
 from uuid import UUID
 
 import jwt
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 from caracal.exceptions import (
     PrincipalNotFoundError,
@@ -28,7 +25,13 @@ from caracal.exceptions import (
     TokenExpiredError,
     TokenValidationError,
 )
-from caracal.core.principal_keys import PrincipalKeyStorageError, resolve_principal_private_key
+from caracal.core.signing_service import (
+    SigningService,
+    SigningServiceError,
+    SigningServiceExpiredToken,
+    SigningServiceInvalidToken,
+    SigningServiceKeyError,
+)
 from caracal.core.error_handling import (
     get_error_handler,
     ErrorCategory,
@@ -86,7 +89,7 @@ class DelegationTokenManager:
     
     """
 
-    def __init__(self, principal_registry):
+    def __init__(self, principal_registry, signing_service: Optional[SigningService] = None):
         """
         Initialize DelegationTokenManager.
         
@@ -94,36 +97,8 @@ class DelegationTokenManager:
             principal_registry: PrincipalRegistry instance for key management
         """
         self.principal_registry = principal_registry
+        self._signing_service = signing_service or SigningService(principal_registry)
         logger.info("DelegationTokenManager initialized")
-
-    def generate_key_pair(self) -> tuple[bytes, bytes]:
-        """
-        Generate ECDSA P-256 key pair for an agent.
-        
-        Returns:
-            Tuple of (private_key_pem, public_key_pem) as bytes
-            
-        """
-        # Generate ECDSA P-256 private key
-        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
-        
-        # Serialize private key to PEM format
-        private_key_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-        
-        # Extract public key and serialize to PEM format
-        public_key = private_key.public_key()
-        public_key_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        
-        logger.debug("Generated ECDSA P-256 key pair")
-        
-        return private_key_pem, public_key_pem
 
     def generate_token(
         self,
@@ -170,31 +145,6 @@ class DelegationTokenManager:
                 f"Source principal with ID '{source_principal_id}' does not exist"
             )
         
-        # Resolve source private key through the principal key storage abstraction.
-        try:
-            private_key_pem = resolve_principal_private_key(
-                principal_id=source_principal_id,
-                principal_metadata=source_principal.metadata,
-            )
-        except PrincipalKeyStorageError as exc:
-            logger.error("Source principal %s private key resolution failed: %s", source_principal_id, exc)
-            raise InvalidDelegationTokenError(
-                f"Source principal '{source_principal_id}' has no usable private key for signing"
-            ) from exc
-        
-        # Load private key
-        try:
-            private_key = serialization.load_pem_private_key(
-                private_key_pem.encode() if isinstance(private_key_pem, str) else private_key_pem,
-                password=None,
-                backend=default_backend()
-            )
-        except Exception as e:
-            logger.error(f"Failed to load private key for principal {source_principal_id}: {e}")
-            raise InvalidDelegationTokenError(
-                f"Failed to load private key for principal '{source_principal_id}': {e}"
-            ) from e
-        
         # Set default allowed operations
         if allowed_operations is None:
             allowed_operations = ["api_call", "mcp_tool"]
@@ -237,15 +187,15 @@ class DelegationTokenManager:
             "kid": str(source_principal_id)
         }
         
-        # Sign token with ES256 (ECDSA P-256)
+        # Sign token through signing service abstraction.
         try:
-            token = jwt.encode(
-                payload,
-                private_key,
+            token = self._signing_service.sign_jwt_for_principal(
+                principal_id=str(source_principal_id),
+                payload=payload,
+                headers=headers,
                 algorithm="ES256",
-                headers=headers
             )
-        except Exception as e:
+        except SigningServiceError as e:
             logger.error(f"Failed to sign delegation token: {e}")
             raise InvalidDelegationTokenError(
                 f"Failed to sign delegation token: {e}"
@@ -313,56 +263,15 @@ class DelegationTokenManager:
                 logger.error(f"Issuer agent not found (fail-closed): {issuer_id}")
                 raise error
             
-            # Prefer canonical principal public key field, fallback to legacy metadata key.
-            public_key_pem = getattr(issuer_agent, "public_key", None)
-            if not public_key_pem and issuer_agent.metadata is not None:
-                public_key_pem = issuer_agent.metadata.get("public_key_pem")
-
-            if not public_key_pem:
-                # Fail closed: deny if public key not available (Requirement 23.3)
-                error_handler = get_error_handler("delegation-token-manager")
-                error = TokenValidationError(f"Issuer agent '{issuer_id}' has no public key for verification")
-                error_handler.handle_error(
-                    error=error,
-                    category=ErrorCategory.DELEGATION,
-                    operation="validate_token",
-                    principal_id=issuer_id,
-                    metadata={"has_metadata": issuer_agent.metadata is not None},
-                    severity=ErrorSeverity.CRITICAL
-                )
-                logger.error(f"Issuer agent {issuer_id} has no public key (fail-closed)")
-                raise error
-            
-            # Load public key
+            # Verify and decode token through signing service abstraction.
             try:
-                public_key = serialization.load_pem_public_key(
-                    public_key_pem.encode() if isinstance(public_key_pem, str) else public_key_pem,
-                    backend=default_backend()
-                )
-            except Exception as e:
-                # Fail closed: deny if public key cannot be loaded (Requirement 23.3)
-                error_handler = get_error_handler("delegation-token-manager")
-                error = TokenValidationError(f"Failed to load public key for agent '{issuer_id}': {e}")
-                error_handler.handle_error(
-                    error=error,
-                    category=ErrorCategory.DELEGATION,
-                    operation="validate_token",
+                payload = self._signing_service.verify_jwt_for_principal(
+                    token=token,
                     principal_id=issuer_id,
-                    severity=ErrorSeverity.CRITICAL
-                )
-                logger.error(f"Failed to load public key for agent {issuer_id} (fail-closed): {e}")
-                raise error from e
-            
-            # Verify and decode token
-            try:
-                payload = jwt.decode(
-                    token,
-                    public_key,
-                    algorithms=["ES256"],
                     audience="caracal-core",
-                    options={"verify_exp": True}
+                    algorithms=["ES256"],
                 )
-            except jwt.ExpiredSignatureError as e:
+            except (SigningServiceExpiredToken, jwt.ExpiredSignatureError) as e:
                 # Token expired - log and deny (Requirement 23.3)
                 error_handler = get_error_handler("delegation-token-manager")
                 error = TokenExpiredError("Delegation token has expired")
@@ -375,7 +284,20 @@ class DelegationTokenManager:
                 )
                 logger.warning(f"Token expired (fail-closed): {e}")
                 raise error from e
-            except jwt.InvalidTokenError as e:
+            except SigningServiceKeyError as e:
+                # Fail closed: deny if public key cannot be resolved/loaded
+                error_handler = get_error_handler("delegation-token-manager")
+                error = TokenValidationError(f"Failed to resolve verification key for agent '{issuer_id}': {e}")
+                error_handler.handle_error(
+                    error=error,
+                    category=ErrorCategory.DELEGATION,
+                    operation="validate_token",
+                    principal_id=issuer_id,
+                    severity=ErrorSeverity.CRITICAL
+                )
+                logger.error(f"Verification key resolution failed for agent {issuer_id} (fail-closed): {e}")
+                raise error from e
+            except (SigningServiceInvalidToken, jwt.InvalidTokenError) as e:
                 # Invalid token - log and deny (Requirement 23.3)
                 error_handler = get_error_handler("delegation-token-manager")
                 error = TokenValidationError(f"Invalid delegation token: {e}")

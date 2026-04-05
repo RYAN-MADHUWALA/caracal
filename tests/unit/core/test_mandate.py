@@ -9,6 +9,7 @@ from uuid import uuid4
 from unittest.mock import Mock, MagicMock, patch
 
 from caracal.core.mandate import MandateManager
+from caracal.core.signing_service import SigningServiceKeyError
 from caracal.db.models import ExecutionMandate, AuthorityPolicy, Principal
 
 
@@ -19,7 +20,8 @@ class TestMandateManager:
     def setup_method(self):
         """Set up test fixtures before each test method."""
         self.mock_db_session = Mock()
-        self.manager = MandateManager(self.mock_db_session)
+        self.mock_signing_service = Mock()
+        self.manager = MandateManager(self.mock_db_session, signing_service=self.mock_signing_service)
     
     def test_issue_mandate_with_valid_data(self):
         """Test mandate creation with valid data."""
@@ -31,10 +33,9 @@ class TestMandateManager:
         issuer = Principal(
             principal_id=issuer_id,
             name="test-issuer",
-            principal_type="user",
+            principal_kind="human",
             owner="test",
             public_key_pem="test_public_key",
-            private_key_pem="test_private_key"
         )
         
         # Mock policy
@@ -60,16 +61,16 @@ class TestMandateManager:
         
         self.mock_db_session.query.side_effect = mock_query_side_effect
         
-        # Mock signature function
-        with patch('caracal.core.mandate.sign_mandate', return_value="test_signature"):
-            # Act
-            mandate = self.manager.issue_mandate(
-                issuer_id=issuer_id,
-                subject_id=subject_id,
-                resource_scope=["secret/test"],
-                action_scope=["read:secrets"],
-                validity_seconds=3600
-            )
+        self.mock_signing_service.sign_canonical_payload_for_principal.return_value = "test_signature"
+
+        # Act
+        mandate = self.manager.issue_mandate(
+            issuer_id=issuer_id,
+            subject_id=subject_id,
+            resource_scope=["secret/test"],
+            action_scope=["read:secrets"],
+            validity_seconds=3600
+        )
         
         # Assert
         assert mandate is not None
@@ -132,6 +133,111 @@ class TestMandateManager:
                 action_scope=["read:secrets"],
                 validity_seconds=7200  # 2 hours - exceeds limit
             )
+
+    def test_issue_mandate_without_resolvable_private_key(self):
+        """Test mandate issuance fails when issuer key metadata is missing/invalid."""
+        issuer_id = uuid4()
+        subject_id = uuid4()
+
+        issuer = Principal(
+            principal_id=issuer_id,
+            name="test-issuer",
+            principal_kind="human",
+            owner="test",
+            public_key_pem="test_public_key",
+        )
+
+        policy = AuthorityPolicy(
+            policy_id=uuid4(),
+            principal_id=issuer_id,
+            active=True,
+            max_validity_seconds=86400,
+            allowed_resource_patterns=["secret/*"],
+            allowed_actions=["read:secrets"],
+            allow_delegation=True,
+            max_network_distance=3,
+        )
+
+        def mock_query_side_effect(model):
+            mock_query = Mock()
+            if model == AuthorityPolicy:
+                mock_query.filter.return_value.first.return_value = policy
+            elif model == Principal:
+                mock_query.filter.return_value.first.return_value = issuer
+            return mock_query
+
+        self.mock_db_session.query.side_effect = mock_query_side_effect
+
+        self.mock_signing_service.sign_canonical_payload_for_principal.side_effect = SigningServiceKeyError(
+            "missing private key metadata"
+        )
+
+        with pytest.raises(RuntimeError, match="no resolvable private key metadata"):
+            self.manager.issue_mandate(
+                issuer_id=issuer_id,
+                subject_id=subject_id,
+                resource_scope=["secret/test"],
+                action_scope=["read:secrets"],
+                validity_seconds=3600,
+            )
+
+    def test_delegate_mandate_propagates_source_lineage(self):
+        """Delegated mandate creation must preserve source_mandate_id lineage."""
+        source_mandate_id = uuid4()
+        source_subject_id = uuid4()
+        target_subject_id = uuid4()
+
+        source_mandate = Mock(
+            mandate_id=source_mandate_id,
+            subject_id=source_subject_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(hours=1),
+            resource_scope=["secret/*"],
+            action_scope=["read:secrets"],
+            network_distance=2,
+        )
+
+        source_principal = Mock(principal_kind="human")
+        target_principal = Mock(principal_kind="worker")
+
+        delegated_mandate = Mock(
+            mandate_id=uuid4(),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+        )
+
+        principal_query_count = {"count": 0}
+
+        def mock_query_side_effect(model):
+            mock_query = Mock()
+            if model == ExecutionMandate:
+                mock_query.filter.return_value.first.return_value = source_mandate
+            elif model == Principal:
+                principal_query_count["count"] += 1
+                if principal_query_count["count"] == 1:
+                    mock_query.filter.return_value.first.return_value = source_principal
+                else:
+                    mock_query.filter.return_value.first.return_value = target_principal
+            return mock_query
+
+        self.mock_db_session.query.side_effect = mock_query_side_effect
+        self.manager.delegation_graph = Mock()
+
+        with patch.object(self.manager, "issue_mandate", return_value=delegated_mandate) as mock_issue:
+            result = self.manager.delegate_mandate(
+                source_mandate_id=source_mandate_id,
+                target_subject_id=target_subject_id,
+                resource_scope=["secret/test"],
+                action_scope=["read:secrets"],
+                validity_seconds=1800,
+            )
+
+        assert result is delegated_mandate
+        assert mock_issue.call_args.kwargs["source_mandate_id"] == source_mandate_id
+        assert mock_issue.call_args.kwargs["issuer_id"] == source_subject_id
+        self.manager.delegation_graph.add_edge.assert_called_once()
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["source_mandate_id"] == source_mandate_id
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["target_mandate_id"] == delegated_mandate.mandate_id
     
     def test_revoke_mandate_success(self):
         """Test successful mandate revocation."""

@@ -159,7 +159,7 @@ class MandateDelegationFlow:
                 target_id = edge.get("target_mandate_id")
                 target_node = next((n for n in path_nodes if n.get("mandate_id") == target_id), None)
                 target_name = target_node.get("subject_name", target_id[:8]) if target_node else target_id[:8]
-                target_type = target_node.get("principal_type", edge.get("target_principal_type", "unknown")) if target_node else edge.get("target_principal_type", "unknown")
+                target_type = target_node.get("principal_kind", edge.get("target_principal_type", "unknown")) if target_node else edge.get("target_principal_type", "unknown")
                 network_distance = target_node.get("network_distance", "?") if target_node else "?"
                 tags = edge.get("context_tags") or []
                 tag_text = f" [{Colors.DIM}]tags={','.join(tags)}[/]" if tags else ""
@@ -374,7 +374,7 @@ class MandateDelegationFlow:
                 source_mandate_id = UUID(source_id_str)
                 
                 principals = db_session.query(Principal).all()
-                principal_items = [(str(p.principal_id), f"{p.name} ({p.principal_type})") for p in principals]
+                principal_items = [(str(p.principal_id), f"{p.name} ({p.principal_kind})") for p in principals]
                 target_id_str = self.prompt.uuid("Peer Target Principal ID", principal_items)
                 target_subject_id = UUID(target_id_str)
                 

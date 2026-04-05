@@ -19,6 +19,7 @@ from caracal_sdk._compat import (
     SDKConfigurationError,
 )
 from caracal_sdk._compat import get_logger
+from caracal_sdk.ais import resolve_sdk_base_url
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,7 @@ class AsyncAuthorityClient:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 30,
         max_connections: int = 100,
@@ -66,10 +67,11 @@ class AsyncAuthorityClient:
             logger.info("Initializing Async Caracal Authority SDK client")
             
             # Validate configuration
-            if not base_url:
+            resolved_base_url = base_url or resolve_sdk_base_url()
+            if not resolved_base_url:
                 raise SDKConfigurationError("base_url is required")
-            
-            self.base_url = base_url.rstrip('/')
+
+            self.base_url = resolved_base_url.rstrip('/')
             self.api_key = api_key
             self.timeout = ClientTimeout(total=timeout)
             self.workspace_id = workspace_id
@@ -596,55 +598,3 @@ class AsyncAuthorityClient:
             endpoint="/policies",
             params=params,
         )
-
-    # ------------------------------------------------------------------
-    # Metadata sync (Enterprise dashboard integration)
-    # ------------------------------------------------------------------
-
-    async def sync_metadata(
-        self,
-        enforcement_state: Dict[str, Any],
-        sync_type: str = "full",
-        enterprise_url: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Push local enforcement state to the Caracal Enterprise dashboard — async.
-
-        See :meth:`AuthorityClient.sync_metadata` for full documentation.
-        """
-        if not self.workspace_id:
-            raise SDKConfigurationError(
-                "workspace_id is required for metadata sync. "
-                "Pass workspace_id when constructing AsyncAuthorityClient."
-            )
-
-        url = (enterprise_url or self.base_url).rstrip("/")
-        payload = {
-            "workspace_id": self.workspace_id,
-            "directory_scope": self.directory_scope,
-            "sync_type": sync_type,
-            "enforcement_state": enforcement_state,
-            "client_version": self.headers.get("User-Agent", "unknown"),
-            "timestamp": datetime.utcnow().isoformat(),
-        }
-
-        logger.info(
-            "Syncing metadata to enterprise (async): workspace=%s type=%s",
-            self.workspace_id,
-            sync_type,
-        )
-
-        try:
-            session = await self._get_session()
-            async with session.post(
-                f"{url}/api/connection/sync",
-                json=payload,
-                headers=self.headers,
-                timeout=self.timeout,
-            ) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-        except aiohttp.ClientError as e:
-            raise ConnectionError(
-                f"Failed to sync metadata to enterprise: {e}"
-            ) from e

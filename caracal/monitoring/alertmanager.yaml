@@ -3,8 +3,6 @@
 # This file configures alert routing, grouping, and notification channels.
 # Deploy to AlertManager using:
 #   kubectl create configmap alertmanager-config --from-file=alertmanager.yaml
-#
-# Requirements: 24.1, 24.5, Deployment
 
 global:
   # Global configuration

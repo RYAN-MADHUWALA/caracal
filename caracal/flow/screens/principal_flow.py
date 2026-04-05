@@ -11,12 +11,10 @@ Principal management flows:
 - Rotate Key — replace the keypair and choose mandate disposition
 
 Key storage:
-    Default     : private key written to active workspace keys directory
-                                (or CARACAL_KEYSTORE_DIR when configured).
-    Optional    : AWS KMS backend via CARACAL_PRINCIPAL_KEY_BACKEND=aws_kms.
+    Hard-cut    : private keys are custody-managed by vault backend.
+    Runtime     : principal metadata stores only opaque vault references.
 """
 
-import os
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -29,27 +27,15 @@ from sqlalchemy import or_
 
 from caracal.db.connection import get_db_manager
 from caracal.db.models import AuthorityLedgerEvent, AuthorityPolicy, ExecutionMandate, Principal
+from caracal.core.identity import PrincipalRegistry
+from caracal.identity.service import IdentityService
 from caracal.flow.components.menu import show_menu
 from caracal.flow.components.prompt import FlowPrompt
 from caracal.flow.theme import Colors, Icons
 from caracal.flow.state import FlowState, RecentAction
 from caracal.logging_config import get_logger
-from caracal.core.principal_keys import (
-    backup_local_private_key,
-    generate_and_store_principal_keypair,
-)
 
 logger = get_logger(__name__)
-
-
-def _path_scope_label() -> str:
-    in_container = os.environ.get("CARACAL_RUNTIME_IN_CONTAINER", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    return "container path" if in_container else "host path"
 
 class PrincipalFlow:
     """Principal management flow."""
@@ -135,7 +121,7 @@ class PrincipalFlow:
                     table.add_row(
                         str(principal.principal_id)[:8] + "...",
                         principal.name,
-                        principal.principal_type,
+                        principal.principal_kind,
                         str(policy_count),
                         str(mandate_count),
                     )
@@ -165,9 +151,9 @@ class PrincipalFlow:
         
         try:
             # Collect information
-            principal_type = self.prompt.select(
-                "Principal type",
-                choices=["agent", "user", "service"],
+            principal_kind = self.prompt.select(
+                "Principal kind",
+                choices=["human", "orchestrator", "worker", "service"],
             )
 
             name = self.prompt.text(
@@ -184,7 +170,7 @@ class PrincipalFlow:
             self.console.print()
             self.console.print(f"  [{Colors.INFO}]Principal Details:[/]")
             self.console.print(f"    Name: [{Colors.NEUTRAL}]{name}[/]")
-            self.console.print(f"    Type: [{Colors.NEUTRAL}]{principal_type}[/]")
+            self.console.print(f"    Kind: [{Colors.NEUTRAL}]{principal_kind}[/]")
             self.console.print(f"    Owner: [{Colors.NEUTRAL}]{owner}[/]")
             self.console.print(f"    Keys: [{Colors.DIM}]ECDSA P-256 keypair (generated automatically)[/]")
             self.console.print()
@@ -200,25 +186,21 @@ class PrincipalFlow:
             db_manager = get_db_manager()
             
             with db_manager.session_scope() as db_session:
-                principal = Principal(
+                registry = PrincipalRegistry(db_session)
+                identity_service = IdentityService(principal_registry=registry)
+                identity = identity_service.register_principal(
                     name=name,
-                    principal_type=principal_type,
+                    principal_kind=principal_kind,
                     owner=owner,
-                    created_at=datetime.utcnow(),
+                    metadata=None,
+                    generate_keys=True,
                 )
-                
-                db_session.add(principal)
-                db_session.flush()  # populate principal_id before key generation
-                
-                # --- Auto-generate ECDSA P-256 keypair ---
-                key_ref = self._generate_and_store_keypair(principal, db_session)
-                
-                db_session.commit()
+                key_ref = (identity.metadata or {}).get("vault_key_ref", "")
                 
                 self.console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal registered![/]")
-                self.console.print(f"  [{Colors.NEUTRAL}]Principal ID : [{Colors.PRIMARY}]{principal.principal_id}[/]")
+                self.console.print(f"  [{Colors.NEUTRAL}]Principal ID : [{Colors.PRIMARY}]{identity.principal_id}[/]")
                 self.console.print(
-                    f"  [{Colors.NEUTRAL}]Private key ({_path_scope_label()}) : [{Colors.DIM}]{key_ref}[/]"
+                    f"  [{Colors.NEUTRAL}]Vault key reference : [{Colors.DIM}]{key_ref}[/]"
                 )
                 self.console.print()
                 
@@ -267,7 +249,7 @@ class PrincipalFlow:
                 self.console.print()
                 self.console.print(f"  [{Colors.INFO}]Principal Information:[/]")
                 self.console.print(f"    Name: [{Colors.NEUTRAL}]{principal.name}[/]")
-                self.console.print(f"    Type: [{Colors.NEUTRAL}]{principal.principal_type}[/]")
+                self.console.print(f"    Kind: [{Colors.NEUTRAL}]{principal.principal_kind}[/]")
                 self.console.print(f"    Owner: [{Colors.NEUTRAL}]{principal.owner}[/]")
                 self.console.print()
                 
@@ -308,50 +290,6 @@ class PrincipalFlow:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _generate_and_store_keypair(self, principal, db_session) -> str:
-        """Generate an ECDSA P-256 keypair, persist it, and write an audit log entry.
-        
-        The public key PEM is stored in ``principal.public_key_pem``.
-        The private key is stored using the configured backend:
-        local filesystem by default or AWS KMS when enabled by environment.
-        
-        Args:
-            principal: The :class:`~caracal.db.models.Principal` ORM object
-                       (must have ``principal_id`` populated via flush).
-            db_session: Active SQLAlchemy session (used for the audit record).
-        
-        Returns:
-            Private key storage reference.
-        """
-        self.console.print(f"  [{Colors.INFO}]Generating ECDSA P-256 keypair...[/]")
-        generated = generate_and_store_principal_keypair(principal_id=principal.principal_id)
-        principal.public_key_pem = generated.public_key_pem
-
-        principal_metadata = dict(principal.principal_metadata or {})
-        principal_metadata.update(generated.storage.metadata)
-        principal.principal_metadata = principal_metadata
-        
-        logger.info(
-            "ECDSA P-256 keypair generated for principal %s; "
-            "private key stored via backend=%s ref=%s",
-            principal.principal_id,
-            generated.storage.backend,
-            generated.storage.reference,
-        )
-        
-        # Audit log entry
-        self._write_audit_log(
-            db_session,
-            event_type="key_generated",
-            principal_id=principal.principal_id,
-            details=(
-                "ECDSA P-256 keypair generated; "
-                f"private key stored via {generated.storage.backend} at {generated.storage.reference}"
-            ),
-        )
-        
-        return generated.storage.reference
 
     def _write_audit_log(
         self,
@@ -518,23 +456,20 @@ class PrincipalFlow:
                     )
                     return
                 
-                # ---------- backup old key file ----------
-                existing_backend = (
-                    (principal.principal_metadata or {}).get("key_backend", "local")
-                )
-                if existing_backend == "local":
-                    backup_path = backup_local_private_key(principal.principal_id)
-                else:
-                    backup_path = None
-
-                if backup_path:
-                    self.console.print(
-                        f"  [{Colors.DIM}]Old private key backed up → {backup_path}[/]"
-                    )
-                
                 # ---------- generate new keypair ----------
                 self.console.print()
-                new_key_path = self._generate_and_store_keypair(principal, db_session)
+                self.console.print(f"  [{Colors.INFO}]Generating ECDSA P-256 keypair...[/]")
+                registry = PrincipalRegistry(db_session)
+                identity = registry.rotate_signing_keys(
+                    principal_id=str(principal.principal_id),
+                    reason="Flow key rotation",
+                )
+                principal = db_session.query(Principal).filter_by(principal_id=principal.principal_id).first()
+                rotated_metadata = dict(identity.metadata or {})
+                new_key_ref = (
+                    rotated_metadata.get("vault_key_ref")
+                    or "managed-by-vault"
+                )
                 
                 # Audit: rotation event
                 self._write_audit_log(
@@ -543,7 +478,7 @@ class PrincipalFlow:
                     principal_id=principal.principal_id,
                     details=(
                         f"Keypair rotated for principal '{principal.name}'; "
-                        f"new private key at {new_key_path}"
+                        f"new key reference {new_key_ref}"
                     ),
                 )
                 

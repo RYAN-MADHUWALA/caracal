@@ -7,6 +7,7 @@ Caracal, a product of Garudex Labs
 
 from logging.config import fileConfig
 import os
+from pathlib import Path
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -15,6 +16,8 @@ from alembic import context
 
 # Import our models for autogenerate support
 from caracal.db.models import Base
+from caracal.runtime.hardcut_preflight import assert_migration_hardcut
+from caracal.storage.layout import resolve_caracal_home
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -35,6 +38,18 @@ database_url = os.environ.get("CARACAL_DATABASE_URL")
 if database_url:
     # Alembic's underlying ConfigParser treats '%' as interpolation markers.
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+
+_config_file_path = Path(config.config_file_name) if config.config_file_name else None
+assert_migration_hardcut(
+    database_urls={
+        "CARACAL_DATABASE_URL": os.environ.get("CARACAL_DATABASE_URL"),
+        "DATABASE_URL": os.environ.get("DATABASE_URL"),
+        "sqlalchemy.url": config.get_main_option("sqlalchemy.url"),
+    },
+    config_paths=[_config_file_path] if _config_file_path is not None else None,
+    env_vars=os.environ,
+    state_roots=[resolve_caracal_home(require_explicit=False)],
+)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

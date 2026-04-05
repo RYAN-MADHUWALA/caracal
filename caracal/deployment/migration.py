@@ -18,11 +18,12 @@ import tarfile
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Iterable, Tuple
 import structlog
 
 from caracal.deployment.config_manager import ConfigManager
-from caracal.deployment.edition import Edition, EditionManager
+from caracal.deployment.edition import Edition
+from caracal.deployment.edition_adapter import get_deployment_edition_adapter
 from caracal.deployment.exceptions import (
     MigrationError,
     MigrationValidationError,
@@ -53,11 +54,15 @@ class MigrationManager:
     
     # Maximum number of backups to retain
     MAX_BACKUPS = 5
+
+    # Workspace metadata keys used for hard-cut migration audits/custody tracking.
+    CREDENTIAL_CUSTODY_METADATA_KEY = "credential_custody"
+    MIGRATION_AUDIT_METADATA_KEY = "migration_audit"
     
     def __init__(self):
         """Initialize the migration manager."""
         self.config_manager = ConfigManager()
-        self.edition_manager = EditionManager()
+        self.edition_adapter = get_deployment_edition_adapter()
         
         # Ensure backup directory exists
         self.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -223,7 +228,10 @@ class MigrationManager:
         target_edition: Edition,
         gateway_url: Optional[str] = None,
         gateway_token: Optional[str] = None,
-        migrate_api_keys: bool = True
+        migrate_api_keys: bool = True,
+        credential_keys: Optional[List[str]] = None,
+        enterprise_exports: Optional[Dict[str, str]] = None,
+        deactivate_enterprise_license: bool = False,
     ) -> Dict[str, Any]:
         """
         Migrates between Open Source and Enterprise editions.
@@ -250,7 +258,7 @@ class MigrationManager:
         """
         start_time = datetime.now()
         migration_id = self._generate_migration_id("edition_switch")
-        current_edition = self.edition_manager.get_edition()
+        current_edition = self.edition_adapter.get_edition()
         
         logger.info(
             "edition_migration_started",
@@ -280,14 +288,17 @@ class MigrationManager:
             logger.info("migration_step", step="create_backup", migration_id=migration_id)
             backup_path = self._create_backup(migration_id, "pre_edition_switch")
             
-            # Step 2: Migrate API keys if requested
+            # Step 2: Migrate credentials if requested
             if migrate_api_keys:
-                logger.info("migration_step", step="migrate_api_keys", migration_id=migration_id)
+                logger.info("migration_step", step="migrate_credentials", migration_id=migration_id)
                 api_keys_migrated = self._migrate_api_keys(
                     current_edition,
                     target_edition,
                     gateway_url,
-                    gateway_token
+                    gateway_token,
+                    credential_keys=credential_keys,
+                    enterprise_exports=enterprise_exports,
+                    deactivate_enterprise_license=deactivate_enterprise_license,
                 )
             
             # Step 3: Migrate settings
@@ -296,7 +307,7 @@ class MigrationManager:
             
             # Step 4: Update edition configuration
             logger.info("migration_step", step="update_edition", migration_id=migration_id)
-            self.edition_manager.set_edition(
+            self.edition_adapter.set_edition(
                 target_edition,
                 gateway_url=gateway_url,
                 gateway_token=gateway_token
@@ -662,7 +673,10 @@ class MigrationManager:
         from_edition: Edition,
         to_edition: Edition,
         gateway_url: Optional[str],
-        gateway_token: Optional[str]
+        gateway_token: Optional[str],
+        credential_keys: Optional[List[str]] = None,
+        enterprise_exports: Optional[Dict[str, str]] = None,
+        deactivate_enterprise_license: bool = False,
     ) -> int:
         """
         Migrates API keys between editions.
@@ -679,63 +693,21 @@ class MigrationManager:
         api_keys_migrated = 0
         
         if from_edition == Edition.OPENSOURCE and to_edition == Edition.ENTERPRISE:
-            # Migrate from local storage to gateway
-            logger.info(
-                "api_key_migration",
-                direction="local_to_gateway",
-                gateway_url=gateway_url
+            migration = self.migrate_credentials_oss_to_enterprise(
+                gateway_url=gateway_url,
+                gateway_token=gateway_token,
+                include_credentials=credential_keys,
+                dry_run=False,
             )
-            
-            # In a real implementation, this would:
-            # 1. Read API keys from local encrypted storage (vault)
-            # 2. Upload them to the gateway using the gateway API
-            # 3. Verify successful upload
-            # 4. Remove them from local storage (optional, for security)
-            # For now, we just log the operation
-            
-            workspaces = self.config_manager.list_workspaces()
-            for workspace in workspaces:
-                try:
-                    # Placeholder: In real implementation, migrate actual API keys
-                    # Example:
-                    # api_keys = self.config_manager.get_all_secrets(workspace)
-                    # for key_name, key_value in api_keys.items():
-                    #     gateway_client.upload_api_key(workspace, key_name, key_value)
-                    #     self.config_manager.delete_secret(key_name, workspace)
-                    
-                    logger.debug(
-                        "api_keys_migrated_to_gateway",
-                        workspace=workspace
-                    )
-                    api_keys_migrated += 1
-                except Exception as e:
-                    logger.warning(
-                        "api_key_migration_failed",
-                        workspace=workspace,
-                        error=str(e)
-                    )
-        
+            api_keys_migrated = int(migration.get("credentials_selected", 0))
         elif from_edition == Edition.ENTERPRISE and to_edition == Edition.OPENSOURCE:
-            # Prompt for API keys when switching from gateway to local
-            logger.info(
-                "api_key_migration",
-                direction="gateway_to_local",
-                action="prompt_required"
+            migration = self.migrate_credentials_enterprise_to_oss(
+                include_credentials=credential_keys,
+                exported_credentials=enterprise_exports,
+                deactivate_license=deactivate_enterprise_license,
+                dry_run=False,
             )
-            
-            # In a real implementation, this would:
-            # 1. Optionally download API keys from gateway (if gateway supports export)
-            # 2. Prompt user to configure API keys for local storage
-            # 3. Store them in local encrypted storage (vault)
-            # For now, we just log the operation
-            
-            logger.warning(
-                "api_key_prompt_required",
-                message="API keys must be configured for local storage after migration"
-            )
-            
-            # Note: The CLI command will display a warning to the user
-            # to configure API keys using 'caracal system secrets'
+            api_keys_migrated = int(migration.get("credentials_selected", 0))
         
         logger.info(
             "api_key_migration_completed",
@@ -743,6 +715,287 @@ class MigrationManager:
         )
         
         return api_keys_migrated
+
+    def _target_workspaces(self, workspace: Optional[str]) -> List[str]:
+        """Resolve target workspaces for migration operations."""
+        if workspace:
+            return [workspace]
+        return self.config_manager.list_workspaces()
+
+    def _resolve_credential_selection(
+        self,
+        available_credentials: Iterable[str],
+        include_credentials: Optional[Iterable[str]],
+    ) -> Tuple[List[str], List[str]]:
+        """Return selected credentials and requested-but-missing credentials."""
+        available = sorted({c for c in available_credentials if c})
+        if include_credentials is None:
+            return available, []
+
+        requested = [str(c).strip() for c in include_credentials if str(c).strip()]
+        selected: List[str] = []
+        missing: List[str] = []
+        available_set = set(available)
+        for key in requested:
+            if key in available_set:
+                if key not in selected:
+                    selected.append(key)
+            elif key not in missing:
+                missing.append(key)
+        return selected, missing
+
+    def _load_workspace_metadata(self, workspace: str) -> Dict[str, Any]:
+        """Load and normalize workspace metadata dictionary."""
+        cfg = self.config_manager.get_workspace_config(workspace)
+        metadata = cfg.metadata if isinstance(cfg.metadata, dict) else {}
+        return dict(metadata)
+
+    def _save_workspace_metadata(self, workspace: str, metadata: Dict[str, Any]) -> None:
+        """Persist workspace metadata updates."""
+        cfg = self.config_manager.get_workspace_config(workspace)
+        cfg.metadata = metadata
+        self.config_manager.set_workspace_config(workspace, cfg)
+
+    def _append_migration_audit(
+        self,
+        metadata: Dict[str, Any],
+        event_type: str,
+        workspace: str,
+        payload: Dict[str, Any],
+    ) -> None:
+        """Append migration audit event to workspace metadata."""
+        audit = metadata.get(self.MIGRATION_AUDIT_METADATA_KEY, [])
+        if not isinstance(audit, list):
+            audit = []
+
+        audit.append(
+            {
+                "event": event_type,
+                "workspace": workspace,
+                "timestamp": datetime.now().isoformat(),
+                "payload": payload,
+            }
+        )
+        metadata[self.MIGRATION_AUDIT_METADATA_KEY] = audit[-200:]
+
+    def migrate_credentials_oss_to_enterprise(
+        self,
+        *,
+        gateway_url: Optional[str],
+        gateway_token: Optional[str] = None,
+        workspace: Optional[str] = None,
+        include_credentials: Optional[List[str]] = None,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Migrate selected local credentials to enterprise custody pointers.
+
+        The migration is additive: local encrypted values are retained and only
+        custody metadata/pointers are updated.
+        """
+        if not gateway_url:
+            raise MigrationValidationError(
+                "gateway_url is required for Open Source -> Enterprise credential migration"
+            )
+
+        workspaces = self._target_workspaces(workspace)
+        decisions: List[Dict[str, Any]] = []
+        selected_total = 0
+
+        for ws in workspaces:
+            vault_map = self.config_manager._load_vault(ws)
+            available = sorted(vault_map.keys())
+            selected, missing = self._resolve_credential_selection(available, include_credentials)
+
+            metadata = self._load_workspace_metadata(ws)
+            custody_map = metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+            if not isinstance(custody_map, dict):
+                custody_map = {}
+
+            for missing_key in missing:
+                decisions.append(
+                    {
+                        "workspace": ws,
+                        "credential": missing_key,
+                        "action": "skip",
+                        "reason": "missing_local_secret",
+                    }
+                )
+
+            for key in selected:
+                selected_total += 1
+                pointer = f"enterprise://{gateway_url.rstrip('/')}/{ws}/{key}"
+                decisions.append(
+                    {
+                        "workspace": ws,
+                        "credential": key,
+                        "action": "migrate",
+                        "mode": "additive",
+                        "pointer": pointer,
+                    }
+                )
+                if dry_run:
+                    continue
+
+                custody_map[key] = {
+                    "location": "enterprise",
+                    "pointer": pointer,
+                    "gateway_url": gateway_url,
+                    "has_gateway_token": bool(gateway_token),
+                    "updated_at": datetime.now().isoformat(),
+                    "additive": True,
+                }
+
+            if not dry_run:
+                latest_metadata = self._load_workspace_metadata(ws)
+                latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+                if not isinstance(latest_custody_map, dict):
+                    latest_custody_map = {}
+                latest_custody_map.update(custody_map)
+                latest_metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = latest_custody_map
+                self._append_migration_audit(
+                    latest_metadata,
+                    event_type="oss_to_enterprise",
+                    workspace=ws,
+                    payload={
+                        "selected": selected,
+                        "missing": missing,
+                        "gateway_url": gateway_url,
+                    },
+                )
+                self._save_workspace_metadata(ws, latest_metadata)
+
+        return {
+            "direction": "oss_to_enterprise",
+            "dry_run": dry_run,
+            "workspaces": workspaces,
+            "credentials_selected": selected_total,
+            "decisions": decisions,
+        }
+
+    def migrate_credentials_enterprise_to_oss(
+        self,
+        *,
+        workspace: Optional[str] = None,
+        include_credentials: Optional[List[str]] = None,
+        exported_credentials: Optional[Dict[str, str]] = None,
+        deactivate_license: bool = False,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Migrate selected enterprise-managed credentials into local encrypted storage."""
+        workspaces = self._target_workspaces(workspace)
+        decisions: List[Dict[str, Any]] = []
+        selected_total = 0
+        imported_total = 0
+
+        normalized_exports: Dict[str, str] = {}
+        if exported_credentials:
+            normalized_exports = {
+                str(key).strip(): str(value)
+                for key, value in exported_credentials.items()
+                if str(key).strip()
+            }
+
+        for ws in workspaces:
+            metadata = self._load_workspace_metadata(ws)
+            custody_map = metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+            if not isinstance(custody_map, dict):
+                custody_map = {}
+
+            enterprise_marked = [
+                key
+                for key, details in custody_map.items()
+                if isinstance(details, dict) and str(details.get("location", "")).lower() == "enterprise"
+            ]
+            available = sorted(set(enterprise_marked) | set(normalized_exports.keys()))
+            selected, missing = self._resolve_credential_selection(available, include_credentials)
+
+            vault_map = self.config_manager._load_vault(ws)
+
+            for missing_key in missing:
+                decisions.append(
+                    {
+                        "workspace": ws,
+                        "credential": missing_key,
+                        "action": "skip",
+                        "reason": "missing_enterprise_pointer",
+                    }
+                )
+
+            for key in selected:
+                selected_total += 1
+                export_value = normalized_exports.get(key)
+                has_local_copy = key in vault_map
+
+                if export_value is None and not has_local_copy:
+                    decisions.append(
+                        {
+                            "workspace": ws,
+                            "credential": key,
+                            "action": "skip",
+                            "reason": "export_value_required",
+                        }
+                    )
+                    continue
+
+                decision = {
+                    "workspace": ws,
+                    "credential": key,
+                    "action": "migrate",
+                    "mode": "additive",
+                    "source": "export" if export_value is not None else "existing_local_copy",
+                }
+                decisions.append(decision)
+
+                if dry_run:
+                    continue
+
+                if export_value is not None:
+                    self.config_manager.store_secret(key, export_value, ws)
+                    imported_total += 1
+
+                custody_map[key] = {
+                    "location": "local",
+                    "updated_at": datetime.now().isoformat(),
+                    "additive": True,
+                    "source": decision["source"],
+                }
+
+            if not dry_run:
+                latest_metadata = self._load_workspace_metadata(ws)
+                latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+                if not isinstance(latest_custody_map, dict):
+                    latest_custody_map = {}
+                latest_custody_map.update(custody_map)
+                latest_metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = latest_custody_map
+                self._append_migration_audit(
+                    latest_metadata,
+                    event_type="enterprise_to_oss",
+                    workspace=ws,
+                    payload={
+                        "selected": selected,
+                        "missing": missing,
+                        "imported_from_export": [k for k in selected if k in normalized_exports],
+                    },
+                )
+                self._save_workspace_metadata(ws, latest_metadata)
+
+        if deactivate_license and not dry_run:
+            try:
+                from caracal.enterprise.license import EnterpriseLicenseValidator
+
+                EnterpriseLicenseValidator().disconnect()
+            except Exception as exc:
+                raise MigrationError(f"Failed to deactivate enterprise license during migration: {exc}") from exc
+
+        return {
+            "direction": "enterprise_to_oss",
+            "dry_run": dry_run,
+            "workspaces": workspaces,
+            "credentials_selected": selected_total,
+            "credentials_imported": imported_total,
+            "license_deactivated": bool(deactivate_license and not dry_run),
+            "decisions": decisions,
+        }
     
     def _migrate_edition_settings(
         self,

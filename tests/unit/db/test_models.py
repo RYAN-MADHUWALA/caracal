@@ -19,9 +19,7 @@ from caracal.db.models import (
     AuthorityLedgerEvent,
     AuthorityPolicy,
     GatewayProvider,
-    SyncOperation,
-    SyncConflict,
-    SyncMetadata,
+    EnterpriseRuntimeConfig,
 )
 
 
@@ -35,7 +33,7 @@ class TestPrincipalModel:
         principal = Principal(
             principal_id=uuid4(),
             name="test-agent",
-            principal_type="agent",
+            principal_kind="worker",
             owner="test-owner",
             public_key_pem="test-public-key",
             principal_metadata={"env": "test"}
@@ -43,7 +41,7 @@ class TestPrincipalModel:
         
         # Assert
         assert principal.name == "test-agent"
-        assert principal.principal_type == "agent"
+        assert principal.principal_kind == "worker"
         assert principal.owner == "test-owner"
         assert principal.public_key_pem == "test-public-key"
         assert principal.principal_metadata["env"] == "test"
@@ -55,7 +53,7 @@ class TestPrincipalModel:
         principal = Principal(
             principal_id=principal_id,
             name="test-agent",
-            principal_type="agent",
+            principal_kind="worker",
             owner="test-owner"
         )
         
@@ -66,7 +64,7 @@ class TestPrincipalModel:
         assert "Principal" in repr_str
         assert str(principal_id) in repr_str
         assert "test-agent" in repr_str
-        assert "agent" in repr_str
+        assert "worker" in repr_str
 
 
 @pytest.mark.unit
@@ -380,60 +378,20 @@ class TestGatewayProviderModel:
 
 
 @pytest.mark.unit
-class TestSyncModels:
-    """Test suite for sync-related models."""
-    
-    def test_sync_operation_creation(self):
-        """Test SyncOperation model instantiation with valid data."""
-        # Act
-        operation = SyncOperation(
-            operation_id=uuid4(),
-            workspace="test-workspace",
-            operation_type="create",
-            entity_type="mandate",
-            entity_id="mandate-123",
-            operation_data={"name": "test"},
-            status="pending"
+class TestEnterpriseRuntimeConfigModel:
+    """Test suite for enterprise runtime config persistence model."""
+
+    def test_enterprise_runtime_config_creation(self):
+        """Test EnterpriseRuntimeConfig model instantiation with valid data."""
+        runtime_config = EnterpriseRuntimeConfig(
+            runtime_key="__enterprise_runtime__",
+            config_data={
+                "license_key": "ent-123",
+                "valid": True,
+                "enterprise_api_url": "https://enterprise.example.com",
+            },
         )
-        
-        # Assert
-        assert operation.workspace == "test-workspace"
-        assert operation.operation_type == "create"
-        assert operation.entity_type == "mandate"
-        assert operation.status == "pending"
-    
-    def test_sync_conflict_creation(self):
-        """Test SyncConflict model instantiation with valid data."""
-        # Act
-        conflict = SyncConflict(
-            conflict_id=uuid4(),
-            workspace="test-workspace",
-            entity_type="mandate",
-            entity_id="mandate-123",
-            local_version={"version": 1},
-            remote_version={"version": 2},
-            local_timestamp=datetime.utcnow(),
-            remote_timestamp=datetime.utcnow(),
-            status="unresolved"
-        )
-        
-        # Assert
-        assert conflict.workspace == "test-workspace"
-        assert conflict.entity_type == "mandate"
-        assert conflict.status == "unresolved"
-    
-    def test_sync_metadata_creation(self):
-        """Test SyncMetadata model instantiation with valid data."""
-        # Act
-        metadata = SyncMetadata(
-            workspace="test-workspace",
-            remote_url="https://enterprise.example.com",
-            sync_enabled=True,
-            auto_sync_enabled=False
-        )
-        
-        # Assert
-        assert metadata.workspace == "test-workspace"
-        assert metadata.remote_url == "https://enterprise.example.com"
-        assert metadata.sync_enabled is True
-        assert metadata.auto_sync_enabled is False
+
+        assert runtime_config.runtime_key == "__enterprise_runtime__"
+        assert runtime_config.config_data["license_key"] == "ent-123"
+        assert runtime_config.config_data["valid"] is True

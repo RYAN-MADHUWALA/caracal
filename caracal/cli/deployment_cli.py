@@ -26,13 +26,11 @@ from caracal.deployment import (
     Mode,
     ModeManager,
     Edition,
-    EditionManager,
     ConfigManager,
     WorkspaceConfig,
     PostgresConfig,
-    SyncDirection,
-    ConflictStrategy,
     MigrationManager,
+    get_deployment_edition_adapter,
     get_version_checker,
 )
 from caracal.deployment.exceptions import (
@@ -254,30 +252,30 @@ def config_mode(mode_value: Optional[str], format: str):
 def config_edition(edition_value: Optional[str], gateway_url: Optional[str], gateway_token: Optional[str], format: str):
     """Show auto-detected edition (manual setting is disabled)."""
     try:
-        edition_manager = EditionManager()
+        edition_adapter = get_deployment_edition_adapter()
 
         if edition_value or gateway_url or gateway_token:
             console.print(
                 "[red]Error:[/red] Manual edition selection is disabled. "
                 "Edition is auto-detected from enterprise connectivity."
             )
-            console.print("  Use [bold]caracal sync connect <url> <token>[/bold] to enter Enterprise mode.")
-            console.print("  Use [bold]caracal sync disconnect[/bold] to return to Open Source mode.")
+            console.print("  Use [bold]caracal enterprise login <url> <token>[/bold] to enter Enterprise mode.")
+            console.print("  Use [bold]caracal enterprise disconnect[/bold] to return to Open Source mode.")
             sys.exit(1)
 
-        edition = edition_manager.get_edition()
+        edition = edition_adapter.get_edition()
 
         if format == "json":
             result = {"edition": edition.value, "mode": "auto"}
             if edition == Edition.ENTERPRISE:
-                detected_gateway_url = edition_manager.get_gateway_url()
+                detected_gateway_url = edition_adapter.get_gateway_url()
                 if detected_gateway_url:
                     result["enterprise_url"] = detected_gateway_url
             click.echo(json.dumps(result))
         else:
             console.print(f"Current edition: [bold]{edition.value}[/bold] [dim](auto)[/dim]")
             if edition == Edition.ENTERPRISE:
-                detected_gateway_url = edition_manager.get_gateway_url()
+                detected_gateway_url = edition_adapter.get_gateway_url()
                 if detected_gateway_url:
                     console.print(f"  Enterprise URL: {detected_gateway_url}")
                         
@@ -413,7 +411,7 @@ def workspace_switch(name: str):
             console.print(f"[red]Error:[/red] Workspace not found: {name}")
             sys.exit(1)
 
-        # Set as default workspace (also syncs workspaces.json default).
+        # Set as default workspace.
         config_manager.set_default_workspace(name)
         
         console.print(f"[green]✓[/green] Switched to workspace: {name}")
@@ -439,7 +437,6 @@ def workspace_list(format: str):
                 workspace_data.append({
                     "name": ws,
                     "is_default": config.is_default,
-                    "sync_enabled": config.sync_enabled,
                     "created_at": config.created_at.isoformat(),
                 })
 
@@ -452,7 +449,6 @@ def workspace_list(format: str):
             table = Table(title="Workspaces")
             table.add_column("Name", style="cyan")
             table.add_column("Default", style="green")
-            table.add_column("Sync", style="yellow")
             table.add_column("Created", style="blue")
             
             for ws in workspaces:
@@ -460,7 +456,6 @@ def workspace_list(format: str):
                 table.add_row(
                     ws,
                     "✓" if config.is_default else "",
-                    "✓" if config.sync_enabled else "",
                     config.created_at.strftime("%Y-%m-%d %H:%M"),
                 )
             
@@ -577,75 +572,64 @@ def workspace_import(path: Path, name: Optional[str], lock_key: Optional[str]):
         sys.exit(1)
 
 
-# Sync command group
-@click.group(name="sync")
-def sync_group():
-    """Manage workspace synchronization."""
+# Enterprise command group
+@click.group(name="enterprise")
+def enterprise_group():
+    """Manage enterprise connectivity and synchronization."""
     pass
 
 
-@sync_group.command(name="connect")
+@enterprise_group.command(name="login")
 @click.argument("url")
 @click.argument("token")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-def sync_connect(url: str, token: str, workspace: Optional[str]):
+def enterprise_login(
+    url: str,
+    token: str,
+    workspace: Optional[str],
+):
     """Connect workspace to enterprise backend."""
     try:
-        from caracal.deployment.sync_engine import SyncEngine
+        from caracal.enterprise.license import EnterpriseLicenseValidator
         
-        config_manager = ConfigManager()
-        
-        workspace = _require_workspace(config_manager, workspace)
-        
-        sync_engine = SyncEngine()
-        sync_engine.connect(workspace, url, token)
+        validator = EnterpriseLicenseValidator(enterprise_api_url=url)
+        result = validator.validate_license(token)
 
-        # Edition is policy-driven by connectivity: migrate to Enterprise after connect.
-        try:
-            migration_manager = MigrationManager()
-            current_edition = EditionManager().get_edition()
-            if current_edition != Edition.ENTERPRISE:
-                migration_manager.migrate_edition(
-                    Edition.ENTERPRISE,
-                    gateway_url=url,
-                    gateway_token=token,
-                    migrate_api_keys=True,
-                )
-        except Exception as migration_error:
-            logger.warning("sync_connect_enterprise_migration_skipped", error=str(migration_error))
-            console.print(
-                "[yellow]Warning:[/yellow] Connected, but enterprise migration had warnings: "
-                f"{migration_error}"
-            )
+        if not result.valid:
+            console.print(f"[red]Error:[/red] {result.message}")
+            sys.exit(1)
+
+        resolved_api_url = result.enterprise_api_url or url
         
         console.print(f"[green]✓[/green] Workspace connected to enterprise")
-        console.print(f"  Workspace: {workspace}")
-        console.print(f"  URL: {url}")
+        console.print(f"  Workspace: {workspace or 'default'}")
+        console.print(f"  URL: {resolved_api_url}")
+        if result.tier:
+            console.print(f"  Tier: {result.tier}")
+        console.print("  Credential migration: explicit only")
+        console.print("  Next step: run `caracal migrate oss-to-enterprise` to move local credentials into enterprise custody.")
         
     except Exception as e:
-        logger.error("sync_connect_failed", error=str(e))
+        logger.error("enterprise_login_failed", error=str(e))
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-
-@sync_group.command(name="disconnect")
+@enterprise_group.command(name="disconnect")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
 @click.option("--force", is_flag=True, help="Skip safety confirmation prompts")
-@click.option(
-    "--allow-local-secrets-migration",
-    is_flag=True,
-    help="Allow Enterprise->Open Source migration to move provider secrets to local storage",
-)
-def sync_disconnect(workspace: Optional[str], force: bool, allow_local_secrets_migration: bool):
+def enterprise_disconnect(
+    workspace: Optional[str],
+    force: bool,
+):
     """Disconnect workspace from enterprise backend."""
     try:
-        from caracal.deployment.sync_engine import SyncEngine
+        from caracal.enterprise.license import EnterpriseLicenseValidator
         
         config_manager = ConfigManager()
         
         workspace = _require_workspace(config_manager, workspace)
         
-        current_edition = EditionManager().get_edition()
+        current_edition = get_deployment_edition_adapter().get_edition()
 
         if current_edition == Edition.ENTERPRISE and not force:
             console.print("[yellow]Security warning:[/yellow] You are disconnecting Enterprise mode.")
@@ -656,60 +640,40 @@ def sync_disconnect(workspace: Optional[str], force: bool, allow_local_secrets_m
                 console.print("Cancelled.")
                 return
 
-        # Migrate edition first so gateway indicators are cleared for auto-detection.
-        if current_edition == Edition.ENTERPRISE:
-            migration_manager = MigrationManager()
-            migration_manager.migrate_edition(
-                Edition.OPENSOURCE,
-                migrate_api_keys=allow_local_secrets_migration,
-            )
-
-        sync_engine = SyncEngine()
-        sync_engine.disconnect(workspace)
-
-        # Ensure enterprise license state does not keep edition in enterprise mode.
         try:
-            from caracal.enterprise.license import EnterpriseLicenseValidator
-
             EnterpriseLicenseValidator().disconnect()
         except Exception as license_error:
-            logger.debug("sync_disconnect_license_clear_skipped", error=str(license_error))
+            logger.debug("enterprise_disconnect_license_clear_skipped", error=str(license_error))
         
         console.print(f"[green]✓[/green] Workspace disconnected from enterprise")
         console.print(f"  Workspace: {workspace}")
-        if current_edition == Edition.ENTERPRISE and not allow_local_secrets_migration:
-            console.print("  Mode: Open Source (fresh start, local secret migration disabled)")
-        elif current_edition == Edition.ENTERPRISE:
-            console.print("  Mode: Open Source (local secret migration enabled)")
+        if current_edition == Edition.ENTERPRISE:
+            console.print("  Mode: Open Source (fresh start)")
+            console.print("  Credential migration: run `caracal migrate enterprise-to-oss` explicitly if you need a controlled export.")
         
     except Exception as e:
-        logger.error("sync_disconnect_failed", error=str(e))
+        logger.error("enterprise_disconnect_failed", error=str(e))
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
-@sync_group.command(name="now")
+@enterprise_group.command(name="sync")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
 @click.option("--direction", "-d", type=click.Choice(["push", "pull", "both"]), default="both", help="Sync direction")
 @click.option("--format", "-f", type=click.Choice(["table", "json"]), default="table", help="Output format")
-def sync_now(workspace: Optional[str], direction: str, format: str):
+def enterprise_sync(workspace: Optional[str], direction: str, format: str):
     """Perform immediate synchronization."""
     try:
-        from caracal.deployment.sync_engine import SyncEngine, SyncDirection as SyncDir
+        from caracal.enterprise.sync import EnterpriseSyncClient
         
         config_manager = ConfigManager()
         
         workspace = _require_workspace(config_manager, workspace)
-        
-        # Map direction
-        direction_map = {
-            "push": SyncDir.PUSH,
-            "pull": SyncDir.PULL,
-            "both": SyncDir.BIDIRECTIONAL
-        }
-        sync_direction = direction_map[direction]
-        
-        sync_engine = SyncEngine()
+
+        if direction != "both":
+            console.print("[yellow]Warning:[/yellow] Direction filtering is no longer supported; running full enterprise sync.")
+
+        sync_client = EnterpriseSyncClient()
         
         with Progress(
             SpinnerColumn(),
@@ -717,17 +681,16 @@ def sync_now(workspace: Optional[str], direction: str, format: str):
             console=console,
         ) as progress:
             task = progress.add_task(f"Syncing workspace '{workspace}'...", total=None)
-            result = sync_engine.sync_now(workspace, sync_direction)
+            result = sync_client.sync()
             progress.update(task, completed=True)
         
         if format == "json":
             click.echo(json.dumps({
                 "workspace": workspace,
                 "success": result.success,
-                "uploaded": result.uploaded_count,
-                "downloaded": result.downloaded_count,
-                "conflicts": result.conflicts_count,
-                "duration_ms": result.duration_ms
+                "synced_counts": result.synced_counts,
+                "message": result.message,
+                "errors": result.errors,
             }))
         else:
             if result.success:
@@ -735,10 +698,9 @@ def sync_now(workspace: Optional[str], direction: str, format: str):
             else:
                 console.print(f"[yellow]⚠[/yellow] Sync completed with errors")
             
-            console.print(f"  Uploaded: {result.uploaded_count}")
-            console.print(f"  Downloaded: {result.downloaded_count}")
-            console.print(f"  Conflicts: {result.conflicts_count}")
-            console.print(f"  Duration: {result.duration_ms}ms")
+            for key, value in sorted(result.synced_counts.items()):
+                console.print(f"  {key}: {value}")
+            console.print(f"  Message: {result.message}")
             
             if result.errors:
                 console.print("\n[red]Errors:[/red]")
@@ -746,158 +708,61 @@ def sync_now(workspace: Optional[str], direction: str, format: str):
                     console.print(f"  • {error}")
         
     except Exception as e:
-        logger.error("sync_now_failed", error=str(e))
+        logger.error("enterprise_sync_failed", error=str(e))
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
-@sync_group.command(name="status")
+@enterprise_group.command(name="status")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
 @click.option("--format", "-f", type=click.Choice(["table", "json"]), default="table", help="Output format")
-def sync_status(workspace: Optional[str], format: str):
+def enterprise_status(workspace: Optional[str], format: str):
     """Show sync status."""
     try:
-        from caracal.deployment.sync_engine import SyncEngine
+        from caracal.enterprise.sync import EnterpriseSyncClient
+        from caracal.enterprise.license import EnterpriseLicenseValidator
         
         config_manager = ConfigManager()
         
         workspace = _require_workspace(config_manager, workspace)
         
-        sync_engine = SyncEngine()
-        status = sync_engine.get_sync_status(workspace)
+        sync_status = EnterpriseSyncClient().get_sync_status()
+        license_info = EnterpriseLicenseValidator().get_license_info()
         
         if format == "json":
-            click.echo(json.dumps({
-                "workspace": status.workspace,
-                "sync_enabled": status.sync_enabled,
-                "last_sync": status.last_sync_timestamp.isoformat() if status.last_sync_timestamp else None,
-                "pending_operations": len(status.pending_operations),
-                "conflicts": len(status.conflicts),
-                "remote_url": status.remote_url,
-                "local_version": status.local_version,
-                "remote_version": status.remote_version
-            }))
+            click.echo(json.dumps(
+                {
+                    "workspace": workspace,
+                    "license_active": bool(license_info.get("license_active")),
+                    "tier": license_info.get("tier"),
+                    "sync_status": sync_status,
+                }
+            ))
         else:
             console.print(f"Sync Status for workspace '{workspace}':")
-            console.print(f"  Sync enabled: {'✓' if status.sync_enabled else '✗'}")
-            if status.last_sync_timestamp:
-                console.print(f"  Last sync: {status.last_sync_timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-            else:
-                console.print(f"  Last sync: Never")
-            console.print(f"  Pending operations: {len(status.pending_operations)}")
-            console.print(f"  Conflicts: {len(status.conflicts)}")
-            if status.remote_url:
-                console.print(f"  Remote URL: {status.remote_url}")
-            console.print(f"  Local version: {status.local_version}")
-            if status.remote_version:
-                console.print(f"  Remote version: {status.remote_version}")
+            console.print(f"  License active: {'✓' if license_info.get('license_active') else '✗'}")
+            if license_info.get("tier"):
+                console.print(f"  Tier: {license_info['tier']}")
+
+            if isinstance(sync_status, dict):
+                if sync_status.get("error"):
+                    console.print(f"  Status: {sync_status.get('error')}")
+                else:
+                    last_sync = sync_status.get("last_sync")
+                    if isinstance(last_sync, dict):
+                        console.print(f"  Last sync: {last_sync.get('timestamp', 'Unknown')}")
+                    elif last_sync:
+                        console.print(f"  Last sync: {last_sync}")
+
+                    if sync_status.get("organization_name"):
+                        console.print(f"  Organization: {sync_status['organization_name']}")
+                    if sync_status.get("organization_id"):
+                        console.print(f"  Organization ID: {sync_status['organization_id']}")
+                    if sync_status.get("tier"):
+                        console.print(f"  Server tier: {sync_status['tier']}")
         
     except Exception as e:
-        logger.error("sync_status_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-
-
-@sync_group.command(name="conflicts")
-@click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-@click.option("--format", "-f", type=click.Choice(["table", "json"]), default="table", help="Output format")
-def sync_conflicts(workspace: Optional[str], format: str):
-    """Show conflict history."""
-    try:
-        from caracal.deployment.sync_engine import SyncEngine
-        
-        config_manager = ConfigManager()
-        
-        workspace = _require_workspace(config_manager, workspace)
-        
-        sync_engine = SyncEngine()
-        conflicts = sync_engine.get_conflict_history(workspace, limit=100)
-        
-        if format == "json":
-            conflicts_data = []
-            for conflict in conflicts:
-                conflicts_data.append({
-                    "id": conflict.id,
-                    "entity_type": conflict.entity_type,
-                    "entity_id": conflict.entity_id,
-                    "local_timestamp": conflict.local_timestamp.isoformat(),
-                    "remote_timestamp": conflict.remote_timestamp.isoformat(),
-                    "resolved": conflict.resolution is not None
-                })
-            click.echo(json.dumps({"workspace": workspace, "conflicts": conflicts_data}))
-        else:
-            if not conflicts:
-                console.print(f"No conflicts found for workspace '{workspace}'")
-                return
-            
-            table = Table(title=f"Conflicts for workspace '{workspace}'")
-            table.add_column("Entity Type", style="cyan")
-            table.add_column("Entity ID", style="yellow")
-            table.add_column("Local Time", style="blue")
-            table.add_column("Remote Time", style="blue")
-            table.add_column("Resolved", style="green")
-            
-            for conflict in conflicts:
-                table.add_row(
-                    conflict.entity_type,
-                    conflict.entity_id[:8] + "...",
-                    conflict.local_timestamp.strftime("%Y-%m-%d %H:%M"),
-                    conflict.remote_timestamp.strftime("%Y-%m-%d %H:%M"),
-                    "✓" if conflict.resolution else "✗"
-                )
-            
-            console.print(table)
-        
-    except Exception as e:
-        logger.error("sync_conflicts_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-
-
-@sync_group.command(name="auto-enable")
-@click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-@click.option("--interval", "-i", type=int, default=300, help="Sync interval in seconds (default: 300)")
-def sync_auto_enable(workspace: Optional[str], interval: int):
-    """Enable automatic background sync."""
-    try:
-        from caracal.deployment.sync_engine import SyncEngine
-        
-        config_manager = ConfigManager()
-        
-        workspace = _require_workspace(config_manager, workspace)
-        
-        sync_engine = SyncEngine()
-        sync_engine.enable_auto_sync(workspace, interval)
-        
-        console.print(f"[green]✓[/green] Auto-sync enabled")
-        console.print(f"  Workspace: {workspace}")
-        console.print(f"  Interval: {interval} seconds")
-        
-    except Exception as e:
-        logger.error("sync_auto_enable_failed", error=str(e))
-        console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-
-
-@sync_group.command(name="auto-disable")
-@click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-def sync_auto_disable(workspace: Optional[str]):
-    """Disable automatic background sync."""
-    try:
-        from caracal.deployment.sync_engine import SyncEngine
-        
-        config_manager = ConfigManager()
-        
-        workspace = _require_workspace(config_manager, workspace)
-        
-        sync_engine = SyncEngine()
-        sync_engine.disable_auto_sync(workspace)
-        
-        console.print(f"[green]✓[/green] Auto-sync disabled")
-        console.print(f"  Workspace: {workspace}")
-        
-    except Exception as e:
-        logger.error("sync_auto_disable_failed", error=str(e))
+        logger.error("enterprise_status_failed", error=str(e))
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
@@ -1130,7 +995,7 @@ def provider_add(
     """Add a provider configuration."""
     try:
         config_manager = ConfigManager()
-        edition_manager = EditionManager()
+        edition_adapter = get_deployment_edition_adapter()
 
         workspace = _require_workspace(config_manager, workspace)
         normalized_auth = _normalize_auth_scheme(auth_scheme)
@@ -1140,12 +1005,7 @@ def provider_add(
         )
         effective_service_type = service_type.strip().lower() if service_type else "api"
 
-        gateway_url = (
-            edition_manager.get_gateway_url()
-            or os.environ.get("CARACAL_ENTERPRISE_URL")
-            or os.environ.get("CARACAL_GATEWAY_URL")
-        )
-        if edition_manager.is_enterprise() and gateway_url:
+        if edition_adapter.uses_gateway_execution():
             raise click.ClickException(
                 "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
             )
@@ -1216,73 +1076,42 @@ def provider_list(workspace: Optional[str], format: str):
     """List configured providers."""
     try:
         config_manager = ConfigManager()
-        edition_manager = EditionManager()
+        edition_adapter = get_deployment_edition_adapter()
 
         workspace = _require_workspace(config_manager, workspace)
 
         providers_data: List[Dict[str, Any]] = []
 
-        if edition_manager.is_enterprise():
+        if edition_adapter.uses_gateway_execution():
             from caracal.deployment.gateway_client import GatewayClient
 
-            gateway_url = (
-                edition_manager.get_gateway_url()
-                or os.environ.get("CARACAL_ENTERPRISE_URL")
-                or os.environ.get("CARACAL_GATEWAY_URL")
-            )
-            if gateway_url:
-                gateway_client = GatewayClient(
-                    gateway_url=gateway_url,
-                    config_manager=config_manager,
-                    workspace=workspace,
-                )
-                try:
-                    providers = asyncio.run(gateway_client.get_available_providers())
-                finally:
-                    asyncio.run(gateway_client.close())
+            gateway_url = edition_adapter.require_gateway_url()
 
-                providers_data = [
-                    {
-                        "name": provider.name,
-                        "service_type": provider.service_type,
-                        "auth_scheme": provider.auth_scheme,
-                        "base_url": provider.metadata.get("base_url") if isinstance(provider.metadata, dict) else None,
-                        "version": provider.version,
-                        "status": provider.status,
-                        "tags": provider.tags,
-                        "provider_definition": provider.provider_definition,
-                        "resources": provider.resources,
-                        "actions": provider.actions,
-                    }
-                    for provider in providers
-                ]
-            else:
-                logger.warning(
-                    "provider_list_gateway_url_missing_fallback",
-                    workspace=workspace,
-                )
-                console.print(
-                    "[yellow]Warning:[/yellow] Enterprise edition is active but gateway URL is not configured; "
-                    "showing local provider registry."
-                )
-                broker, registry = _build_oss_broker(config_manager, workspace)
-                providers = broker.list_providers()
-                for provider in providers:
-                    stored = registry.get(provider.name, {})
-                    providers_data.append(
-                        {
-                            "name": provider.name,
-                            "service_type": provider.service_type,
-                            "auth_scheme": provider.auth_scheme,
-                            "base_url": provider.base_url,
-                            "version": provider.version,
-                            "status": provider.status,
-                            "tags": stored.get("tags", []),
-                            "provider_definition": stored.get("provider_definition"),
-                            "resources": stored.get("resources", []),
-                            "actions": stored.get("actions", []),
-                        }
-                    )
+            gateway_client = GatewayClient(
+                gateway_url=gateway_url,
+                config_manager=config_manager,
+                workspace=workspace,
+            )
+            try:
+                providers = asyncio.run(gateway_client.get_available_providers())
+            finally:
+                asyncio.run(gateway_client.close())
+
+            providers_data = [
+                {
+                    "name": provider.name,
+                    "service_type": provider.service_type,
+                    "auth_scheme": provider.auth_scheme,
+                    "base_url": provider.metadata.get("base_url") if isinstance(provider.metadata, dict) else None,
+                    "version": provider.version,
+                    "status": provider.status,
+                    "tags": provider.tags,
+                    "provider_definition": provider.provider_definition,
+                    "resources": provider.resources,
+                    "actions": provider.actions,
+                }
+                for provider in providers
+            ]
         else:
             broker, registry = _build_oss_broker(config_manager, workspace)
             providers = broker.list_providers()
@@ -1343,7 +1172,7 @@ def provider_test(name: str, workspace: Optional[str]):
     """Test provider connectivity."""
     try:
         config_manager = ConfigManager()
-        edition_manager = EditionManager()
+        edition_adapter = get_deployment_edition_adapter()
 
         workspace = _require_workspace(config_manager, workspace)
         
@@ -1354,52 +1183,31 @@ def provider_test(name: str, workspace: Optional[str]):
         ) as progress:
             task = progress.add_task(f"Testing provider '{name}'...", total=None)
 
-            if edition_manager.is_enterprise():
+            if edition_adapter.uses_gateway_execution():
                 from caracal.deployment.gateway_client import GatewayClient
 
-                gateway_url = (
-                    edition_manager.get_gateway_url()
-                    or os.environ.get("CARACAL_ENTERPRISE_URL")
-                    or os.environ.get("CARACAL_GATEWAY_URL")
+                gateway_url = edition_adapter.require_gateway_url()
+
+                gateway_client = GatewayClient(
+                    gateway_url=gateway_url,
+                    config_manager=config_manager,
+                    workspace=workspace,
                 )
-                if gateway_url:
-                    gateway_client = GatewayClient(
-                        gateway_url=gateway_url,
-                        config_manager=config_manager,
-                        workspace=workspace,
-                    )
-                    try:
-                        gateway_health = asyncio.run(gateway_client.check_connection())
-                        providers = asyncio.run(gateway_client.get_available_providers())
-                    finally:
-                        asyncio.run(gateway_client.close())
+                try:
+                    gateway_health = asyncio.run(gateway_client.check_connection())
+                    providers = asyncio.run(gateway_client.get_available_providers())
+                finally:
+                    asyncio.run(gateway_client.close())
 
-                    selected = next((p for p in providers if p.name == name), None)
-                    is_healthy = bool(gateway_health.healthy and selected and selected.available)
-                    error_message = None
-                    if not gateway_health.healthy:
-                        error_message = gateway_health.error
-                    elif not selected:
-                        error_message = "Provider not found in gateway registry"
-                    elif not selected.available:
-                        error_message = "Provider is currently unavailable"
-                else:
-                    logger.warning(
-                        "provider_test_gateway_url_missing_fallback",
-                        workspace=workspace,
-                    )
-                    console.print(
-                        "[yellow]Warning:[/yellow] Enterprise edition is active but gateway URL is not configured; "
-                        "testing against local provider registry."
-                    )
-                    broker, _ = _build_oss_broker(config_manager, workspace)
-                    try:
-                        health = asyncio.run(broker.test_provider(name))
-                    finally:
-                        asyncio.run(broker.close())
-
-                    is_healthy = health.is_healthy
-                    error_message = health.error_message
+                selected = next((p for p in providers if p.name == name), None)
+                is_healthy = bool(gateway_health.healthy and selected and selected.available)
+                error_message = None
+                if not gateway_health.healthy:
+                    error_message = gateway_health.error
+                elif not selected:
+                    error_message = "Provider not found in gateway registry"
+                elif not selected.available:
+                    error_message = "Provider is currently unavailable"
             else:
                 broker, _ = _build_oss_broker(config_manager, workspace)
                 try:
@@ -1407,8 +1215,8 @@ def provider_test(name: str, workspace: Optional[str]):
                 finally:
                     asyncio.run(broker.close())
 
-                is_healthy = health.is_healthy
-                error_message = health.error_message
+                is_healthy = health.healthy
+                error_message = health.error
 
             progress.update(task, completed=True)
         
@@ -1518,11 +1326,9 @@ def migrate_command(from_type: str, backup: bool, force: bool):
 def doctor_command(format: str):
     """Run system health checks."""
     try:
-        from caracal.deployment.sync_engine import SyncEngine
-        
         config_manager = ConfigManager()
         mode_manager = ModeManager()
-        edition_manager = EditionManager()
+        edition_adapter = get_deployment_edition_adapter()
         
         checks = []
         
@@ -1564,7 +1370,7 @@ def doctor_command(format: str):
         
         # Check 3: Edition configuration
         try:
-            edition = edition_manager.get_edition()
+            edition = edition_adapter.get_edition()
             checks.append({
                 "name": "Edition Configuration",
                 "status": "pass",

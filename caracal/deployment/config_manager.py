@@ -7,8 +7,6 @@ Configuration management for Caracal deployment architecture.
 Handles system-level configuration with encryption and workspace management.
 """
 
-import base64
-import hashlib
 import json
 import os
 import re
@@ -22,11 +20,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import keyring
 import structlog
 import toml
 from cryptography.exceptions import InvalidTag
-from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -38,14 +34,13 @@ from caracal.deployment.exceptions import (
     ConfigurationValidationError,
     DecryptionError,
     EncryptionError,
-    EncryptionKeyError,
     InvalidWorkspaceNameError,
-    KeyringError,
     SecretNotFoundError,
     WorkspaceAlreadyExistsError,
     WorkspaceNotFoundError,
     WorkspaceOperationError,
 )
+from caracal.config.encryption import decrypt_value, encrypt_value
 from caracal.runtime.environment import debug_logs_enabled
 from caracal.storage.layout import resolve_caracal_home
 
@@ -75,12 +70,6 @@ class WorkspaceConfig:
     created_at: datetime
     updated_at: datetime
     is_default: bool
-    sync_enabled: bool
-    sync_url: Optional[str]
-    sync_direction: SyncDirection
-    auto_sync_interval: Optional[int]  # seconds
-    last_sync: Optional[datetime]
-    conflict_strategy: ConflictStrategy
     metadata: Dict[str, Any]
 
 
@@ -113,10 +102,6 @@ class ConfigManager:
     CACHE_DIR = CONFIG_DIR / "cache"  # Legacy root cache (deprecated)
     LOGS_DIR = CONFIG_DIR / "logs"  # Legacy root logs (deprecated)
     
-    # Keyring service name for encryption keys
-    KEYRING_SERVICE = "caracal"
-    KEYRING_USERNAME = "encryption_key"
-    
     # Workspace name validation pattern
     WORKSPACE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
     RESERVED_WORKSPACE_NAMES = {"primary", "_deleted_backups"}
@@ -124,17 +109,9 @@ class ConfigManager:
     # Workspace templates
     TEMPLATES = {
         "enterprise": {
-            "sync_enabled": True,
-            "sync_direction": SyncDirection.BIDIRECTIONAL,
-            "auto_sync_interval": 300,
-            "conflict_strategy": ConflictStrategy.OPERATIONAL_TRANSFORM,
             "metadata": {"template": "enterprise"}
         },
         "local-dev": {
-            "sync_enabled": False,
-            "sync_direction": SyncDirection.BIDIRECTIONAL,
-            "auto_sync_interval": None,
-            "conflict_strategy": ConflictStrategy.LAST_WRITE_WINS,
             "metadata": {"template": "local-dev"}
         }
     }
@@ -150,7 +127,6 @@ class ConfigManager:
     def __init__(self):
         """Initialize the configuration manager."""
         self._ensure_config_dir()
-        self._encryption_key: Optional[bytes] = None
     
     def _ensure_config_dir(self) -> None:
         """Ensure configuration directory exists with proper permissions."""
@@ -205,153 +181,6 @@ class ConfigManager:
             and name not in self.RESERVED_WORKSPACE_NAMES
         )
     
-    def _get_encryption_key(self) -> bytes:
-        """
-        Get or create encryption key for secrets.
-        
-        Uses system keyring for secure storage, falls back to PBKDF2
-        key derivation if keyring is unavailable.
-        
-        Returns:
-            Encryption key bytes (32 bytes for Fernet)
-            
-        Raises:
-            EncryptionKeyError: If key retrieval/generation fails
-        """
-        if self._encryption_key is not None:
-            return self._encryption_key
-        
-        try:
-            # Try to get key from system keyring. In containers this may be unavailable.
-            try:
-                key_str = keyring.get_password(self.KEYRING_SERVICE, self.KEYRING_USERNAME)
-            except Exception as e:
-                logger.warning(
-                    "keyring_read_failed",
-                    error=str(e),
-                    fallback="using_pbkdf2"
-                )
-                self._encryption_key = self._derive_key_pbkdf2()
-                return self._encryption_key
-
-            if key_str:
-                # Decode hex string to bytes
-                self._encryption_key = bytes.fromhex(key_str)
-                logger.debug("encryption_key_retrieved_from_keyring")
-                return self._encryption_key
-
-            # Generate new key if not found
-            key = Fernet.generate_key()
-
-            # Try to store in keyring
-            try:
-                keyring.set_password(
-                    self.KEYRING_SERVICE,
-                    self.KEYRING_USERNAME,
-                    key.hex()
-                )
-                logger.info("encryption_key_stored_in_keyring")
-            except Exception as e:
-                logger.warning(
-                    "keyring_storage_failed",
-                    error=str(e),
-                    fallback="using_pbkdf2"
-                )
-                # Fallback: derive key from system information
-                key = self._derive_key_pbkdf2()
-
-            self._encryption_key = key
-            return self._encryption_key
-
-        except Exception as e:
-            logger.error(
-                "encryption_key_retrieval_failed",
-                error=str(e)
-            )
-            raise EncryptionKeyError(f"Failed to retrieve encryption key: {e}") from e
-    
-    def _derive_key_pbkdf2(self) -> bytes:
-        """
-        Derive encryption key using PBKDF2 from system information.
-        
-        This is a fallback when system keyring is unavailable.
-        
-        Returns:
-            Derived key bytes (32 bytes for Fernet compatibility)
-        """
-        # Use system-specific information as salt
-        import platform
-        salt_data = f"{platform.node()}{os.getuid() if hasattr(os, 'getuid') else 'windows'}"
-        salt = hashlib.sha256(salt_data.encode()).digest()
-        
-        # Derive key using PBKDF2
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        
-        # Use a fixed password combined with user home directory
-        password = f"caracal-{Path.home()}".encode()
-        key = kdf.derive(password)
-        
-        # Fernet requires base64-encoded 32-byte key
-        key = base64.urlsafe_b64encode(key)
-        
-        logger.debug("encryption_key_derived_pbkdf2")
-        return key
-    
-    def _encrypt_value(self, value: str) -> str:
-        """
-        Encrypt a value using Fernet (symmetric encryption).
-        
-        Args:
-            value: Value to encrypt
-            
-        Returns:
-            Encrypted value (base64 encoded)
-            
-        Raises:
-            EncryptionError: If encryption fails
-        """
-        try:
-            key = self._get_encryption_key()
-            fernet = Fernet(key)
-            encrypted = fernet.encrypt(value.encode('utf-8'))
-            return encrypted.decode('utf-8')
-        except Exception as e:
-            logger.error(
-                "encryption_failed",
-                error=str(e)
-            )
-            raise EncryptionError(f"Failed to encrypt value: {e}") from e
-    
-    def _decrypt_value(self, encrypted_value: str) -> str:
-        """
-        Decrypt a value using Fernet (symmetric encryption).
-        
-        Args:
-            encrypted_value: Encrypted value (base64 encoded)
-            
-        Returns:
-            Decrypted value
-            
-        Raises:
-            DecryptionError: If decryption fails
-        """
-        try:
-            key = self._get_encryption_key()
-            fernet = Fernet(key)
-            decrypted = fernet.decrypt(encrypted_value.encode('utf-8'))
-            return decrypted.decode('utf-8')
-        except Exception as e:
-            logger.error(
-                "decryption_failed",
-                error=str(e)
-            )
-            raise DecryptionError(f"Failed to decrypt value: {e}") from e
-    
     def _get_workspace_dir(self, workspace: str) -> Path:
         """Get workspace directory path."""
         return self.WORKSPACES_DIR / workspace
@@ -359,10 +188,46 @@ class ConfigManager:
     def _get_workspace_config_file(self, workspace: str) -> Path:
         """Get workspace configuration file path."""
         return self._get_workspace_dir(workspace) / "workspace.toml"
-    
-    def _get_workspace_vault_file(self, workspace: str) -> Path:
-        """Get workspace secrets vault file path."""
-        return self._get_workspace_dir(workspace) / "secrets.vault"
+
+    def _legacy_secret_store_path(self, workspace: str) -> Path:
+        """Return the old local secret-store path for one-way cleanup."""
+        return self._get_workspace_dir(workspace) / ("secrets" + ".vault")
+
+    def _load_secret_refs(self, workspace: str) -> Dict[str, str]:
+        """Load opaque vault references stored in workspace metadata."""
+        config = self._load_workspace_toml(workspace)
+        metadata = config.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return {}
+        secret_refs = metadata.get("secret_refs", {})
+        if not isinstance(secret_refs, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in secret_refs.items()
+            if isinstance(key, str) and isinstance(value, str) and value
+        }
+
+    def _save_secret_refs(self, workspace: str, secret_refs: Dict[str, str]) -> None:
+        """Persist opaque vault references in workspace metadata."""
+        config = self._load_workspace_toml(workspace)
+        metadata = config.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["secret_refs"] = dict(sorted(secret_refs.items()))
+        config["metadata"] = metadata
+        self._save_workspace_toml(workspace, config)
+
+        legacy_secret_store = self._legacy_secret_store_path(workspace)
+        if legacy_secret_store.exists():
+            try:
+                legacy_secret_store.unlink()
+            except OSError:
+                logger.debug(
+                    "legacy_secret_store_cleanup_skipped",
+                    workspace=workspace,
+                    path=str(legacy_secret_store),
+                )
 
     def _load_workspace_runtime_config(self, workspace_dir: Path) -> Dict[str, Any]:
         """Load workspace runtime config.yaml when available."""
@@ -857,69 +722,29 @@ class ConfigManager:
             ) from e
     
     def _load_vault(self, workspace: str) -> Dict[str, str]:
-        """
-        Load secrets vault for workspace.
-        
-        Args:
-            workspace: Workspace name
-            
-        Returns:
-            Dictionary of encrypted secrets
-        """
-        vault_file = self._get_workspace_vault_file(workspace)
-        
-        if not vault_file.exists():
-            return {}
-        
+        """Compatibility shim: load workspace secret refs from metadata."""
         try:
-            with open(vault_file, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                "vault_load_failed",
-                workspace=workspace,
-                vault_file=str(vault_file),
-                error=str(e)
-            )
+            return self._load_secret_refs(workspace)
+        except WorkspaceNotFoundError:
             return {}
     
     def _save_vault(self, workspace: str, vault: Dict[str, str]) -> None:
-        """
-        Save secrets vault for workspace atomically.
-        
-        Args:
-            workspace: Workspace name
-            vault: Dictionary of encrypted secrets
-            
-        Raises:
-            WorkspaceOperationError: If save fails
-        """
-        vault_file = self._get_workspace_vault_file(workspace)
-        temp_file = vault_file.with_suffix(".tmp")
-        
+        """Compatibility shim: persist workspace secret refs in metadata."""
         try:
-            with open(temp_file, "w") as f:
-                json.dump(vault, f, indent=2)
-            
-            temp_file.chmod(0o600)
-            temp_file.replace(vault_file)
-            
+            self._save_secret_refs(workspace, vault)
             logger.debug(
-                "vault_saved",
+                "secret_refs_saved",
                 workspace=workspace,
-                vault_file=str(vault_file),
-                secret_count=len(vault)
+                secret_count=len(vault),
             )
         except Exception as e:
-            if temp_file.exists():
-                temp_file.unlink()
             logger.error(
-                "vault_save_failed",
+                "secret_refs_save_failed",
                 workspace=workspace,
-                error=str(e)
+                error=str(e),
             )
             raise WorkspaceOperationError(
-                f"Failed to save secrets vault: {e}"
+                f"Failed to save secret refs: {e}"
             ) from e
 
     def _normalize_workspace_ownership(self, workspace_dir: Path) -> None:
@@ -983,23 +808,12 @@ class ConfigManager:
         # Parse dates
         created_at = datetime.fromisoformat(config_dict["created_at"])
         updated_at = datetime.fromisoformat(config_dict["updated_at"])
-        last_sync = None
-        if config_dict.get("last_sync"):
-            last_sync = datetime.fromisoformat(config_dict["last_sync"])
         
         return WorkspaceConfig(
             name=config_dict["name"],
             created_at=created_at,
             updated_at=updated_at,
             is_default=config_dict.get("is_default", False),
-            sync_enabled=config_dict.get("sync_enabled", False),
-            sync_url=config_dict.get("sync_url"),
-            sync_direction=SyncDirection(config_dict.get("sync_direction", "bidirectional")),
-            auto_sync_interval=config_dict.get("auto_sync_interval"),
-            last_sync=last_sync,
-            conflict_strategy=ConflictStrategy(
-                config_dict.get("conflict_strategy", "last_write_wins")
-            ),
             metadata=config_dict.get("metadata", {})
         )
     
@@ -1026,12 +840,6 @@ class ConfigManager:
             "created_at": config.created_at.isoformat(),
             "updated_at": config.updated_at.isoformat(),
             "is_default": config.is_default,
-            "sync_enabled": config.sync_enabled,
-            "sync_url": config.sync_url,
-            "sync_direction": config.sync_direction.value,
-            "auto_sync_interval": config.auto_sync_interval,
-            "last_sync": config.last_sync.isoformat() if config.last_sync else None,
-            "conflict_strategy": config.conflict_strategy.value,
             "metadata": config.metadata
         }
         
@@ -1062,15 +870,16 @@ class ConfigManager:
         if not self._get_workspace_dir(workspace).exists():
             raise WorkspaceNotFoundError(f"Workspace not found: {workspace}")
         
-        # Load vault
-        vault = self._load_vault(workspace)
-        
-        # Encrypt and store
-        encrypted_value = self._encrypt_value(value)
-        vault[key] = encrypted_value
-        
-        # Save vault
-        self._save_vault(workspace, vault)
+        secret_refs = self._load_vault(workspace)
+
+        try:
+            encrypted_value = encrypt_value(value)
+        except Exception as e:
+            logger.error("secret_encrypt_failed", workspace=workspace, key=key, error=str(e))
+            raise EncryptionError(f"Failed to store secret in vault: {e}") from e
+
+        secret_refs[key] = encrypted_value
+        self._save_vault(workspace, secret_refs)
         
         logger.info(
             "secret_stored",
@@ -1096,15 +905,17 @@ class ConfigManager:
         """
         self._validate_workspace_name(workspace)
         
-        # Load vault
-        vault = self._load_vault(workspace)
+        secret_refs = self._load_vault(workspace)
         
-        if key not in vault:
+        if key not in secret_refs:
             raise SecretNotFoundError(f"Secret not found: {key} in workspace {workspace}")
         
-        # Decrypt and return
-        encrypted_value = vault[key]
-        decrypted_value = self._decrypt_value(encrypted_value)
+        encrypted_value = secret_refs[key]
+        try:
+            decrypted_value = decrypt_value(encrypted_value)
+        except Exception as e:
+            logger.error("secret_decrypt_failed", workspace=workspace, key=key, error=str(e))
+            raise DecryptionError(f"Failed to resolve secret from vault: {e}") from e
         
         logger.debug(
             "secret_retrieved",
@@ -1194,12 +1005,6 @@ class ConfigManager:
                     created_at=now,
                     updated_at=now,
                     is_default=not has_default,
-                    sync_enabled=False,
-                    sync_url=None,
-                    sync_direction=SyncDirection.BIDIRECTIONAL,
-                    auto_sync_interval=None,
-                    last_sync=None,
-                    conflict_strategy=ConflictStrategy.LAST_WRITE_WINS,
                     metadata={"source": "workspace_discovery"},
                 )
                 self.set_workspace_config(name, cfg)
@@ -1307,15 +1112,6 @@ class ConfigManager:
                 created_at=now,
                 updated_at=now,
                 is_default=len(self.list_workspaces()) == 0,  # First workspace is default
-                sync_enabled=template_config.get("sync_enabled", False),
-                sync_url=None,
-                sync_direction=template_config.get("sync_direction", SyncDirection.BIDIRECTIONAL),
-                auto_sync_interval=template_config.get("auto_sync_interval"),
-                last_sync=None,
-                conflict_strategy=template_config.get(
-                    "conflict_strategy",
-                    ConflictStrategy.LAST_WRITE_WINS
-                ),
                 metadata=template_config.get("metadata", {})
             )
             
@@ -1329,7 +1125,6 @@ class ConfigManager:
                 except Exception:
                     pass
             
-            # Create empty vault
             self._save_vault(name, {})
 
             # Ensure root-created workspaces in container runtime remain accessible
@@ -1382,14 +1177,6 @@ class ConfigManager:
         Raises:
             WorkspaceNotFoundError: If workspace doesn't exist
             WorkspaceOperationError: If deletion fails
-
-            # Keep workspaces.json default in sync with deployment metadata.
-            try:
-                from caracal.flow.workspace import WorkspaceManager
-
-                WorkspaceManager.set_default_workspace(name)
-            except Exception:
-                logger.debug("workspace_registry_default_sync_skipped", workspace=name)
         """
         self._validate_workspace_name(name)
         
@@ -1506,9 +1293,17 @@ class ConfigManager:
                 staged_workspace_dir = stage_root / name
                 shutil.copytree(workspace_dir, staged_workspace_dir)
 
-                vault_file = staged_workspace_dir / "secrets.vault"
-                if not include_secrets and vault_file.exists():
-                    vault_file.unlink()
+                if not include_secrets:
+                    staged_config_file = staged_workspace_dir / "workspace.toml"
+                    if staged_config_file.exists():
+                        staged_config = toml.load(staged_config_file)
+                        staged_metadata = staged_config.get("metadata", {})
+                        if isinstance(staged_metadata, dict) and "secret_refs" in staged_metadata:
+                            staged_metadata = dict(staged_metadata)
+                            staged_metadata["secret_refs"] = {}
+                            staged_config["metadata"] = staged_metadata
+                            with open(staged_config_file, "w") as staged_out:
+                                toml.dump(staged_config, staged_out)
 
                 db_dump_path = staged_workspace_dir / "workspace_schema.dump"
                 db_dump_included = self._export_workspace_db_dump(
@@ -1527,7 +1322,7 @@ class ConfigManager:
                     },
                     "includes": {
                         "workspace_files": True,
-                        "secrets": include_secrets and self._get_workspace_vault_file(name).exists(),
+                        "secrets": include_secrets and bool(self._load_vault(name)),
                         "database_dump": db_dump_included,
                     },
                 }

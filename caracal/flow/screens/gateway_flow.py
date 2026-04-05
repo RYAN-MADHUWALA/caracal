@@ -35,7 +35,6 @@ from rich.text import Text
 from caracal.core.gateway_features import (
     GatewayFeatureFlags,
     get_gateway_features,
-    load_gateway_features,
     reset_gateway_features,
     DEPLOYMENT_MANAGED,
     DEPLOYMENT_ON_PREM,
@@ -64,46 +63,16 @@ class GatewayFlow:
     def __init__(self, console: Optional[Console] = None) -> None:
         self.console = console or Console()
         self._flags: Optional[GatewayFeatureFlags] = None
-        self._auto_sync_attempted = False
 
     # ── Menu loop ─────────────────────────────────────────────────────────────
 
     def run(self) -> None:
         while True:
-            self._auto_sync_gateway_if_needed()
             self._flags = get_gateway_features(reload=True)
             action = self._show_menu()
             if action in (None, "back"):
                 break
             self._dispatch(action)
-
-    def _auto_sync_gateway_if_needed(self) -> None:
-        """Best-effort auto-sync when enterprise license is connected."""
-        if self._auto_sync_attempted:
-            return
-
-        self._auto_sync_attempted = True
-
-        cfg = load_enterprise_config()
-        if not cfg.get("valid"):
-            return
-        if not (cfg.get("sync_api_key") or cfg.get("license_key")):
-            return
-
-        # If gateway is already configured, skip network calls.
-        gw = cfg.get("gateway")
-        if isinstance(gw, dict) and gw.get("enabled") and gw.get("endpoint") and gw.get("api_key"):
-            return
-
-        try:
-            from caracal.enterprise.sync import EnterpriseSyncClient
-
-            result = EnterpriseSyncClient().pull_gateway_config()
-            if result.get("success") and result.get("gateway_configured"):
-                reset_gateway_features()
-        except Exception:
-            # Keep Gateway menu responsive even when Enterprise API is unavailable.
-            logger.debug("Gateway auto-sync attempt failed", exc_info=True)
 
     def _show_menu(self) -> Optional[str]:
         self.console.clear()
@@ -119,7 +88,7 @@ class GatewayFlow:
             MenuItem(
                 key="connect",
                 label="Sync Gateway Configuration",
-                description="Pull gateway config from Enterprise dashboard (auto-configures endpoint and keys)",
+                description="Pull gateway config from Enterprise dashboard and persist endpoint and keys",
                 icon="",
             ),
         ]
@@ -279,10 +248,10 @@ class GatewayFlow:
 
         self.console.print(Panel(
             "[bold]Connect Enterprise Gateway[/bold]\n\n"
-            "The gateway configuration is automatically synced from your\n"
-            "Enterprise dashboard.  No manual endpoint or key entry is needed.\n\n"
+            "This action explicitly syncs gateway configuration from your\n"
+            "Enterprise dashboard. No manual endpoint or key entry is needed.\n\n"
             "[bold]Managed (Caracal platform)[/bold] — gateway is hosted and operated by Caracal;\n"
-            "endpoint and key are auto-provisioned when your workspace is created.\n\n"
+            "endpoint and key are provisioned centrally for your workspace.\n\n"
             "[bold]On-Prem (customer)[/bold] — gateway runs in your infrastructure but\n"
             "configuration is still managed centrally via the Enterprise dashboard.",
             border_style=Colors.PRIMARY,
@@ -625,7 +594,6 @@ class GatewayFlow:
         save_enterprise_config(cfg)
         reset_gateway_features()
         self._flags = get_gateway_features(reload=True)
-        self._auto_sync_attempted = False
 
         self.console.print(
             f"\n[{Colors.SUCCESS}]✓ Local gateway cache cleared.[/]"

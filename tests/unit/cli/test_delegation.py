@@ -40,7 +40,7 @@ class TestDelegationGenerateCommand:
         result = self.runner.invoke(generate, [
             '--source-id', self.source_id,
             '--target-id', self.target_id,
-            '--authority-scope', '100.0'
+            '--source-mandate-id', str(uuid4())
         ], obj={'config': Mock()})
         
         # Assert
@@ -66,7 +66,6 @@ class TestDelegationGenerateCommand:
         result = self.runner.invoke(generate, [
             '--source-id', self.source_id,
             '--target-id', self.target_id,
-            '--authority-scope', '50.0',
             '--operations', 'api_call',
             '--operations', 'mcp_tool'
         ], obj={'config': Mock()})
@@ -92,7 +91,6 @@ class TestDelegationGenerateCommand:
         result = self.runner.invoke(generate, [
             '--source-id', self.source_id,
             '--target-id', self.target_id,
-            '--authority-scope', '75.0',
             '--context-tags', 'production',
             '--context-tags', 'read-only'
         ], obj={'config': Mock()})
@@ -108,7 +106,7 @@ class TestDelegationGenerateCommand:
         from caracal.exceptions import PrincipalNotFoundError
         
         mock_registry = Mock()
-        mock_registry.assert_exists.side_effect = PrincipalNotFoundError('Principal not found')
+        mock_registry.assert_exists = Mock(side_effect=PrincipalNotFoundError('Principal not found'))
         
         mock_manager = Mock()
         mock_get_manager.return_value = (mock_registry, mock_manager)
@@ -117,12 +115,32 @@ class TestDelegationGenerateCommand:
         result = self.runner.invoke(generate, [
             '--source-id', self.source_id,
             '--target-id', self.target_id,
-            '--authority-scope', '100.0'
+            '--source-mandate-id', 'invalid-uuid'
         ], obj={'config': Mock()})
         
         # Assert
         assert result.exit_code != 0
         assert 'Error' in result.output
+
+    @patch('caracal.cli.delegation._get_delegation_manager')
+    def test_generate_token_invalid_source_mandate_uuid(self, mock_get_manager):
+        """Test source mandate lineage validation in generate command."""
+        mock_registry = Mock()
+        mock_registry.assert_exists = Mock(return_value=None)
+        mock_registry.ensure_signing_keys = Mock(return_value=None)
+
+        mock_manager = Mock()
+        mock_manager.generate_token.return_value = 'test-token-jwt'
+        mock_get_manager.return_value = (mock_registry, mock_manager)
+
+        result = self.runner.invoke(generate, [
+            '--source-id', self.source_id,
+            '--target-id', self.target_id,
+            '--source-mandate-id', 'not-a-uuid',
+        ], obj={'config': Mock()})
+
+        assert result.exit_code != 0
+        assert 'Invalid source mandate ID format' in result.output
 
 
 @pytest.mark.unit
@@ -233,7 +251,8 @@ class TestDelegationValidateCommand:
         mock_claims.issued_at = datetime.utcnow()
         mock_claims.expiration = datetime.utcnow()
         mock_claims.allowed_operations = ['api_call', 'mcp_tool']
-        mock_claims.max_delegation_depth = 3
+        mock_claims.delegation_type = 'directed'
+        mock_claims.authority_sources = [str(uuid4())]
         
         mock_registry = Mock()
         mock_manager = Mock()

@@ -25,6 +25,7 @@ from caracal.deployment.config_manager import ConfigManager
 from caracal.deployment.exceptions import (
     CircuitBreakerOpenError,
     ProviderAuthenticationError,
+    ProviderAuthorizationError,
     ProviderConfigurationError,
     ProviderConnectionError,
     ProviderNotFoundError,
@@ -316,16 +317,6 @@ class ProviderHealthCheck:
     latency_ms: float
     error: Optional[str] = None
     timestamp: datetime = field(default_factory=datetime.now)
-
-    @property
-    def is_healthy(self) -> bool:
-        """Compatibility alias used by CLI code paths."""
-        return self.healthy
-
-    @property
-    def error_message(self) -> Optional[str]:
-        """Compatibility alias used by CLI code paths."""
-        return self.error
 
 
 @dataclass
@@ -678,6 +669,7 @@ class Broker:
             ProviderConnectionError: If all retries fail
             ProviderTimeoutError: If request times out
             ProviderAuthenticationError: If authentication fails
+            ProviderAuthorizationError: If provider denies an authorized request
         """
         self._metrics[provider]["total_requests"] += 1
         
@@ -733,9 +725,14 @@ class Broker:
                 latency_ms = (time.time() - start_time) * 1000
                 
                 # Handle response
-                if response.status_code == 401 or response.status_code == 403:
+                if response.status_code == 401:
                     raise ProviderAuthenticationError(
                         f"Authentication failed for provider {provider}: {response.status_code}"
+                    )
+
+                if response.status_code == 403:
+                    raise ProviderAuthorizationError(
+                        f"Authorization denied for provider {provider}: {response.status_code}"
                     )
                 
                 if response.status_code >= 500:
@@ -796,8 +793,8 @@ class Broker:
                         f"Provider connection failed after {config.max_retries} attempts: {e}"
                     ) from e
             
-            except ProviderAuthenticationError:
-                # Don't retry authentication errors
+            except (ProviderAuthenticationError, ProviderAuthorizationError):
+                # Don't retry authn/authz denials.
                 self._metrics[provider]["failed_requests"] += 1
                 raise
             

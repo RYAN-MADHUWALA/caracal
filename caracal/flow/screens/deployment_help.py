@@ -93,21 +93,18 @@ def _show_command_reference(console: Console) -> None:
     console.print(workspace_table)
     console.print()
     
-    # Sync commands
-    console.print(f"  [{Colors.INFO}]Sync Management:[/]")
+    # Enterprise runtime commands
+    console.print(f"  [{Colors.INFO}]Enterprise Runtime:[/]")
     console.print()
     
     sync_table = Table(show_header=True, header_style=f"bold {Colors.INFO}", box=None)
     sync_table.add_column("TUI Operation", style=Colors.PRIMARY)
     sync_table.add_column("CLI Equivalent", style=Colors.DIM)
     
-    sync_table.add_row("View Sync Status", "caracal sync status")
-    sync_table.add_row("Connect Sync", "caracal sync connect <url> <token>")
-    sync_table.add_row("Disconnect Sync", "caracal sync disconnect")
-    sync_table.add_row("Sync Now", "caracal sync now")
-    sync_table.add_row("View Conflicts", "caracal sync conflicts")
-    sync_table.add_row("Enable Auto-Sync", "caracal sync auto-enable --interval=<seconds>")
-    sync_table.add_row("Disable Auto-Sync", "caracal sync auto-disable")
+    sync_table.add_row("View Enterprise Status", "caracal enterprise status")
+    sync_table.add_row("Connect Enterprise", "caracal enterprise login <url> <token>")
+    sync_table.add_row("Disconnect Enterprise", "caracal enterprise disconnect")
+    sync_table.add_row("Sync Enterprise Runtime", "caracal enterprise sync")
     
     console.print(sync_table)
     console.print()
@@ -227,13 +224,13 @@ caracal provider add my-provider \
 Gateway-based access with centralized management:
 
 ```bash
-caracal sync connect <gateway-url> <token>
+caracal enterprise login <gateway-url> <token>
 ```
 
 Return to Open Source mode:
 
 ```bash
-caracal sync disconnect
+caracal enterprise disconnect
 ```
 
 ## 6. Verify Setup
@@ -247,7 +244,7 @@ caracal doctor
 ## Next Steps
 
 - Configure additional providers
-- Set up sync for enterprise deployments
+- Configure enterprise runtime connectivity
 - Explore the TUI with `caracal flow`
 - Read the full documentation at https://docs.garudexlabs.com
 """
@@ -271,7 +268,7 @@ def _show_troubleshooting(console: Console) -> None:
     issues = [
         {
             "issue": "Sync fails with connection error",
-            "solution": "Check network connectivity and verify gateway URL. Run: caracal sync status"
+            "solution": "Check network connectivity and verify gateway URL. Run: caracal enterprise status"
         },
         {
             "issue": "Provider test fails",
@@ -290,8 +287,8 @@ def _show_troubleshooting(console: Console) -> None:
             "solution": "Check directory permissions: chmod 700 ~/.caracal"
         },
         {
-            "issue": "Sync conflicts not resolving",
-            "solution": "View conflicts: caracal sync conflicts. Manually resolve if needed."
+            "issue": "Enterprise sync operation fails",
+            "solution": "Reconnect and retry: caracal enterprise disconnect, then caracal enterprise login <url> <token>."
         },
         {
             "issue": "Mode changes not taking effect",
@@ -349,29 +346,29 @@ def _show_architecture(console: Console) -> None:
 
 ### Open Source Edition
 - Direct provider API access
-- Local API key storage (encrypted)
+- Vault-backed secret references
 - Broker architecture
 - Self-hosted deployment
 
 ### Enterprise Edition
 - Gateway-based provider access
-- Centralized API key management
-- Workspace synchronization
+- Centralized secret and policy management
+- Enterprise runtime connectivity via /api/sync
 - Multi-user support
 
 ## Components
 
 ### Configuration Manager
 - System-level configuration (~/.caracal/)
-- Encrypted credential storage
+- Workspace configuration and vault reference wiring
 - Workspace management
 - PostgreSQL connection management
 
-### Sync Engine
-- Bidirectional synchronization
-- Conflict resolution (Operational Transform)
-- Offline operation queuing
-- Network resilience
+### Enterprise Runtime Client
+- On-demand enterprise sync execution
+- Runtime status and connectivity checks
+- Explicit connect/disconnect lifecycle
+- Gateway token and webhook coordination
 
 ### Broker (Open Source)
 - Direct provider communication
@@ -388,16 +385,17 @@ def _show_architecture(console: Console) -> None:
 ## Data Storage
 
 All persistent data stored in PostgreSQL:
-- Sync state and operation queues
+- Authority, lifecycle, and revocation state
 - Audit logs (append-only)
+- Runtime persistence metadata
 - Metrics and analytics
-- Conflict history
 
 ## Security
 
-- Age encryption for secrets
-- System keyring integration
-- PBKDF2 key derivation fallback
+- Vault-backed secret custody
+- No file-backed secret storage in hard-cut mode
+- Asymmetric session token signing
+- Fail-closed hard-cut preflight checks
 - File permissions (0700/0600)
 - PostgreSQL SSL support
 """

@@ -1,57 +1,38 @@
 """
-Copyright (C) 2026 Garudex Labs.  All Rights Reserved.
-Caracal, a product of Garudex Labs
+Caracal vault client backed by Infisical-compatible HTTP APIs.
 
-CaracalVault — production-ready built-in secret store for Starter tier.
-
-Architecture:
-  - AES-256-GCM authenticated encryption.
-  - Envelope encryption: each secret encrypted with a unique data key (DEK).
-  - DEKs are encrypted under a master key (MEK) stored KMS-wrapped in the DB.
-  - Per-environment key isolation via env_id prefix on all DB keys.
-  - In-memory LRU cache for plaintext DEKs (bounded, TTL-aware, never logged).
-  - Gateway-only access: raises GatewayContextRequired if caller is not gateway.
-  - Rate limiting: token-bucket per org_id (configurable).
-  - Append-only audit events for every CRUD operation.
-  - Manual key rotation: re-encrypts all DEKs under a new MEK version.
-
-Ref format for secrets stored in CaracalVault:
-  caracal:{env_id}/{secret_name}
+Hard-cut requirements:
+- secret storage and retrieval are delegated to vault APIs only
+- no in-process secret storage backends
+- local mode is forbidden when hardcut mode is enabled
 """
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
-from uuid import UUID, uuid4
+from typing import Any, Optional, Tuple
+from uuid import uuid4
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
+import httpx
 
 from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# ── Constants ──────────────────────────────────────────────────────────────
-
-_AES_KEY_BYTES = 32          # AES-256
-_GCM_NONCE_BYTES = 12        # 96-bit GCM nonce
-_CACHE_MAX_ENTRIES = 512
-_CACHE_TTL_SECONDS = 300     # 5 minutes
-_RATE_LIMIT_WINDOW = 60.0    # seconds
-_RATE_LIMIT_DEFAULT = 120    # requests per window
+_RATE_LIMIT_WINDOW = 60.0
+_RATE_LIMIT_DEFAULT = 120
+_HEALTH_CACHE_TTL_SECONDS = 15.0
+_LOCAL_MODE_VALUES = {"local", "dev", "development"}
+_MANAGED_MODE_VALUES = {"managed", "enterprise", "cloud"}
+_RETRYABLE_STATUS_CODES = {429, 503}
 
 
 def _read_env_or_dotenv(name: str) -> Optional[str]:
-    """Resolve environment values from process env, then common local .env files."""
     value = os.environ.get(name)
     if value:
         return value
@@ -65,7 +46,6 @@ def _read_env_or_dotenv(name: str) -> Optional[str]:
     except Exception:
         pass
 
-    # Typical local mono-repo layouts used during development.
     repo_root = Path(__file__).resolve().parents[3]
     candidates.extend(
         [
@@ -75,7 +55,6 @@ def _read_env_or_dotenv(name: str) -> Optional[str]:
         ]
     )
 
-    # Allow running from nested folders by checking parent directories.
     cwd_resolved = Path.cwd().resolve()
     for parent in [cwd_resolved] + list(cwd_resolved.parents):
         candidates.append(parent / ".env")
@@ -98,17 +77,14 @@ def _read_env_or_dotenv(name: str) -> Optional[str]:
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#") or "=" not in stripped:
                     continue
-
                 key, raw_value = stripped.split("=", 1)
                 if key.strip() != name:
                     continue
-
                 parsed = raw_value.strip()
                 if parsed and parsed[0] in ('"', "'") and parsed[-1:] == parsed[0]:
                     parsed = parsed[1:-1]
                 elif " #" in parsed:
                     parsed = parsed.split(" #", 1)[0].strip()
-
                 if parsed:
                     return parsed
         except Exception:
@@ -117,10 +93,8 @@ def _read_env_or_dotenv(name: str) -> Optional[str]:
     return None
 
 
-# ── Exceptions ─────────────────────────────────────────────────────────────
-
 class VaultError(Exception):
-    """Base class for all vault errors."""
+    """Base class for vault errors."""
 
 
 class GatewayContextRequired(VaultError):
@@ -135,28 +109,24 @@ class VaultRateLimitExceeded(VaultError):
     """Raised when org rate limit is exceeded."""
 
 
-class MasterKeyError(VaultError):
-    """Raised when the master key cannot be derived or decrypted."""
+class VaultConfigurationError(VaultError):
+    """Raised when vault configuration is incomplete or invalid."""
 
 
-# ── Data types ─────────────────────────────────────────────────────────────
+class VaultUnavailableError(VaultError):
+    """Raised when vault service is unavailable after bounded retries."""
+
 
 @dataclass
 class VaultEntry:
-    """Persistent envelope for a single encrypted secret."""
     entry_id: str
     org_id: str
     env_id: str
     secret_name: str
-    # AES-256-GCM ciphertext of secret value (base64)
     ciphertext_b64: str
-    # GCM nonce used for ciphertext (base64)
     iv_b64: str
-    # AES-256-GCM ciphertext of the DEK, encrypted under the MEK (base64)
     encrypted_dek_b64: str
-    # GCM nonce used for DEK encryption (base64)
     dek_iv_b64: str
-    # Version of the master key used for DEK wrapping
     key_version: int
     created_at: str
     updated_at: str
@@ -164,14 +134,13 @@ class VaultEntry:
 
 @dataclass
 class VaultAuditEvent:
-    """Append-only audit record for a vault operation."""
     event_id: str
     org_id: str
     env_id: str
     secret_name: str
-    operation: str          # "create" | "read" | "update" | "delete" | "rotate"
+    operation: str
     key_version: int
-    actor: str              # "gateway" | "admin"
+    actor: str
     timestamp: str
     success: bool
     error_code: Optional[str] = None
@@ -185,53 +154,100 @@ class RotationResult:
     duration_seconds: float
 
 
-# ── Internal LRU Cache ────────────────────────────────────────────────────
-
 @dataclass
-class _CacheEntry:
-    dek: bytes
-    expires_at: float
+class _VaultConfig:
+    base_url: str
+    token: str
+    mode: str
+    default_project: str
+    default_environment: str
+    default_secret_path: str
+    hardcut_enabled: bool
+    request_timeout_seconds: float
+    retry_max_attempts: int
+    retry_backoff_seconds: float
 
 
-class _DEKCache:
-    """
-    Bounded in-memory cache for decrypted DEKs.
-    Key: (org_id, env_id, entry_id, key_version).
-    Never persisted; evicted after TTL or when capacity is exceeded.
-    """
-
-    def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES, ttl: float = _CACHE_TTL_SECONDS):
-        self._max = max_entries
-        self._ttl = ttl
-        self._store: Dict[Tuple, _CacheEntry] = {}
-        self._lock = threading.Lock()
-
-    def get(self, key: Tuple) -> Optional[bytes]:
-        with self._lock:
-            entry = self._store.get(key)
-            if entry is None:
-                return None
-            if time.monotonic() > entry.expires_at:
-                del self._store[key]
-                return None
-            return entry.dek
-
-    def put(self, key: Tuple, dek: bytes) -> None:
-        with self._lock:
-            if len(self._store) >= self._max:
-                # Evict earliest-expiring entry
-                oldest = min(self._store, key=lambda k: self._store[k].expires_at)
-                del self._store[oldest]
-            self._store[key] = _CacheEntry(dek=dek, expires_at=time.monotonic() + self._ttl)
-
-    def invalidate_prefix(self, org_id: str, env_id: str) -> None:
-        with self._lock:
-            to_remove = [k for k in self._store if k[0] == org_id and k[1] == env_id]
-            for k in to_remove:
-                del self._store[k]
+def _truthy(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-# ── Rate Limiter (token bucket, in-memory) ────────────────────────────────
+def _load_vault_config() -> _VaultConfig:
+    base_url = (_read_env_or_dotenv("CARACAL_VAULT_URL") or "").strip()
+    token = (_read_env_or_dotenv("CARACAL_VAULT_TOKEN") or "").strip()
+    mode = (_read_env_or_dotenv("CARACAL_VAULT_MODE") or "managed").strip().lower()
+
+    default_project = (
+        _read_env_or_dotenv("CARACAL_VAULT_PROJECT_ID")
+        or _read_env_or_dotenv("CARACAL_VAULT_PROJECT_SLUG")
+        or ""
+    ).strip()
+    default_environment = (
+        _read_env_or_dotenv("CARACAL_VAULT_ENVIRONMENT")
+        or _read_env_or_dotenv("CARACAL_VAULT_ENV")
+        or "dev"
+    ).strip()
+    default_secret_path = (_read_env_or_dotenv("CARACAL_VAULT_SECRET_PATH") or "/").strip() or "/"
+
+    hardcut_enabled = _truthy(_read_env_or_dotenv("CARACAL_HARDCUT_MODE"))
+    retry_attempts_raw = (_read_env_or_dotenv("CARACAL_VAULT_RETRY_MAX_ATTEMPTS") or "3").strip()
+    retry_backoff_raw = (_read_env_or_dotenv("CARACAL_VAULT_RETRY_BACKOFF_SECONDS") or "0.2").strip()
+
+    try:
+        retry_max_attempts = max(1, int(retry_attempts_raw))
+    except ValueError:
+        raise VaultConfigurationError(
+            "CARACAL_VAULT_RETRY_MAX_ATTEMPTS must be a positive integer."
+        )
+
+    try:
+        retry_backoff_seconds = max(0.0, float(retry_backoff_raw))
+    except ValueError:
+        raise VaultConfigurationError(
+            "CARACAL_VAULT_RETRY_BACKOFF_SECONDS must be a non-negative number."
+        )
+
+    is_local_mode = mode in _LOCAL_MODE_VALUES
+    is_managed_mode = mode in _MANAGED_MODE_VALUES
+    if not is_local_mode and not is_managed_mode:
+        raise VaultConfigurationError(
+            "CARACAL_VAULT_MODE must be one of: managed, local, dev, development."
+        )
+
+    if hardcut_enabled and is_local_mode:
+        raise VaultConfigurationError(
+            "CARACAL_VAULT_MODE local/dev is forbidden when CARACAL_HARDCUT_MODE is enabled."
+        )
+
+    if is_local_mode:
+        if not base_url:
+            base_url = "http://127.0.0.1:8080"
+        if not token:
+            token = "dev-local-token"
+        logger.warning(
+            "Vault local mode is enabled; this is development-only. "
+            "Using local vault endpoint %s.",
+            base_url,
+        )
+    else:
+        if not base_url:
+            raise VaultConfigurationError("CARACAL_VAULT_URL is required for vault operations.")
+        if not token:
+            raise VaultConfigurationError("CARACAL_VAULT_TOKEN is required for vault operations.")
+
+    return _VaultConfig(
+        base_url=base_url.rstrip("/"),
+        token=token,
+        mode=mode,
+        default_project=default_project,
+        default_environment=default_environment,
+        default_secret_path=default_secret_path,
+        hardcut_enabled=hardcut_enabled,
+        request_timeout_seconds=10.0,
+        retry_max_attempts=retry_max_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
+    )
+
 
 @dataclass
 class _RateBucket:
@@ -243,7 +259,7 @@ class _VaultRateLimiter:
     def __init__(self, limit: int = _RATE_LIMIT_DEFAULT, window: float = _RATE_LIMIT_WINDOW):
         self._limit = limit
         self._window = window
-        self._buckets: Dict[str, _RateBucket] = {}
+        self._buckets: dict[str, _RateBucket] = {}
         self._lock = threading.Lock()
 
     def check(self, org_id: str) -> None:
@@ -264,45 +280,6 @@ class _VaultRateLimiter:
             bucket.tokens -= 1
 
 
-# ── Master Key Provider ───────────────────────────────────────────────────
-
-class MasterKeyProvider:
-    """
-    Derives or unwraps the MEK for a given org.
-
-    In production: the KMS-wrapped MEK ciphertext is stored in the DB
-    (vault_master_keys table) and unwrapped via AWS KMS or a local KMS
-    derived from CARACAL_VAULT_MEK_SECRET env var.
-
-    For Starter tier (no AWS KMS), falls back to HKDF derivation from
-    CARACAL_VAULT_MEK_SECRET.  This env var MUST be set to a
-    cryptographically strong random value and treated as a root secret.
-    """
-
-    _ENV_MEK_SECRET = "CARACAL_VAULT_MEK_SECRET"
-
-    def __init__(self) -> None:
-        raw = _read_env_or_dotenv(self._ENV_MEK_SECRET)
-        if not raw:
-            raise MasterKeyError(
-                f"{self._ENV_MEK_SECRET} is not set.  "
-                "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
-            )
-        self._root = raw.encode()
-
-    def derive(self, org_id: str, env_id: str, key_version: int) -> bytes:
-        """Derive a 256-bit MEK for (org, env, version) using HKDF-SHA256."""
-        info = f"caracal-vault:{org_id}:{env_id}:v{key_version}".encode()
-        return HKDF(
-            algorithm=hashes.SHA256(),
-            length=_AES_KEY_BYTES,
-            salt=None,
-            info=info,
-        ).derive(self._root)
-
-
-# ── CaracalVault ──────────────────────────────────────────────────────────
-
 _GATEWAY_CONTEXT_FLAG = threading.local()
 
 
@@ -314,9 +291,7 @@ def _assert_gateway_context() -> None:
         )
 
 
-class gateway_context:  # noqa: N801 — context manager, lowercase intentional
-    """Context manager that marks the current thread as a gateway context."""
-
+class gateway_context:  # noqa: N801
     def __enter__(self) -> "gateway_context":
         _GATEWAY_CONTEXT_FLAG.active = True
         return self
@@ -326,174 +301,447 @@ class gateway_context:  # noqa: N801 — context manager, lowercase intentional
 
 
 class CaracalVault:
-    """
-    Built-in secret store for Starter tier.
-
-    Public interface:
-      put(org_id, env_id, name, plaintext, actor) → VaultEntry
-      get(org_id, env_id, name, actor) → str
-      delete(org_id, env_id, name, actor) → None
-      rotate_master_key(org_id, env_id, actor) → RotationResult
-      list_secrets(org_id, env_id, actor) → list[str]
-      drain_audit_events() → list[VaultAuditEvent]
-
-    All mutating operations require gateway_context().
-    """
+    """Vault client facade used by runtime, CLI, and SDK flows."""
 
     def __init__(
         self,
-        storage: Optional["_VaultStorage"] = None,
-        key_provider: Optional[MasterKeyProvider] = None,
+        client: Optional[httpx.Client] = None,
         rate_limit: int = _RATE_LIMIT_DEFAULT,
     ) -> None:
-        self._storage = storage or _InMemoryVaultStorage()
-        self._keys = key_provider or MasterKeyProvider()
-        self._cache = _DEKCache()
+        self._config = _load_vault_config()
+        self._client = client or httpx.Client(
+            base_url=self._config.base_url,
+            timeout=httpx.Timeout(self._config.request_timeout_seconds),
+            headers={
+                "Authorization": f"Bearer {self._config.token}",
+                "Content-Type": "application/json",
+            },
+        )
         self._rl = _VaultRateLimiter(limit=rate_limit)
         self._audit: list[VaultAuditEvent] = []
         self._audit_lock = threading.Lock()
+        self._last_health_check_at = 0.0
+        self._health_ok = False
 
-    # ── Public API ─────────────────────────────────────────────────────
+    def _resolve_context(self, org_id: str, env_id: str) -> tuple[str, str, str]:
+        project_id = (org_id or self._config.default_project).strip()
+        environment = (env_id or self._config.default_environment).strip()
+        secret_path = self._config.default_secret_path
+        if not project_id:
+            raise VaultConfigurationError(
+                "Vault project context is missing. Provide org_id or CARACAL_VAULT_PROJECT_ID."
+            )
+        if not environment:
+            raise VaultConfigurationError("Vault environment context is missing.")
+        return project_id, environment, secret_path
 
-    def put(self, org_id: str, env_id: str, name: str, plaintext: str, actor: str = "gateway") -> VaultEntry:
-        _assert_gateway_context()
-        self._rl.check(org_id)
-        try:
-            entry = self._encrypt_and_store(org_id, env_id, name, plaintext)
-            op = "update" if self._storage.exists(org_id, env_id, name) else "create"
-            self._audit_event(org_id, env_id, name, op, entry.key_version, actor, True)
-            return entry
-        except VaultError:
-            raise
-        except Exception as exc:
-            self._audit_event(org_id, env_id, name, "create", 0, actor, False, type(exc).__name__)
-            raise VaultError(f"Failed to store secret '{name}': {exc}") from exc
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        payload: Optional[dict[str, Any]] = None,
+        allowed_statuses: set[int],
+    ) -> httpx.Response:
+        attempts = self._config.retry_max_attempts
+        backoff = self._config.retry_backoff_seconds
+        last_http_exc: Optional[Exception] = None
 
-    def get(self, org_id: str, env_id: str, name: str, actor: str = "gateway") -> str:
-        _assert_gateway_context()
-        self._rl.check(org_id)
-        try:
-            entry = self._storage.load(org_id, env_id, name)
-            plaintext = self._decrypt_entry(entry)
-            self._audit_event(org_id, env_id, name, "read", entry.key_version, actor, True)
-            return plaintext
-        except SecretNotFound:
-            self._audit_event(org_id, env_id, name, "read", 0, actor, False, "SecretNotFound")
-            raise
-        except Exception as exc:
-            self._audit_event(org_id, env_id, name, "read", 0, actor, False, type(exc).__name__)
-            raise VaultError(f"Failed to retrieve secret '{name}': {exc}") from exc
-
-    def delete(self, org_id: str, env_id: str, name: str, actor: str = "gateway") -> None:
-        _assert_gateway_context()
-        self._rl.check(org_id)
-        entry = self._storage.load(org_id, env_id, name)
-        self._storage.remove(org_id, env_id, name)
-        self._cache.invalidate_prefix(org_id, env_id)
-        self._audit_event(org_id, env_id, name, "delete", entry.key_version, actor, True)
-
-    def list_secrets(self, org_id: str, env_id: str, actor: str = "gateway") -> list[str]:
-        _assert_gateway_context()
-        self._rl.check(org_id)
-        return self._storage.list_names(org_id, env_id)
-
-    def rotate_master_key(self, org_id: str, env_id: str, actor: str = "admin") -> RotationResult:
-        """
-        Re-encrypts all DEKs under a new MEK version.
-
-        Zero-downtime pattern:
-          1. Determine new version = current_max + 1.
-          2. For each entry: decrypt DEK with old MEK → re-wrap with new MEK.
-          3. Atomically replace stored entry.
-          4. Invalidate DEK cache.
-        """
-        _assert_gateway_context()
-        t0 = time.monotonic()
-        names = self._storage.list_names(org_id, env_id)
-        new_version = self._storage.current_key_version(org_id, env_id) + 1
-        rotated = 0
-        failed = 0
-        for name in names:
+        for attempt in range(1, attempts + 1):
             try:
-                entry = self._storage.load(org_id, env_id, name)
-                plaintext = self._decrypt_entry(entry)
-                new_entry = self._encrypt_and_store(org_id, env_id, name, plaintext, key_version=new_version)
-                self._audit_event(org_id, env_id, name, "rotate", new_version, actor, True)
-                rotated += 1
-            except Exception as exc:
-                logger.error("Vault rotation failed for %s/%s/%s: %s", org_id, env_id, name, exc)
-                self._audit_event(org_id, env_id, name, "rotate", new_version, actor, False, type(exc).__name__)
-                failed += 1
-        self._cache.invalidate_prefix(org_id, env_id)
-        return RotationResult(
-            secrets_rotated=rotated,
-            secrets_failed=failed,
-            new_key_version=new_version,
-            duration_seconds=round(time.monotonic() - t0, 3),
+                response = self._client.request(method=method, url=path, params=params, json=payload)
+            except httpx.HTTPError as exc:
+                last_http_exc = exc
+                if attempt >= attempts:
+                    raise VaultUnavailableError(
+                        f"Vault API request failed after {attempts} attempts: {method} {path} ({exc})"
+                    ) from exc
+                if backoff > 0:
+                    time.sleep(backoff * attempt)
+                continue
+
+            if response.status_code in allowed_statuses:
+                return response
+
+            detail = response.text.strip()
+            if len(detail) > 400:
+                detail = detail[:400] + "..."
+
+            if response.status_code in _RETRYABLE_STATUS_CODES:
+                if attempt >= attempts:
+                    raise VaultUnavailableError(
+                        f"Vault API unavailable after {attempts} attempts: {method} {path} -> "
+                        f"{response.status_code} {detail}"
+                    )
+                if backoff > 0:
+                    time.sleep(backoff * attempt)
+                continue
+
+            raise VaultError(
+                f"Vault API request failed: {method} {path} -> "
+                f"{response.status_code} {detail}"
+            )
+
+        # Defensive fallback; loop always returns or raises.
+        if last_http_exc is not None:
+            raise VaultUnavailableError(
+                f"Vault API request failed: {method} {path} ({last_http_exc})"
+            )
+        raise VaultUnavailableError(f"Vault API request failed: {method} {path}")
+
+    @staticmethod
+    def _json(response: httpx.Response) -> dict[str, Any]:
+        if not response.content:
+            return {}
+        try:
+            decoded = response.json()
+        except ValueError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
+    def _ensure_service_health(self) -> None:
+        now = time.monotonic()
+        if self._health_ok and (now - self._last_health_check_at) < _HEALTH_CACHE_TTL_SECONDS:
+            return
+
+        self._last_health_check_at = now
+        for endpoint in ("/health", "/api/status"):
+            try:
+                response = self._request("GET", endpoint, allowed_statuses={200, 404})
+                if response.status_code == 200:
+                    self._health_ok = True
+                    return
+            except VaultError:
+                continue
+
+        self._health_ok = False
+        if self._config.hardcut_enabled:
+            raise VaultError("Vault service is unreachable; hardcut mode requires healthy vault backend.")
+
+    @staticmethod
+    def _extract_secret_value(payload: dict[str, Any]) -> Optional[str]:
+        candidates = [
+            ("secret", "secretValue"),
+            ("secret", "secret_value"),
+            ("secretValue",),
+            ("secret_value",),
+            ("data", "secret", "secretValue"),
+            ("data", "secretValue"),
+        ]
+        for path in candidates:
+            cursor: Any = payload
+            found = True
+            for key in path:
+                if isinstance(cursor, dict) and key in cursor:
+                    cursor = cursor[key]
+                else:
+                    found = False
+                    break
+            if found and isinstance(cursor, str):
+                return cursor
+        return None
+
+    @staticmethod
+    def _extract_secret_names(payload: dict[str, Any]) -> list[str]:
+        names: list[str] = []
+
+        def _append_from(item: Any) -> None:
+            if not isinstance(item, dict):
+                return
+            for key in ("secretKey", "secret_key", "name", "key"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    names.append(value.strip())
+                    return
+
+        for key in ("secrets", "data", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    _append_from(item)
+
+        if isinstance(payload.get("secret"), dict):
+            _append_from(payload["secret"])
+
+        return sorted(set(names))
+
+    @staticmethod
+    def _extract_string_value(payload: dict[str, Any], *paths: tuple[str, ...]) -> Optional[str]:
+        for path in paths:
+            cursor: Any = payload
+            found = True
+            for key in path:
+                if isinstance(cursor, dict) and key in cursor:
+                    cursor = cursor[key]
+                else:
+                    found = False
+                    break
+            if found and isinstance(cursor, str) and cursor.strip():
+                return cursor.strip()
+        return None
+
+    def _sign_jwt_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        key_name: str,
+        payload: dict[str, Any],
+        headers: dict[str, Any],
+        algorithm: str,
+    ) -> str:
+        endpoint = (_read_env_or_dotenv("CARACAL_VAULT_SIGN_JWT_ENDPOINT") or "/api/caracal/sign/jwt").strip()
+        response = self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "keyName": key_name,
+                "algorithm": algorithm,
+                "payload": payload,
+                "headers": headers,
+            },
+            allowed_statuses={200, 201},
+        )
+        token = self._extract_string_value(
+            self._json(response),
+            ("signedJwt",),
+            ("signed_token",),
+            ("token",),
+            ("jwt",),
+            ("data", "signedJwt"),
+            ("data", "token"),
+        )
+        if token is None:
+            raise VaultError("Vault sign_jwt response did not contain a signed token.")
+        return token
+
+    def _sign_canonical_payload_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        key_name: str,
+        payload: dict[str, Any],
+    ) -> str:
+        endpoint = (
+            _read_env_or_dotenv("CARACAL_VAULT_SIGN_CANONICAL_PAYLOAD_ENDPOINT")
+            or "/api/caracal/sign/canonical-payload"
+        ).strip()
+        response = self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "keyName": key_name,
+                "payload": payload,
+            },
+            allowed_statuses={200, 201},
+        )
+        signature = self._extract_string_value(
+            self._json(response),
+            ("signatureHex",),
+            ("signature",),
+            ("data", "signatureHex"),
+            ("data", "signature"),
+        )
+        if signature is None:
+            raise VaultError(
+                "Vault sign_canonical_payload response did not contain a signature."
+            )
+        return signature
+
+    def _bootstrap_asymmetric_keypair_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        private_key_name: str,
+        public_key_name: str,
+        algorithm: str,
+    ) -> None:
+        endpoint = (
+            _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_KEYPAIR_ENDPOINT")
+            or "/api/caracal/keys/bootstrap"
+        ).strip()
+        self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "privateKeyName": private_key_name,
+                "publicKeyName": public_key_name,
+                "algorithm": algorithm,
+            },
+            allowed_statuses={200, 201, 202, 409},
         )
 
-    def drain_audit_events(self) -> list[VaultAuditEvent]:
-        """Return and clear accumulated audit events (thread-safe)."""
-        with self._audit_lock:
-            events, self._audit = self._audit[:], []
-        return events
+    def _secret_exists(self, project_id: str, environment: str, secret_path: str, name: str) -> bool:
+        try:
+            self._get_secret_value(project_id, environment, secret_path, name)
+            return True
+        except SecretNotFound:
+            return False
 
-    # ── Internal helpers ───────────────────────────────────────────────
-
-    def _encrypt_and_store(
-        self, org_id: str, env_id: str, name: str, plaintext: str,
-        key_version: Optional[int] = None,
-    ) -> VaultEntry:
-        if key_version is None:
-            key_version = self._storage.current_key_version(org_id, env_id)
-
-        mek = self._keys.derive(org_id, env_id, key_version)
-
-        # Generate fresh DEK for this entry
-        dek = os.urandom(_AES_KEY_BYTES)
-
-        # Encrypt plaintext with DEK
-        value_nonce = os.urandom(_GCM_NONCE_BYTES)
-        ciphertext = AESGCM(dek).encrypt(value_nonce, plaintext.encode(), None)
-
-        # Wrap DEK with MEK
-        dek_nonce = os.urandom(_GCM_NONCE_BYTES)
-        encrypted_dek = AESGCM(mek).encrypt(dek_nonce, dek, None)
-
-        now = datetime.now(timezone.utc).isoformat()
-        entry = VaultEntry(
-            entry_id=str(uuid4()),
-            org_id=org_id,
-            env_id=env_id,
-            secret_name=name,
-            ciphertext_b64=base64.b64encode(ciphertext).decode(),
-            iv_b64=base64.b64encode(value_nonce).decode(),
-            encrypted_dek_b64=base64.b64encode(encrypted_dek).decode(),
-            dek_iv_b64=base64.b64encode(dek_nonce).decode(),
-            key_version=key_version,
-            created_at=now,
-            updated_at=now,
+    def _upsert_secret(self, project_id: str, environment: str, secret_path: str, name: str, value: str) -> str:
+        v4_body = {
+            "projectId": project_id,
+            "environment": environment,
+            "secretPath": secret_path,
+            "secretValue": value,
+            "skipMultilineEncoding": False,
+        }
+        response = self._request(
+            "PATCH",
+            f"/api/v4/secrets/{name}",
+            payload=v4_body,
+            allowed_statuses={200, 201, 404, 405},
         )
-        self._storage.save(entry)
-        return entry
+        if response.status_code in {200, 201}:
+            payload = self._json(response)
+            return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
 
-    def _decrypt_entry(self, entry: VaultEntry) -> str:
-        cache_key = (entry.org_id, entry.env_id, entry.entry_id, entry.key_version)
-        dek = self._cache.get(cache_key)
-        if dek is None:
-            mek = self._keys.derive(entry.org_id, entry.env_id, entry.key_version)
-            dek_nonce = base64.b64decode(entry.dek_iv_b64)
-            encrypted_dek = base64.b64decode(entry.encrypted_dek_b64)
-            dek = AESGCM(mek).decrypt(dek_nonce, encrypted_dek, None)
-            self._cache.put(cache_key, dek)
+        legacy_body = {
+            "secret_name": name,
+            "secret_value": value,
+            "project_id": project_id,
+            "environment": environment,
+            "path": secret_path,
+        }
+        response = self._request(
+            "PUT",
+            "/api/secrets",
+            payload=legacy_body,
+            allowed_statuses={200, 201, 404, 405},
+        )
+        if response.status_code in {200, 201}:
+            payload = self._json(response)
+            return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
 
-        nonce = base64.b64decode(entry.iv_b64)
-        ciphertext = base64.b64decode(entry.ciphertext_b64)
-        return AESGCM(dek).decrypt(nonce, ciphertext, None).decode()
+        response = self._request(
+            "POST",
+            "/api/secrets",
+            payload=legacy_body,
+            allowed_statuses={200, 201},
+        )
+        payload = self._json(response)
+        return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
+
+    def _get_secret_value(self, project_id: str, environment: str, secret_path: str, name: str) -> str:
+        response = self._request(
+            "GET",
+            f"/api/v4/secrets/{name}",
+            params={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+            },
+            allowed_statuses={200, 404},
+        )
+
+        if response.status_code == 404:
+            response = self._request(
+                "GET",
+                "/api/secrets",
+                params={
+                    "secret_name": name,
+                    "project_id": project_id,
+                    "environment": environment,
+                    "path": secret_path,
+                },
+                allowed_statuses={200, 404},
+            )
+            if response.status_code == 404:
+                raise SecretNotFound(
+                    f"Secret '{name}' not found in env '{environment}' for project '{project_id}'."
+                )
+
+        payload = self._json(response)
+        value = self._extract_secret_value(payload)
+        if value is None:
+            raise VaultError(
+                f"Vault API response did not contain secret value for '{name}'."
+            )
+        return value
+
+    def _delete_secret(self, project_id: str, environment: str, secret_path: str, name: str) -> None:
+        response = self._request(
+            "DELETE",
+            f"/api/v4/secrets/{name}",
+            params={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+            },
+            allowed_statuses={200, 204, 404, 405},
+        )
+        if response.status_code in {200, 204}:
+            return
+
+        response = self._request(
+            "DELETE",
+            "/api/secrets",
+            params={
+                "secret_name": name,
+                "project_id": project_id,
+                "environment": environment,
+                "path": secret_path,
+            },
+            allowed_statuses={200, 204, 404},
+        )
+        if response.status_code == 404:
+            raise SecretNotFound(
+                f"Secret '{name}' not found in env '{environment}' for project '{project_id}'."
+            )
+
+    def _list_secret_names(self, project_id: str, environment: str, secret_path: str) -> list[str]:
+        response = self._request(
+            "GET",
+            "/api/v4/secrets",
+            params={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+            },
+            allowed_statuses={200, 404},
+        )
+        if response.status_code == 404:
+            response = self._request(
+                "GET",
+                "/api/secrets",
+                params={
+                    "project_id": project_id,
+                    "environment": environment,
+                    "path": secret_path,
+                },
+                allowed_statuses={200, 404},
+            )
+            if response.status_code == 404:
+                return []
+
+        payload = self._json(response)
+        return self._extract_secret_names(payload)
 
     def _audit_event(
-        self, org_id: str, env_id: str, name: str, op: str,
-        version: int, actor: str, success: bool, error_code: Optional[str] = None,
+        self,
+        org_id: str,
+        env_id: str,
+        name: str,
+        op: str,
+        version: int,
+        actor: str,
+        success: bool,
+        error_code: Optional[str] = None,
     ) -> None:
         event = VaultAuditEvent(
             event_id=str(uuid4()),
@@ -510,77 +758,276 @@ class CaracalVault:
         with self._audit_lock:
             self._audit.append(event)
 
+    def put(self, org_id: str, env_id: str, name: str, plaintext: str, actor: str = "gateway") -> VaultEntry:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-# ── Storage abstraction ───────────────────────────────────────────────────
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        existed = self._secret_exists(project_id, environment, secret_path, name)
 
-class _VaultStorage:
-    """Interface that concrete storage adapters must implement."""
+        try:
+            entry_id = self._upsert_secret(project_id, environment, secret_path, name, plaintext)
+            now = datetime.now(timezone.utc).isoformat()
+            self._audit_event(org_id, env_id, name, "update" if existed else "create", 1, actor, True)
+            return VaultEntry(
+                entry_id=entry_id,
+                org_id=org_id,
+                env_id=env_id,
+                secret_name=name,
+                ciphertext_b64="",
+                iv_b64="",
+                encrypted_dek_b64="",
+                dek_iv_b64="",
+                key_version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        except Exception as exc:
+            self._audit_event(org_id, env_id, name, "create", 0, actor, False, type(exc).__name__)
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to store secret '{name}': {exc}") from exc
 
-    def save(self, entry: VaultEntry) -> None:
-        raise NotImplementedError
+    def get(self, org_id: str, env_id: str, name: str, actor: str = "gateway") -> str:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def load(self, org_id: str, env_id: str, name: str) -> VaultEntry:
-        raise NotImplementedError
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            value = self._get_secret_value(project_id, environment, secret_path, name)
+            self._audit_event(org_id, env_id, name, "read", 1, actor, True)
+            return value
+        except SecretNotFound:
+            self._audit_event(org_id, env_id, name, "read", 0, actor, False, "SecretNotFound")
+            raise
+        except Exception as exc:
+            self._audit_event(org_id, env_id, name, "read", 0, actor, False, type(exc).__name__)
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to retrieve secret '{name}': {exc}") from exc
 
-    def exists(self, org_id: str, env_id: str, name: str) -> bool:
-        raise NotImplementedError
+    def sign_jwt(
+        self,
+        org_id: str,
+        env_id: str,
+        name: str,
+        *,
+        payload: dict[str, Any],
+        headers: dict[str, Any],
+        algorithm: str,
+        actor: str = "gateway",
+    ) -> str:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def remove(self, org_id: str, env_id: str, name: str) -> None:
-        raise NotImplementedError
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            token = self._sign_jwt_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                key_name=name,
+                payload=payload,
+                headers=headers,
+                algorithm=algorithm,
+            )
+            self._audit_event(org_id, env_id, name, "sign_jwt", 1, actor, True)
+            return token
+        except Exception as exc:
+            self._audit_event(org_id, env_id, name, "sign_jwt", 0, actor, False, type(exc).__name__)
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to sign JWT with vault-backed key '{name}': {exc}") from exc
 
-    def list_names(self, org_id: str, env_id: str) -> list[str]:
-        raise NotImplementedError
+    def sign_canonical_payload(
+        self,
+        org_id: str,
+        env_id: str,
+        name: str,
+        *,
+        payload: dict[str, Any],
+        actor: str = "gateway",
+    ) -> str:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def current_key_version(self, org_id: str, env_id: str) -> int:
-        raise NotImplementedError
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            signature = self._sign_canonical_payload_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                key_name=name,
+                payload=payload,
+            )
+            self._audit_event(org_id, env_id, name, "sign_canonical_payload", 1, actor, True)
+            return signature
+        except Exception as exc:
+            self._audit_event(
+                org_id,
+                env_id,
+                name,
+                "sign_canonical_payload",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(
+                f"Failed to sign canonical payload with vault-backed key '{name}': {exc}"
+            ) from exc
 
+    def delete(self, org_id: str, env_id: str, name: str, actor: str = "gateway") -> None:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-class _InMemoryVaultStorage(_VaultStorage):
-    """
-    In-memory storage for testing and single-process deployments.
-    NOT suitable for multi-replica production use — use the DB-backed adapter.
-    """
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            self._delete_secret(project_id, environment, secret_path, name)
+            self._audit_event(org_id, env_id, name, "delete", 1, actor, True)
+        except SecretNotFound:
+            self._audit_event(org_id, env_id, name, "delete", 0, actor, False, "SecretNotFound")
+            raise
 
-    def __init__(self) -> None:
-        self._data: Dict[Tuple[str, str, str], VaultEntry] = {}
-        self._versions: Dict[Tuple[str, str], int] = {}
+    def list_secrets(self, org_id: str, env_id: str, actor: str = "gateway") -> list[str]:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def _key(self, org_id: str, env_id: str, name: str) -> Tuple[str, str, str]:
-        return (org_id, env_id, name)
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            names = self._list_secret_names(project_id, environment, secret_path)
+            self._audit_event(org_id, env_id, "*", "list", 1, actor, True)
+            return names
+        except Exception as exc:
+            self._audit_event(org_id, env_id, "*", "list", 0, actor, False, type(exc).__name__)
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to list secrets: {exc}") from exc
 
-    def save(self, entry: VaultEntry) -> None:
-        k = self._key(entry.org_id, entry.env_id, entry.secret_name)
-        self._data[k] = entry
-        vk = (entry.org_id, entry.env_id)
-        self._versions[vk] = max(self._versions.get(vk, 1), entry.key_version)
+    def ensure_asymmetric_keypair(
+        self,
+        org_id: str,
+        env_id: str,
+        *,
+        private_key_name: str,
+        public_key_name: str,
+        algorithm: str = "RS256",
+        actor: str = "gateway",
+    ) -> None:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def load(self, org_id: str, env_id: str, name: str) -> VaultEntry:
-        entry = self._data.get(self._key(org_id, env_id, name))
-        if entry is None:
-            raise SecretNotFound(f"Secret '{name}' not found in env '{env_id}' for org '{org_id}'.")
-        return entry
+        normalized_algorithm = str(algorithm or "RS256").strip().upper()
+        if normalized_algorithm not in {"RS256", "ES256"}:
+            raise VaultConfigurationError(
+                f"Unsupported asymmetric key bootstrap algorithm: {normalized_algorithm!r}."
+            )
 
-    def exists(self, org_id: str, env_id: str, name: str) -> bool:
-        return self._key(org_id, env_id, name) in self._data
+        if private_key_name == public_key_name:
+            raise VaultConfigurationError(
+                "Vault bootstrap requires distinct private/public key references."
+            )
 
-    def remove(self, org_id: str, env_id: str, name: str) -> None:
-        self._data.pop(self._key(org_id, env_id, name), None)
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        try:
+            self._bootstrap_asymmetric_keypair_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                private_key_name=private_key_name,
+                public_key_name=public_key_name,
+                algorithm=normalized_algorithm,
+            )
+            self._audit_event(org_id, env_id, private_key_name, "create", 1, actor, True)
+            self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
+        except Exception as exc:
+            self._audit_event(
+                org_id,
+                env_id,
+                private_key_name,
+                "bootstrap_keypair",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            self._audit_event(
+                org_id,
+                env_id,
+                public_key_name,
+                "bootstrap_keypair",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(
+                "Failed to bootstrap asymmetric vault key material "
+                f"({private_key_name}, {public_key_name}): {exc}"
+            ) from exc
 
-    def list_names(self, org_id: str, env_id: str) -> list[str]:
-        return [name for (o, e, name) in self._data if o == org_id and e == env_id]
+    def rotate_master_key(self, org_id: str, env_id: str, actor: str = "admin") -> RotationResult:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
 
-    def current_key_version(self, org_id: str, env_id: str) -> int:
-        return self._versions.get((org_id, env_id), 1)
+        rotate_endpoint = (_read_env_or_dotenv("CARACAL_VAULT_ROTATE_ENDPOINT") or "").strip()
+        if not rotate_endpoint:
+            raise VaultError(
+                "Vault key rotation endpoint is not configured. "
+                "Set CARACAL_VAULT_ROTATE_ENDPOINT to enable rotate_master_key."
+            )
 
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        started_at = time.monotonic()
+        response = self._request(
+            "POST",
+            rotate_endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "actor": actor,
+            },
+            allowed_statuses={200, 201, 202},
+        )
+        payload = self._json(response)
 
-# ── Singleton for gateway use ─────────────────────────────────────────────
+        rotated = int(payload.get("secrets_rotated") or payload.get("rotated") or 0)
+        failed = int(payload.get("secrets_failed") or payload.get("failed") or 0)
+        key_version = int(payload.get("new_key_version") or payload.get("key_version") or 0)
+
+        self._audit_event(org_id, env_id, "*", "rotate", key_version, actor, failed == 0)
+
+        return RotationResult(
+            secrets_rotated=rotated,
+            secrets_failed=failed,
+            new_key_version=key_version,
+            duration_seconds=round(time.monotonic() - started_at, 3),
+        )
+
+    def drain_audit_events(self) -> list[VaultAuditEvent]:
+        with self._audit_lock:
+            events, self._audit = self._audit[:], []
+        return events
+
 
 _vault_instance: Optional[CaracalVault] = None
 _vault_lock = threading.Lock()
 
 
 def get_vault() -> CaracalVault:
-    """Return the process-wide CaracalVault singleton."""
     global _vault_instance
     if _vault_instance is None:
         with _vault_lock:

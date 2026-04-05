@@ -21,8 +21,6 @@
 #   --db-port PORT      PostgreSQL port (default: 5432)
 #   --db-name NAME      Database name (default: caracal)
 #   --db-user USER      Database user (default: caracal)
-#
-# Requirements: Deployment
 
 set -euo pipefail
 

@@ -74,8 +74,7 @@ class EditionManager:
         Returns current edition (OPENSOURCE or ENTERPRISE).
         
           Edition detection is policy-driven and auto-derived from runtime state:
-          1. Enterprise connectivity indicators (gateway URL, sync-enabled workspace,
-              enterprise license state)
+          1. Enterprise connectivity indicators (gateway URL)
           2. Default edition (OPENSOURCE)
         
         The result is cached to avoid repeated file I/O.
@@ -93,6 +92,7 @@ class EditionManager:
         try:
             # Auto-detect based on connectivity and runtime indicators.
             edition = self._auto_detect_edition()
+            self._assert_execution_exclusivity(edition)
             self._cached_edition = edition
             self._cache_timestamp = datetime.now()
             logger.debug(
@@ -109,78 +109,52 @@ class EditionManager:
             )
             raise EditionDetectionError(f"Failed to detect edition: {e}") from e
     
+    def _gateway_url_from_config(self) -> Optional[str]:
+        """Return the configured gateway URL from persisted hard-cut state."""
+        try:
+            from caracal.enterprise.license import load_enterprise_config
+
+            enterprise_cfg = load_enterprise_config()
+            gateway_cfg = enterprise_cfg.get("gateway")
+            if isinstance(gateway_cfg, dict):
+                gateway_endpoint = str(gateway_cfg.get("endpoint") or "").strip()
+                if gateway_endpoint:
+                    return gateway_endpoint
+        except Exception:
+            logger.debug("failed_to_read_enterprise_runtime_gateway_url", exc_info=True)
+
+        if self.CONFIG_FILE.exists():
+            try:
+                config = toml.load(self.CONFIG_FILE)
+                gateway_url = config.get("edition", {}).get("gateway_url")
+                if gateway_url:
+                    return str(gateway_url).strip()
+            except (toml.TomlDecodeError, OSError) as e:
+                logger.warning(
+                    "failed_to_read_gateway_url",
+                    config_file=str(self.CONFIG_FILE),
+                    error=str(e)
+                )
+        return None
+
     def _auto_detect_edition(self) -> Edition:
         """
         Auto-detects edition based on available components.
 
         Detection logic:
         - If gateway URL is configured, assume Enterprise Edition
-        - If any workspace has sync enabled with a remote URL, assume Enterprise Edition
-        - If enterprise license is connected/valid, assume Enterprise Edition
         - Otherwise, default to Open Source Edition
 
         Returns:
             Detected edition
         """
-        # Check for gateway URL in configuration
-        if self.CONFIG_FILE.exists():
-            try:
-                config = toml.load(self.CONFIG_FILE)
-                gateway_url = config.get("edition", {}).get("gateway_url")
-                if gateway_url:
-                    logger.debug(
-                        "edition_detected_gateway_url",
-                        gateway_url=gateway_url
-                    )
-                    return Edition.ENTERPRISE
-            except (toml.TomlDecodeError, OSError):
-                pass
-
-        # Check for enterprise connectivity environment variables.
-        if os.environ.get("CARACAL_ENTERPRISE_URL") or os.environ.get("CARACAL_GATEWAY_URL"):
+        gateway_url = self.get_gateway_url()
+        if gateway_url:
             logger.debug(
-                "edition_detected_env_var",
-                env_var="CARACAL_ENTERPRISE_URL"
+                "edition_detected_gateway_url",
+                gateway_url=gateway_url
             )
             return Edition.ENTERPRISE
-
-        # Check for sync-enabled workspaces with configured remote URL.
-        try:
-            from caracal.deployment.config_manager import ConfigManager
-
-            cfg_mgr = ConfigManager()
-            for workspace in cfg_mgr.list_workspaces():
-                try:
-                    ws_config = cfg_mgr.get_workspace_config(workspace)
-                except Exception:
-                    continue
-
-                if ws_config.sync_enabled and ws_config.sync_url:
-                    logger.debug(
-                        "edition_detected_workspace_sync",
-                        workspace=workspace,
-                        sync_url=ws_config.sync_url,
-                    )
-                    return Edition.ENTERPRISE
-        except Exception:
-            logger.debug("edition_workspace_sync_detection_failed", exc_info=True)
-
-        # Check persisted enterprise license connectivity.
-        try:
-            from caracal.enterprise.license import load_enterprise_config
-
-            enterprise_cfg = load_enterprise_config()
-            if enterprise_cfg.get("valid") and (
-                enterprise_cfg.get("sync_api_key") or enterprise_cfg.get("enterprise_api_url")
-            ):
-                logger.debug(
-                    "edition_detected_enterprise_license",
-                    has_sync_api_key=bool(enterprise_cfg.get("sync_api_key")),
-                    has_api_url=bool(enterprise_cfg.get("enterprise_api_url")),
-                )
-                return Edition.ENTERPRISE
-        except Exception:
-            logger.debug("edition_license_detection_failed", exc_info=True)
         
         # Default to Open Source Edition
         logger.debug(
@@ -189,6 +163,45 @@ class EditionManager:
             reason="no_enterprise_indicators"
         )
         return self.DEFAULT_EDITION
+
+    def _resolve_gateway_url(self) -> Optional[str]:
+        """Resolve effective gateway URL from config or environment."""
+        return self.get_gateway_url()
+
+    def _has_local_provider_registry_entries(self) -> bool:
+        """Return True when any workspace has local broker provider entries."""
+        try:
+            from caracal.deployment.config_manager import ConfigManager
+            from caracal.provider.workspace import load_workspace_provider_registry
+
+            cfg_mgr = ConfigManager()
+            for workspace in cfg_mgr.list_workspaces():
+                try:
+                    providers = load_workspace_provider_registry(cfg_mgr, workspace)
+                except Exception:
+                    continue
+                if providers:
+                    return True
+        except Exception:
+            logger.debug("edition_provider_registry_detection_failed", exc_info=True)
+        return False
+
+    def _assert_execution_exclusivity(self, detected_edition: Edition) -> None:
+        """Reject mixed broker+gateway execution indicators in hard-cut mode."""
+        gateway_url = self._resolve_gateway_url()
+        local_provider_registry_present = self._has_local_provider_registry_entries()
+
+        if gateway_url and local_provider_registry_present:
+            raise EditionConfigurationError(
+                "Execution exclusivity violation: gateway URL and local provider registry are both configured. "
+                "Use gateway-only enterprise execution or broker-only OSS execution, never both."
+            )
+
+        if detected_edition == Edition.ENTERPRISE and not gateway_url:
+            raise EditionConfigurationError(
+                "Enterprise execution requires a gateway URL (CARACAL_ENTERPRISE_URL/CARACAL_GATEWAY_ENDPOINT/CARACAL_GATEWAY_URL). "
+                "Broker fallback is forbidden in hard-cut mode."
+            )
     
     def set_edition(self, edition: Edition, gateway_url: Optional[str] = None, 
                     gateway_token: Optional[str] = None) -> None:
@@ -335,13 +348,10 @@ class EditionManager:
         from caracal.deployment.gateway_client import GatewayClient
         
         edition = self.get_edition()
+        self._assert_execution_exclusivity(edition)
         
         if edition == Edition.ENTERPRISE:
-            gateway_url = (
-                self.get_gateway_url()
-                or os.environ.get("CARACAL_ENTERPRISE_URL")
-                or os.environ.get("CARACAL_GATEWAY_URL")
-            )
+            gateway_url = self._resolve_gateway_url()
             if not gateway_url:
                 raise EditionConfigurationError(
                     "Enterprise URL is required for Enterprise provider client"
@@ -367,16 +377,14 @@ class EditionManager:
         Returns:
             Gateway URL if configured, None otherwise
         """
-        if self.CONFIG_FILE.exists():
-            try:
-                config = toml.load(self.CONFIG_FILE)
-                return config.get("edition", {}).get("gateway_url")
-            except (toml.TomlDecodeError, OSError) as e:
-                logger.warning(
-                    "failed_to_read_gateway_url",
-                    config_file=str(self.CONFIG_FILE),
-                    error=str(e)
-                )
+        configured_gateway_url = self._gateway_url_from_config()
+        if configured_gateway_url:
+            return configured_gateway_url
+
+        for env_key in ("CARACAL_ENTERPRISE_URL", "CARACAL_GATEWAY_ENDPOINT", "CARACAL_GATEWAY_URL"):
+            value = (os.environ.get(env_key) or "").strip()
+            if value:
+                return value
         return None
     
     def get_gateway_token(self) -> Optional[str]:

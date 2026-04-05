@@ -25,6 +25,7 @@ from caracal.flow.components.wizard import Wizard, WizardStep
 from caracal.flow.screens._provider_scope_helpers import load_provider_scope_catalog
 from caracal.flow.state import FlowState, StatePersistence, RecentAction
 from caracal.flow.theme import Colors, Icons
+from caracal.identity.service import IdentityService
 from caracal.pathing import ensure_source_tree, source_of
 from caracal.storage.layout import resolve_caracal_home
 
@@ -1263,12 +1264,12 @@ def _step_principal(wizard: Wizard) -> Any:
         return False, "Please enter a valid email address."
     
     console.print(f"  [{Colors.NEUTRAL}]Let's register your first principal.")
-    console.print(f"  [{Colors.DIM}]This will be the first agent, user, or service you want to start with.[/]")
+    console.print(f"  [{Colors.DIM}]This will be the first human, orchestrator, worker, or service you want to start with.[/]")
     console.print()
     
-    principal_type = prompt.select(
-        "Principal type",
-        choices=["user", "agent", "service"],
+    principal_kind = prompt.select(
+        "Principal kind",
+        choices=["human", "orchestrator", "worker", "service"],
     )
     
     name = prompt.text(
@@ -1284,14 +1285,14 @@ def _step_principal(wizard: Wizard) -> Any:
     wizard.context["first_principal"] = {
         "name": name,
         "owner": owner,
-        "type": principal_type,
+        "kind": principal_kind,
     }
     
     console.print()
     console.print(f"  [{Colors.INFO}]{Icons.INFO} Principal will be registered after setup completes.[/]")
     console.print(f"  [{Colors.DIM}]Name: {name}[/]")
     console.print(f"  [{Colors.DIM}]Owner: {owner}[/]")
-    console.print(f"  [{Colors.DIM}]Type: {principal_type}[/]")
+    console.print(f"  [{Colors.DIM}]Kind: {principal_kind}[/]")
     
     return wizard.context["first_principal"]
 
@@ -1622,6 +1623,7 @@ def run_onboarding(
         from caracal.config import load_config
         from caracal.db.connection import DatabaseConfig, DatabaseConnectionManager, get_db_manager
         from caracal.db.models import Principal, AuthorityPolicy
+        from caracal.core.identity import PrincipalRegistry
         from datetime import datetime
         from uuid import uuid4
         from caracal.flow.workspace import get_workspace
@@ -1823,42 +1825,19 @@ def run_onboarding(
                         console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal already exists, reusing.[/]")
                         console.print(f"  [{Colors.DIM}]Principal ID: {principal_id}[/]")
                     else:
-                        # Generate ECDSA P-256 key pair for the principal
-                        from cryptography.hazmat.primitives.asymmetric import ec
-                        from cryptography.hazmat.primitives import serialization
-                        from cryptography.hazmat.backends import default_backend
-                        
                         console.print(f"  [{Colors.INFO}]{Icons.INFO} Generating cryptographic keys...[/]")
-                        
-                        private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
-                        
-                        # Serialize private key to PEM format
-                        private_key_pem = private_key.private_bytes(
-                            encoding=serialization.Encoding.PEM,
-                            format=serialization.PrivateFormat.PKCS8,
-                            encryption_algorithm=serialization.NoEncryption()
-                        ).decode('utf-8')
-                        
-                        # Extract public key and serialize to PEM format
-                        public_key = private_key.public_key()
-                        public_key_pem = public_key.public_bytes(
-                            encoding=serialization.Encoding.PEM,
-                            format=serialization.PublicFormat.SubjectPublicKeyInfo
-                        ).decode('utf-8')
-                        
-                        principal = Principal(
+
+                        registry = PrincipalRegistry(db_session)
+                        identity_service = IdentityService(principal_registry=registry)
+                        identity = identity_service.register_principal(
                             name=principal_data["name"],
-                            principal_type=principal_data["type"],
                             owner=principal_data["owner"],
-                            public_key_pem=public_key_pem,
-                            private_key_pem=private_key_pem,
-                            created_at=datetime.utcnow(),
+                            principal_kind=principal_data["kind"],
+                            metadata=None,
+                            generate_keys=True,
                         )
-                        
-                        db_session.add(principal)
-                        db_session.flush()
-                        
-                        principal_id = principal.principal_id
+
+                        principal_id = UUID(str(identity.principal_id))
                         console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Principal registered successfully.[/]")
                         console.print(f"  [{Colors.DIM}]Principal ID: {principal_id}[/]")
             except Exception as e:

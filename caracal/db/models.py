@@ -14,9 +14,11 @@ This module defines the database schema for:
 PostgreSQL is the only supported backend.
 """
 
+import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -31,7 +33,7 @@ from sqlalchemy import (
     String,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID as PG_UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -39,8 +41,43 @@ Base = declarative_base()
 
 
 def get_json_type():
-    """Return JSONB for PostgreSQL."""
-    return JSONB
+    """Return JSON for PostgreSQL."""
+    return JSON
+
+
+class PrincipalKind(str, Enum):
+    """Behavioral principal taxonomy."""
+
+    HUMAN = "human"
+    ORCHESTRATOR = "orchestrator"
+    WORKER = "worker"
+    SERVICE = "service"
+
+
+class PrincipalLifecycleStatus(str, Enum):
+    """Principal lifecycle status values."""
+
+    PENDING_ATTESTATION = "pending_attestation"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DEACTIVATED = "deactivated"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+class PrincipalAttestationStatus(str, Enum):
+    """Principal attestation state values."""
+
+    UNATTESTED = "unattested"
+    PENDING = "pending"
+    ATTESTED = "attested"
+    FAILED = "failed"
+
+
+class PrincipalKeyBackend(str, Enum):
+    """Supported custody backends for principal private keys."""
+
+    VAULT = "vault"
 
 
 class LedgerEvent(Base):
@@ -71,7 +108,7 @@ class LedgerEvent(Base):
     quantity = Column(Numeric(precision=20, scale=6), nullable=False)
     
     # Metadata
-    event_metadata = Column("metadata", JSONB, nullable=True)
+    event_metadata = Column("metadata", JSON, nullable=True)
     
     # Merkle tree integration 
     merkle_root_id = Column(
@@ -124,7 +161,7 @@ class AuditLog(Base):
     # Event data
     principal_id = Column(PG_UUID(as_uuid=True), nullable=True, index=True)
     correlation_id = Column(String(255), nullable=True, index=True)
-    event_data = Column(JSONB, nullable=False)
+    event_data = Column(JSON, nullable=False)
     
     # Composite indexes for common queries
     __table_args__ = (
@@ -210,7 +247,7 @@ class LedgerSnapshot(Base):
     merkle_root = Column(String(64), nullable=False)  # Hex-encoded SHA-256 hash
     
     # Snapshot data (aggregated usage per agent)
-    snapshot_data = Column(JSONB, nullable=False)
+    snapshot_data = Column(JSON, nullable=False)
     
     # Creation timestamp
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
@@ -226,10 +263,10 @@ class LedgerSnapshot(Base):
 
 class Principal(Base):
     """
-    Principal identity (agent, user, or service).
+    Principal identity with behavioral taxonomy and lifecycle state.
     
     Represents an entity that can hold authority and perform actions.
-    Replaces AgentIdentity with more general concept for authority enforcement.
+    Replaces older identity naming with principal-centric authority enforcement.
     
     """
     
@@ -240,19 +277,161 @@ class Principal(Base):
     
     # Identity
     name = Column(String(255), unique=True, nullable=False, index=True)
-    principal_type = Column(String(50), nullable=False, index=True)  # agent, user, service
+    principal_kind = Column(String(50), nullable=False, index=True)  # human, orchestrator, worker, service
     owner = Column(String(255), nullable=False)
+
+    # Lifecycle graph relation
+    source_principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id"),
+        nullable=True,
+        index=True,
+    )
+
+    # Lifecycle and attestation status
+    lifecycle_status = Column(
+        String(50),
+        nullable=False,
+        default=PrincipalLifecycleStatus.ACTIVE.value,
+        server_default=PrincipalLifecycleStatus.ACTIVE.value,
+        index=True,
+    )
+    attestation_status = Column(
+        String(50),
+        nullable=False,
+        default=PrincipalAttestationStatus.UNATTESTED.value,
+        server_default=PrincipalAttestationStatus.UNATTESTED.value,
+        index=True,
+    )
     
     # Cryptographic keys
     public_key_pem = Column(String(2000), nullable=True)
-    private_key_pem = Column(String(4000), nullable=True)  # Encrypted or stored in KMS
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    principal_metadata = Column("metadata", JSONB, nullable=True)
+    principal_metadata = Column("metadata", JSON, nullable=True)
+
+    source_principal = relationship(
+        "Principal",
+        remote_side=[principal_id],
+        foreign_keys=[source_principal_id],
+        backref="spawned_principals",
+    )
+    key_custody = relationship(
+        "PrincipalKeyCustody",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    workload_bindings = relationship(
+        "PrincipalWorkloadBinding",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+    )
+    capability_grants = relationship(
+        "PrincipalCapabilityGrant",
+        back_populates="principal",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def capabilities(self) -> list[str]:
+        return [grant.capability for grant in self.capability_grants]
+
+    @capabilities.setter
+    def capabilities(self, values: Optional[list[str]]) -> None:
+        self.capability_grants = [
+            PrincipalCapabilityGrant(capability=str(value))
+            for value in (values or [])
+        ]
     
     def __repr__(self):
-        return f"<Principal(principal_id={self.principal_id}, name={self.name}, type={self.principal_type})>"
+        return (
+            f"<Principal(principal_id={self.principal_id}, name={self.name}, "
+            f"kind={self.principal_kind}, lifecycle={self.lifecycle_status})>"
+        )
+
+
+class PrincipalKeyCustody(Base):
+    """Canonical private-key custody record for a principal."""
+
+    __tablename__ = "principal_key_custody"
+
+    custody_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    backend = Column(String(50), nullable=False, index=True)
+    key_reference = Column(String(2000), nullable=False)
+    key_updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    rotated_at = Column(DateTime, nullable=True)
+
+    principal = relationship("Principal", back_populates="key_custody")
+    vault_details = relationship(
+        "PrincipalKeyCustodyVault",
+        back_populates="custody",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class PrincipalKeyCustodyVault(Base):
+    """Vault custody details for principal signing keys."""
+
+    __tablename__ = "principal_key_custody_vault"
+
+    custody_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principal_key_custody.custody_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    vault_key_ref = Column(String(2000), nullable=False)
+    vault_namespace = Column(String(255), nullable=True)
+
+    custody = relationship("PrincipalKeyCustody", back_populates="vault_details")
+
+
+class PrincipalWorkloadBinding(Base):
+    """Typed workload binding rows for a principal."""
+
+    __tablename__ = "principal_workload_bindings"
+
+    binding_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workload = Column(String(255), nullable=False)
+    binding_type = Column(String(50), nullable=False, default="workload", server_default="workload")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    principal = relationship("Principal", back_populates="workload_bindings")
+
+
+class PrincipalCapabilityGrant(Base):
+    """Typed capability grant rows for a principal."""
+
+    __tablename__ = "principal_capability_grants"
+
+    grant_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    principal_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("principals.principal_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    capability = Column(String(255), nullable=False)
+    granted_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    principal = relationship("Principal", back_populates="capability_grants")
 
 
 class ExecutionMandate(Base):
@@ -287,16 +466,12 @@ class ExecutionMandate(Base):
     valid_from = Column(DateTime, nullable=False, index=True)
     valid_until = Column(DateTime, nullable=False, index=True)
     
-    # Scope
-    resource_scope = Column(JSONB, nullable=False)  # List of resource patterns
-    action_scope = Column(JSONB, nullable=False)    # List of allowed actions
-    
     # Cryptographic signature
     signature = Column(String(512), nullable=False)  # ECDSA P-256 signature
     
     # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    mandate_metadata = Column("metadata", JSONB, nullable=True)
+    mandate_metadata = Column("metadata", JSON, nullable=True)
     
     # Revocation
     revoked = Column(Boolean, nullable=False, default=False, index=True)
@@ -308,7 +483,6 @@ class ExecutionMandate(Base):
         String(50), nullable=False, default="directed",
         server_default="directed"
     )  # directed, peer
-    context_tags = Column(JSONB, nullable=True)  # Context tags for dynamic filtering
     
     # Intent constraint (optional)
     intent_hash = Column(String(64), nullable=True)  # SHA-256 hash of intent
@@ -325,9 +499,114 @@ class ExecutionMandate(Base):
     # Relationships
     issuer = relationship("Principal", foreign_keys=[issuer_id], backref="issued_mandates")
     subject = relationship("Principal", foreign_keys=[subject_id], backref="received_mandates")
+    resource_scope_entries = relationship(
+        "MandateResourceScope",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateResourceScope.position",
+    )
+    action_scope_entries = relationship(
+        "MandateActionScope",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateActionScope.position",
+    )
+    context_tag_entries = relationship(
+        "MandateContextTag",
+        back_populates="mandate",
+        cascade="all, delete-orphan",
+        order_by="MandateContextTag.position",
+    )
+
+    @property
+    def resource_scope(self) -> list[str]:
+        return [entry.resource_scope for entry in self.resource_scope_entries]
+
+    @resource_scope.setter
+    def resource_scope(self, values: Optional[list[str]]) -> None:
+        self.resource_scope_entries = [
+            MandateResourceScope(resource_scope=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
+
+    @property
+    def action_scope(self) -> list[str]:
+        return [entry.action_scope for entry in self.action_scope_entries]
+
+    @action_scope.setter
+    def action_scope(self, values: Optional[list[str]]) -> None:
+        self.action_scope_entries = [
+            MandateActionScope(action_scope=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
+
+    @property
+    def context_tags(self) -> list[str]:
+        return [entry.context_tag for entry in self.context_tag_entries]
+
+    @context_tags.setter
+    def context_tags(self, values: Optional[list[str]]) -> None:
+        self.context_tag_entries = [
+            MandateContextTag(context_tag=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
     
     def __repr__(self):
         return f"<ExecutionMandate(mandate_id={self.mandate_id}, subject_id={self.subject_id}, revoked={self.revoked})>"
+
+
+class MandateResourceScope(Base):
+    """Resource scope entries for a mandate."""
+
+    __tablename__ = "mandate_resource_scopes"
+
+    resource_scope_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    resource_scope = Column(String(1000), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="resource_scope_entries")
+
+
+class MandateActionScope(Base):
+    """Action scope entries for a mandate."""
+
+    __tablename__ = "mandate_action_scopes"
+
+    action_scope_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    action_scope = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="action_scope_entries")
+
+
+class MandateContextTag(Base):
+    """Context tag entries for a mandate."""
+
+    __tablename__ = "mandate_context_tags"
+
+    context_tag_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    mandate_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("execution_mandates.mandate_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_tag = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    mandate = relationship("ExecutionMandate", back_populates="context_tag_entries")
 
 
 class DelegationEdgeModel(Base):
@@ -367,7 +646,6 @@ class DelegationEdgeModel(Base):
     delegation_type = Column(
         String(50), nullable=False, default="directed"
     )  # directed, peer
-    context_tags = Column(JSONB, nullable=True)  # ["production", "read-only"]
     
     # Validity
     granted_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -378,7 +656,7 @@ class DelegationEdgeModel(Base):
     revoked_at = Column(DateTime, nullable=True)
     
     # Metadata
-    edge_metadata = Column("metadata", JSONB, nullable=True)
+    edge_metadata = Column("metadata", JSON, nullable=True)
     
     # Relationships
     source_mandate = relationship(
@@ -391,6 +669,23 @@ class DelegationEdgeModel(Base):
         foreign_keys=[target_mandate_id],
         backref="incoming_edges",
     )
+    context_tag_entries = relationship(
+        "DelegationEdgeTag",
+        back_populates="edge",
+        cascade="all, delete-orphan",
+        order_by="DelegationEdgeTag.position",
+    )
+
+    @property
+    def context_tags(self) -> list[str]:
+        return [entry.context_tag for entry in self.context_tag_entries]
+
+    @context_tags.setter
+    def context_tags(self, values: Optional[list[str]]) -> None:
+        self.context_tag_entries = [
+            DelegationEdgeTag(context_tag=str(value), position=index)
+            for index, value in enumerate(values or [])
+        ]
     
     # Composite indexes
     __table_args__ = (
@@ -404,6 +699,48 @@ class DelegationEdgeModel(Base):
             f"{self.source_principal_type}→{self.target_principal_type}, "
             f"type={self.delegation_type}, revoked={self.revoked})>"
         )
+
+
+class DelegationEdgeTag(Base):
+    """Context tag entries for delegation edges."""
+
+    __tablename__ = "delegation_edge_tags"
+
+    edge_tag_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    edge_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("delegation_edges.edge_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    context_tag = Column(String(255), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+    edge = relationship("DelegationEdgeModel", back_populates="context_tag_entries")
+
+
+class SessionHandoffTransfer(Base):
+    """Transactional record of handoff issuance and source-scope narrowing."""
+
+    __tablename__ = "session_handoff_transfers"
+
+    transfer_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    handoff_jti = Column(String(255), nullable=False, unique=True, index=True)
+    source_token_jti = Column(String(255), nullable=False, index=True)
+    source_subject_id = Column(String(255), nullable=False, index=True)
+    target_subject_id = Column(String(255), nullable=False, index=True)
+    organization_id = Column(String(255), nullable=False, index=True)
+    tenant_id = Column(String(255), nullable=False, index=True)
+    transferred_caveats = Column(JSON, nullable=False, default=list)
+    source_remaining_caveats = Column(JSON, nullable=False, default=list)
+    issued_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    source_token_revoked_at = Column(DateTime, nullable=True, index=True)
+    consumed_at = Column(DateTime, nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_session_handoff_transfers_source_revoked", "source_token_jti", "source_token_revoked_at"),
+        Index("ix_session_handoff_transfers_handoff_consumed", "handoff_jti", "consumed_at"),
+    )
 
 
 class AuthorityLedgerEvent(Base):
@@ -446,8 +783,6 @@ class AuthorityLedgerEvent(Base):
     requested_action = Column(String(255), nullable=True)
     requested_resource = Column(String(1000), nullable=True)
     
-    # Metadata
-    event_metadata = Column(JSONB, nullable=True)
     correlation_id = Column(String(255), nullable=True, index=True)
     
     # Merkle tree integration
@@ -462,6 +797,37 @@ class AuthorityLedgerEvent(Base):
     principal = relationship("Principal", backref="authority_events")
     mandate = relationship("ExecutionMandate", backref="ledger_events")
     merkle_root = relationship("MerkleRoot", backref="authority_events")
+    event_attributes = relationship(
+        "AuthorityEventAttribute",
+        back_populates="event",
+        cascade="all, delete-orphan",
+        order_by="AuthorityEventAttribute.position",
+    )
+
+    @property
+    def event_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for entry in self.event_attributes:
+            metadata[entry.attribute_key] = _decode_authority_attribute(
+                entry.attribute_value,
+                entry.value_type,
+            )
+        return metadata
+
+    @event_metadata.setter
+    def event_metadata(self, values: Optional[dict[str, Any]]) -> None:
+        metadata = values or {}
+        self.event_attributes = []
+        for index, key in enumerate(sorted(metadata.keys())):
+            encoded_value, value_type = _encode_authority_attribute(metadata[key])
+            self.event_attributes.append(
+                AuthorityEventAttribute(
+                    attribute_key=str(key),
+                    attribute_value=encoded_value,
+                    value_type=value_type,
+                    position=index,
+                )
+            )
     
     # Composite indexes for common queries
     __table_args__ = (
@@ -471,6 +837,64 @@ class AuthorityLedgerEvent(Base):
     
     def __repr__(self):
         return f"<AuthorityLedgerEvent(event_id={self.event_id}, event_type={self.event_type}, decision={self.decision})>"
+
+
+class AuthorityEventAttribute(Base):
+    """Typed authority event attributes replacing JSON metadata."""
+
+    __tablename__ = "authority_event_attributes"
+
+    attribute_id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(
+        BigInteger,
+        ForeignKey("authority_ledger_events.event_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    attribute_key = Column(String(255), nullable=False)
+    attribute_value = Column(String(4000), nullable=False)
+    value_type = Column(String(20), nullable=False, default="str", server_default="str")
+    position = Column(Integer, nullable=False, default=0)
+
+    event = relationship("AuthorityLedgerEvent", back_populates="event_attributes")
+
+
+def _encode_authority_attribute(value: Any) -> tuple[str, str]:
+    if value is None:
+        return "", "null"
+    if isinstance(value, bool):
+        return ("true" if value else "false"), "bool"
+    if isinstance(value, int):
+        return str(value), "int"
+    if isinstance(value, float):
+        return str(value), "float"
+    if isinstance(value, str):
+        return value, "str"
+    return json.dumps(value, sort_keys=True), "json"
+
+
+def _decode_authority_attribute(value: str, value_type: str) -> Any:
+    normalized = (value_type or "str").lower()
+    if normalized == "null":
+        return None
+    if normalized == "bool":
+        return value.lower() == "true"
+    if normalized == "int":
+        try:
+            return int(value)
+        except Exception:
+            return 0
+    if normalized == "float":
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+    if normalized == "json":
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value
 
 
 class AuthorityPolicy(Base):
@@ -499,8 +923,8 @@ class AuthorityPolicy(Base):
     max_validity_seconds = Column(Integer, nullable=False)  # Maximum TTL for mandates
     
     # Scope constraints
-    allowed_resource_patterns = Column(JSONB, nullable=False)  # List of regex/glob patterns
-    allowed_actions = Column(JSONB, nullable=False)  # List of action types
+    allowed_resource_patterns = Column(JSON, nullable=False)  # List of regex/glob patterns
+    allowed_actions = Column(JSON, nullable=False)  # List of action types
     
     # Delegation constraints
     allow_delegation = Column(Boolean, nullable=False, default=False)
@@ -540,22 +964,22 @@ class GatewayProvider(Base):
     service_type = Column(String(100), nullable=False, default="application", server_default="application")
     auth_scheme = Column(String(100), nullable=False, default="api_key", server_default="api_key")
     version = Column(String(255), nullable=True)
-    capabilities = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    tags = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    provider_metadata = Column("metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    capabilities = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    tags = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    provider_metadata = Column("metadata", JSON, nullable=False, default=dict, server_default=text("'{}'"))
     provider_definition = Column(String(255), nullable=False, default="custom", server_default="custom")
-    provider_definition_data = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
-    resources = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    actions = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    auth_metadata = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    provider_definition_data = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    resources = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    actions = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    auth_metadata = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     provider_layer = Column(String(50), nullable=False, default="user_provider", server_default="user_provider", index=True)
     template_id = Column(String(255), nullable=True)
     managed_by = Column(String(255), nullable=True)
     credential_storage = Column(String(50), nullable=False, default="gateway_vault", server_default="gateway_vault")
 
-    # JSON arrays stored as JSONB
-    allowed_paths = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
-    scopes = Column(JSONB, nullable=False, default=list, server_default=text("'[]'"))
+    # JSON arrays stored as JSON
+    allowed_paths = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    scopes = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
 
     tls_pin = Column(String(255), nullable=True)
     secret_ref = Column(String(512), nullable=True)
@@ -563,8 +987,8 @@ class GatewayProvider(Base):
     timeout_seconds = Column(Integer, nullable=False, default=30, server_default="30")
     max_retries = Column(Integer, nullable=False, default=3, server_default="3")
     rate_limit_rpm = Column(Integer, nullable=True)
-    default_headers = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
-    access_policy = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'"))
+    default_headers = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    access_policy = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     enabled = Column(Boolean, nullable=False, default=True, index=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -575,188 +999,26 @@ class GatewayProvider(Base):
 
 
 
-
 # ============================================================================
-# Sync State Management Models
+# Enterprise Runtime State Management Models
 # ============================================================================
 
 
-class SyncOperation(Base):
+class EnterpriseRuntimeConfig(Base):
     """
-    Queued sync operation for workspace synchronization.
-    
-    Stores operations that need to be synchronized between local and
-    enterprise instances. Operations are queued when offline and processed
-    when connectivity is restored.
-    
-    """
-    
-    __tablename__ = "sync_operations"
-    
-    # Primary key
-    operation_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    
-    # Workspace identification
-    workspace = Column(String(64), nullable=False, index=True)
-    
-    # Operation details
-    operation_type = Column(String(20), nullable=False, index=True)  # create, update, delete
-    entity_type = Column(String(100), nullable=False, index=True)
-    entity_id = Column(String(255), nullable=False, index=True)
-    
-    # Operation data (JSONB for flexibility)
-    operation_data = Column(JSONB, nullable=False)
-    
-    # Timing
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    scheduled_at = Column(DateTime, nullable=True, index=True)  # For delayed operations
-    
-    # Retry tracking
-    retry_count = Column(Integer, nullable=False, default=0)
-    last_retry_at = Column(DateTime, nullable=True)
-    last_error = Column(String(2000), nullable=True)
-    max_retries = Column(Integer, nullable=False, default=5)
-    
-    # Status
-    status = Column(
-        String(20), 
-        nullable=False, 
-        default="pending", 
-        index=True
-    )  # pending, processing, completed, failed
-    completed_at = Column(DateTime, nullable=True)
-    
-    # Metadata
-    operation_metadata = Column("metadata", JSONB, nullable=True)
-    correlation_id = Column(String(255), nullable=True, index=True)
-    
-    # Composite indexes for efficient querying
-    __table_args__ = (
-        Index("ix_sync_operations_workspace_status", "workspace", "status"),
-        Index("ix_sync_operations_workspace_created", "workspace", "created_at"),
-        Index("ix_sync_operations_entity", "entity_type", "entity_id"),
-    )
-    
-    def __repr__(self):
-        return (
-            f"<SyncOperation(operation_id={self.operation_id}, "
-            f"workspace={self.workspace}, type={self.operation_type}, "
-            f"status={self.status})>"
-        )
+    Enterprise runtime configuration persisted independently from sync-state tables.
 
+    This table stores OSS runtime enterprise license/session settings used by the
+    CLI and runtime startup paths. It intentionally avoids any coupling with
+    sync metadata hard-cut removals.
+    """
 
-class SyncConflict(Base):
-    """
-    Detected conflict during workspace synchronization.
-    
-    Stores conflicts that occur when the same entity is modified on both
-    local and enterprise instances. Tracks resolution status and strategy.
-    
-    """
-    
-    __tablename__ = "sync_conflicts"
-    
-    # Primary key
-    conflict_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    
-    # Workspace identification
-    workspace = Column(String(64), nullable=False, index=True)
-    
-    # Entity identification
-    entity_type = Column(String(100), nullable=False, index=True)
-    entity_id = Column(String(255), nullable=False, index=True)
-    
-    # Conflict versions (JSONB for flexibility)
-    local_version = Column(JSONB, nullable=False)
-    remote_version = Column(JSONB, nullable=False)
-    
-    # Timestamps
-    local_timestamp = Column(DateTime, nullable=False, index=True)
-    remote_timestamp = Column(DateTime, nullable=False, index=True)
-    detected_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    
-    # Resolution
-    resolution_strategy = Column(String(50), nullable=True)  # operational_transform, last_write_wins, etc.
-    resolved_version = Column(JSONB, nullable=True)
-    resolved_at = Column(DateTime, nullable=True, index=True)
-    resolved_by = Column(String(255), nullable=True)  # system or user identifier
-    
-    # Status
-    status = Column(
-        String(20), 
-        nullable=False, 
-        default="unresolved", 
-        index=True
-    )  # unresolved, resolved, manual_review
-    
-    # Metadata
-    conflict_metadata = Column("metadata", JSONB, nullable=True)
-    correlation_id = Column(String(255), nullable=True, index=True)
-    
-    # Composite indexes for efficient querying
-    __table_args__ = (
-        Index("ix_sync_conflicts_workspace_status", "workspace", "status"),
-        Index("ix_sync_conflicts_workspace_detected", "workspace", "detected_at"),
-        Index("ix_sync_conflicts_entity", "entity_type", "entity_id"),
-    )
-    
-    def __repr__(self):
-        return (
-            f"<SyncConflict(conflict_id={self.conflict_id}, "
-            f"workspace={self.workspace}, entity={self.entity_type}:{self.entity_id}, "
-            f"status={self.status})>"
-        )
+    __tablename__ = "enterprise_runtime_config"
 
-
-class SyncMetadata(Base):
-    """
-    Sync metadata for workspace synchronization state.
-    
-    Stores sync configuration and state for each workspace, including
-    last sync timestamp, remote URL, and sync statistics.
-    
-    """
-    
-    __tablename__ = "sync_metadata"
-    
-    # Primary key (workspace name)
-    workspace = Column(String(64), primary_key=True)
-    
-    # Remote configuration
-    remote_url = Column(String(2048), nullable=True)
-    remote_version = Column(String(50), nullable=True)
-    
-    # Sync state
-    sync_enabled = Column(Boolean, nullable=False, default=False, index=True)
-    last_sync_at = Column(DateTime, nullable=True, index=True)
-    last_sync_direction = Column(String(20), nullable=True)  # push, pull, bidirectional
-    last_sync_status = Column(String(20), nullable=True)  # success, failed, partial
-    
-    # Statistics
-    total_operations_synced = Column(BigInteger, nullable=False, default=0)
-    total_conflicts_detected = Column(BigInteger, nullable=False, default=0)
-    total_conflicts_resolved = Column(BigInteger, nullable=False, default=0)
-    
-    # Error tracking
-    last_error = Column(String(2000), nullable=True)
-    last_error_at = Column(DateTime, nullable=True)
-    consecutive_failures = Column(Integer, nullable=False, default=0)
-    
-    # Auto-sync configuration
-    auto_sync_enabled = Column(Boolean, nullable=False, default=False)
-    auto_sync_interval_seconds = Column(Integer, nullable=True)
-    next_auto_sync_at = Column(DateTime, nullable=True, index=True)
-    
-    # Timestamps
+    runtime_key = Column(String(64), primary_key=True)
+    config_data = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Metadata
-    sync_metadata_data = Column("metadata", JSONB, nullable=True)
-    
+
     def __repr__(self):
-        return (
-            f"<SyncMetadata(workspace={self.workspace}, "
-            f"sync_enabled={self.sync_enabled}, "
-            f"last_sync={self.last_sync_at})>"
-        )
+        return f"<EnterpriseRuntimeConfig(runtime_key={self.runtime_key})>"

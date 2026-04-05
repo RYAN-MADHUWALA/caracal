@@ -183,7 +183,12 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(numeric_level)
     
-    # Clear existing handlers to avoid duplicates
+    # Close and clear existing handlers to avoid duplicates and file leaks.
+    for handler in list(root_logger.handlers):
+        try:
+            handler.close()
+        except Exception:
+            pass
     root_logger.handlers.clear()
     
     # Configure file handler if specified
@@ -216,14 +221,15 @@ def setup_logging(
         redact_sensitive_fields if redact_sensitive else (lambda _l, _m, e: e),
         # Add stack info for exceptions
         structlog.processors.StackInfoRenderer(),
-        # Format exceptions
-        structlog.processors.format_exc_info,
     ]
     
     # Add appropriate renderer based on format
     if json_format:
         # JSON format for production
-        processors.append(structlog.processors.JSONRenderer())
+        processors.extend([
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ])
     else:
         # Human-readable format for development
         processors.extend([
