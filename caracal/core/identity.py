@@ -21,7 +21,7 @@ from caracal.db.models import (
 from caracal.core.principal_keys import (
     generate_and_store_principal_keypair,
     principal_has_key_custody,
-    resolve_principal_private_key,
+    resolve_principal_key_reference,
 )
 from caracal.core.lifecycle import PrincipalLifecycleStateMachine
 from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
@@ -388,15 +388,14 @@ class PrincipalRegistry:
         self.session.commit()
         return token
 
-    def resolve_private_key(self, principal_id: str) -> str:
-        """Resolve a principal private key from custody records."""
+    def get_signing_key_reference(self, principal_id: str) -> str:
+        """Resolve the vault-backed signing key reference for a principal."""
         principal_uuid = UUID(str(principal_id))
         row = self.session.query(Principal).filter_by(principal_id=principal_uuid).first()
         if row is None:
             raise PrincipalNotFoundError(f"Principal {principal_id} not found")
-        return resolve_principal_private_key(
+        return resolve_principal_key_reference(
             principal_uuid,
             db_session=self.session,
             principal_metadata=row.principal_metadata,
         )
-

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, Iterable
 
 import jwt
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+
+from caracal.core.principal_keys import parse_vault_key_reference
+from caracal.core.vault import gateway_context, get_vault
 
 
 class SigningServiceError(RuntimeError):
@@ -35,29 +34,29 @@ class SigningService:
     def __init__(self, principal_registry: Any) -> None:
         self._principal_registry = principal_registry
 
-    def _resolve_private_key(self, principal_id: str):
-        if not hasattr(self._principal_registry, "resolve_private_key"):
-            raise SigningServiceKeyError("Principal registry does not implement resolve_private_key")
+    def _resolve_signing_key_reference(self, principal_id: str) -> tuple[str, str, str]:
+        if not hasattr(self._principal_registry, "get_signing_key_reference"):
+            raise SigningServiceKeyError(
+                "Principal registry does not implement get_signing_key_reference"
+            )
 
         try:
-            private_key_pem = self._principal_registry.resolve_private_key(str(principal_id))
+            key_reference = self._principal_registry.get_signing_key_reference(str(principal_id))
         except Exception as exc:
             raise SigningServiceKeyError(
-                f"Failed to resolve private key for principal '{principal_id}': {exc}"
+                f"Failed to resolve signing key reference for principal '{principal_id}': {exc}"
             ) from exc
 
-        if not private_key_pem:
-            raise SigningServiceKeyError(f"Principal '{principal_id}' has no resolvable private key")
+        if not key_reference:
+            raise SigningServiceKeyError(
+                f"Principal '{principal_id}' has no resolvable signing key reference"
+            )
 
         try:
-            return serialization.load_pem_private_key(
-                private_key_pem.encode() if isinstance(private_key_pem, str) else private_key_pem,
-                password=None,
-                backend=default_backend(),
-            )
+            return parse_vault_key_reference(str(key_reference))
         except Exception as exc:
             raise SigningServiceKeyError(
-                f"Failed to load private key for principal '{principal_id}': {exc}"
+                f"Failed to parse signing key reference for principal '{principal_id}': {exc}"
             ) from exc
 
     def _resolve_public_key(self, principal_id: str):
@@ -91,10 +90,21 @@ class SigningService:
         headers: dict[str, Any],
         algorithm: str = "ES256",
     ) -> str:
-        private_key = self._resolve_private_key(principal_id)
         try:
-            return jwt.encode(payload, private_key, algorithm=algorithm, headers=headers)
+            org_id, env_id, secret_name = self._resolve_signing_key_reference(principal_id)
+            with gateway_context():
+                return get_vault().sign_jwt(
+                    org_id=org_id,
+                    env_id=env_id,
+                    name=secret_name,
+                    payload=payload,
+                    headers=headers,
+                    algorithm=algorithm,
+                    actor=f"signing-service:{principal_id}",
+                )
         except Exception as exc:
+            if isinstance(exc, SigningServiceError):
+                raise
             raise SigningServiceError(
                 f"Failed to sign JWT for principal '{principal_id}': {exc}"
             ) from exc
@@ -116,22 +126,19 @@ class SigningService:
         if not payload:
             raise SigningServiceError("payload cannot be empty")
 
-        private_key = self._resolve_private_key(principal_id)
-        if not isinstance(private_key, ec.EllipticCurvePrivateKey):
-            raise SigningServiceKeyError(
-                f"Principal '{principal_id}' private key is not ECDSA"
-            )
-        if not isinstance(private_key.curve, ec.SECP256R1):
-            raise SigningServiceKeyError(
-                f"Principal '{principal_id}' private key is not P-256"
-            )
-
         try:
-            canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            message_hash = hashlib.sha256(canonical_json.encode()).digest()
-            signature = private_key.sign(message_hash, ec.ECDSA(hashes.SHA256()))
-            return signature.hex()
+            org_id, env_id, secret_name = self._resolve_signing_key_reference(principal_id)
+            with gateway_context():
+                return get_vault().sign_canonical_payload(
+                    org_id=org_id,
+                    env_id=env_id,
+                    name=secret_name,
+                    payload=payload,
+                    actor=f"signing-service:{principal_id}",
+                )
         except Exception as exc:
+            if isinstance(exc, SigningServiceError):
+                raise
             raise SigningServiceError(
                 f"Failed to sign canonical payload for principal '{principal_id}': {exc}"
             ) from exc
