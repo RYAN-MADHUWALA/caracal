@@ -846,9 +846,14 @@ class MigrationManager:
                 }
 
             if not dry_run:
-                metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = custody_map
+                latest_metadata = self._load_workspace_metadata(ws)
+                latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+                if not isinstance(latest_custody_map, dict):
+                    latest_custody_map = {}
+                latest_custody_map.update(custody_map)
+                latest_metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = latest_custody_map
                 self._append_migration_audit(
-                    metadata,
+                    latest_metadata,
                     event_type="oss_to_enterprise",
                     workspace=ws,
                     payload={
@@ -857,7 +862,7 @@ class MigrationManager:
                         "gateway_url": gateway_url,
                     },
                 )
-                self._save_workspace_metadata(ws, metadata)
+                self._save_workspace_metadata(ws, latest_metadata)
 
         return {
             "direction": "oss_to_enterprise",
@@ -956,9 +961,14 @@ class MigrationManager:
                 }
 
             if not dry_run:
-                metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = custody_map
+                latest_metadata = self._load_workspace_metadata(ws)
+                latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+                if not isinstance(latest_custody_map, dict):
+                    latest_custody_map = {}
+                latest_custody_map.update(custody_map)
+                latest_metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = latest_custody_map
                 self._append_migration_audit(
-                    metadata,
+                    latest_metadata,
                     event_type="enterprise_to_oss",
                     workspace=ws,
                     payload={
@@ -967,7 +977,7 @@ class MigrationManager:
                         "imported_from_export": [k for k in selected if k in normalized_exports],
                     },
                 )
-                self._save_workspace_metadata(ws, metadata)
+                self._save_workspace_metadata(ws, latest_metadata)
 
         if deactivate_license and not dry_run:
             try:
