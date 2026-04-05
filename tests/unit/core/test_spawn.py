@@ -19,10 +19,13 @@ class TestSpawnManager:
         self.mock_session.begin_nested.return_value = nullcontext()
         self.mock_mandate_manager = Mock()
         self.mock_ledger_writer = Mock()
+        self.mock_nonce_manager = Mock()
+        self.mock_nonce_manager.issue_nonce.return_value = SimpleNamespace(nonce="nonce-123")
         self.manager = SpawnManager(
             db_session=self.mock_session,
             mandate_manager=self.mock_mandate_manager,
             ledger_writer=self.mock_ledger_writer,
+            attestation_nonce_manager=self.mock_nonce_manager,
         )
 
     def test_spawn_returns_existing_idempotent_result(self) -> None:
@@ -42,9 +45,13 @@ class TestSpawnManager:
             idempotency_key="abc-123",
         )
 
-        assert result is existing
+        assert result.principal_id == existing.principal_id
+        assert result.mandate_id == existing.mandate_id
+        assert result.idempotent_replay is True
+        assert result.attestation_nonce == "nonce-123"
         self.mock_session.query.assert_not_called()
         self.mock_mandate_manager.issue_mandate.assert_not_called()
+        self.mock_nonce_manager.issue_nonce.assert_called_once_with(existing.principal_id)
 
     def test_spawn_raises_when_issuer_missing(self) -> None:
         issuer_id = uuid4()
@@ -126,9 +133,11 @@ class TestSpawnManager:
         assert result.mandate_id == str(mandate_id)
         assert result.idempotent_replay is False
         assert result.attestation_bootstrap_artifact == f"attest-bootstrap:{principal_id}"
+        assert result.attestation_nonce == "nonce-123"
 
         self.mock_mandate_manager.issue_mandate.assert_called_once()
         self.mock_ledger_writer.append_event.assert_called_once()
+        self.mock_nonce_manager.issue_nonce.assert_called_once_with(str(principal_id))
 
     @staticmethod
     def _build_spawn_result(idempotent_replay: bool):
@@ -138,5 +147,6 @@ class TestSpawnManager:
             principal_kind="worker",
             mandate_id=str(uuid4()),
             attestation_bootstrap_artifact="attest-bootstrap:existing",
+            attestation_nonce="",
             idempotent_replay=idempotent_replay,
         )
