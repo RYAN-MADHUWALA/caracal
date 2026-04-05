@@ -565,6 +565,15 @@ def test_python_sdk_sync_uses_api_sync_path_only() -> None:
 
 
 @pytest.mark.unit
+def test_async_python_sdk_has_no_legacy_sync_metadata_helper() -> None:
+    async_authority_client = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "async_authority_client.py"
+    payload = async_authority_client.read_text(encoding="utf-8")
+
+    assert "def sync_metadata(" not in payload
+    assert "metadata sync" not in payload.lower()
+
+
+@pytest.mark.unit
 def test_sdk_sync_extension_stubs_are_removed() -> None:
     python_sync_stub = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "enterprise" / "sync.py"
     node_sync_stub = _REPO_ROOT / "sdk" / "node-sdk" / "src" / "enterprise" / "sync.ts"
@@ -633,6 +642,42 @@ def test_sdk_sources_have_no_legacy_security_or_sync_markers() -> None:
                 offenders.append(str(path.relative_to(_REPO_ROOT)))
 
     assert offenders == []
+
+
+@pytest.mark.unit
+def test_enterprise_frontend_secrets_surface_has_no_removed_migration_or_aws_backend_copy() -> None:
+    secrets_route = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "src" / "caracal_enterprise" / "routes" / "secrets.py"
+    secrets_page = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "secrets" / "page.tsx"
+    frontend_api = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "lib" / "api.ts"
+
+    route_payload = secrets_route.read_text(encoding="utf-8")
+    page_payload = secrets_page.read_text(encoding="utf-8")
+    api_payload = frontend_api.read_text(encoding="utf-8")
+
+    assert "migration_available" not in route_payload
+    assert '@router.post("/migration-plan")' not in route_payload
+    assert '@router.post("/migrate")' not in route_payload
+    assert '@router.get("/migration-status/{migration_id}")' not in route_payload
+    assert '@router.post("/downgrade-plan")' not in route_payload
+    assert "MigrationWizard" not in page_payload
+    assert '"migration"' not in page_payload
+    assert "AWS Secrets Manager" not in page_payload
+    assert "aws_secrets_manager" not in page_payload
+    assert "migration-plan" not in api_payload
+    assert "migration-status" not in api_payload
+    assert "downgrade-plan" not in api_payload
+
+
+@pytest.mark.unit
+def test_enterprise_frontend_settings_copy_uses_hardcut_enterprise_commands_only() -> None:
+    settings_page = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "settings" / "page.tsx"
+    payload = settings_page.read_text(encoding="utf-8")
+
+    assert "caracal enterprise login" in payload
+    assert "caracal enterprise sync" in payload
+    assert "generate-sync-key" not in payload
+    assert "auto-sync" not in payload
+    assert "Sync API Key" not in payload
 
 
 @pytest.mark.unit
