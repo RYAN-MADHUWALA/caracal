@@ -316,6 +316,31 @@ def test_db_models_have_no_legacy_sync_state_orm_classes() -> None:
 
 
 @pytest.mark.unit
+def test_runtime_code_has_no_legacy_sync_state_table_markers() -> None:
+    source_root = _REPO_ROOT / "caracal"
+    allowed_files = {
+        "caracal/db/schema_version.py",
+    }
+    allowed_prefixes = (
+        "caracal/db/migrations/versions/",
+    )
+    offenders: list[str] = []
+
+    pattern = re.compile(r"\bsync_(operations|conflicts|metadata)\b")
+
+    for py_file in source_root.rglob("*.py"):
+        relative_path = py_file.relative_to(_REPO_ROOT).as_posix()
+        if relative_path in allowed_files or relative_path.startswith(allowed_prefixes):
+            continue
+
+        payload = py_file.read_text(encoding="utf-8")
+        if pattern.search(payload):
+            offenders.append(relative_path)
+
+    assert offenders == []
+
+
+@pytest.mark.unit
 def test_legacy_sync_modules_are_removed() -> None:
     sync_engine_file = _REPO_ROOT / "caracal" / "deployment" / "sync_engine.py"
     sync_state_file = _REPO_ROOT / "caracal" / "deployment" / "sync_state.py"
