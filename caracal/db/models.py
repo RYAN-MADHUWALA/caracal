@@ -75,8 +75,7 @@ class PrincipalAttestationStatus(str, Enum):
 class PrincipalKeyBackend(str, Enum):
     """Supported custody backends for principal private keys."""
 
-    LOCAL = "local"
-    AWS_KMS = "aws_kms"
+    VAULT = "vault"
 
 
 class LedgerEvent(Base):
@@ -371,50 +370,28 @@ class PrincipalKeyCustody(Base):
     rotated_at = Column(DateTime, nullable=True)
 
     principal = relationship("Principal", back_populates="key_custody")
-    local_details = relationship(
-        "PrincipalKeyCustodyLocal",
-        back_populates="custody",
-        cascade="all, delete-orphan",
-        uselist=False,
-    )
-    aws_kms_details = relationship(
-        "PrincipalKeyCustodyAWSKMS",
+    vault_details = relationship(
+        "PrincipalKeyCustodyVault",
         back_populates="custody",
         cascade="all, delete-orphan",
         uselist=False,
     )
 
 
-class PrincipalKeyCustodyLocal(Base):
-    """Local filesystem custody details."""
+class PrincipalKeyCustodyVault(Base):
+    """Vault custody details for principal signing keys."""
 
-    __tablename__ = "principal_key_custody_local"
-
-    custody_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("principal_key_custody.custody_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    private_key_ref = Column(String(2000), nullable=False)
-
-    custody = relationship("PrincipalKeyCustody", back_populates="local_details")
-
-
-class PrincipalKeyCustodyAWSKMS(Base):
-    """AWS KMS custody details."""
-
-    __tablename__ = "principal_key_custody_aws_kms"
+    __tablename__ = "principal_key_custody_vault"
 
     custody_id = Column(
         PG_UUID(as_uuid=True),
         ForeignKey("principal_key_custody.custody_id", ondelete="CASCADE"),
         primary_key=True,
     )
-    kms_key_id = Column(String(512), nullable=False)
-    kms_region = Column(String(128), nullable=True)
-    ciphertext_b64 = Column(String(8192), nullable=False)
+    vault_key_ref = Column(String(2000), nullable=False)
+    vault_namespace = Column(String(255), nullable=True)
 
-    custody = relationship("PrincipalKeyCustody", back_populates="aws_kms_details")
+    custody = relationship("PrincipalKeyCustody", back_populates="vault_details")
 
 
 class PrincipalWorkloadBinding(Base):

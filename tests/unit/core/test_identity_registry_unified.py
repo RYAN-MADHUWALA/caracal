@@ -37,7 +37,7 @@ def test_register_principal_accepts_explicit_principal_id() -> None:
     identity_module.generate_and_store_principal_keypair = Mock(
         return_value=SimpleNamespace(
             public_key_pem="pub-key",
-            storage=SimpleNamespace(metadata={"private_key_ref": "/tmp/key.pem"}),
+            storage=SimpleNamespace(metadata={"vault_key_ref": "vault://caracal/runtime/principal-keys/test"}),
         )
     )
     try:
@@ -57,7 +57,7 @@ def test_register_principal_accepts_explicit_principal_id() -> None:
     assert str(added_rows[0].principal_id) == str(explicit_id)
     assert identity.principal_id == str(explicit_id)
     assert identity.public_key == "pub-key"
-    assert identity.metadata.get("private_key_ref") == "/tmp/key.pem"
+    assert identity.metadata.get("vault_key_ref") == "vault://caracal/runtime/principal-keys/test"
 
 
 @pytest.mark.unit
@@ -91,7 +91,7 @@ def test_ensure_signing_keys_generates_when_missing() -> None:
     identity_module.generate_and_store_principal_keypair = Mock(
         return_value=SimpleNamespace(
             public_key_pem="rotated-pub",
-            storage=SimpleNamespace(metadata={"private_key_ref": "/tmp/new-key.pem"}),
+            storage=SimpleNamespace(metadata={"vault_key_ref": "vault://caracal/runtime/principal-keys/new"}),
         )
     )
     try:
@@ -102,7 +102,7 @@ def test_ensure_signing_keys_generates_when_missing() -> None:
         identity_module.generate_and_store_principal_keypair = original_generate
 
     assert row.public_key_pem == "rotated-pub"
-    assert row.principal_metadata.get("private_key_ref") == "/tmp/new-key.pem"
+    assert row.principal_metadata.get("vault_key_ref") == "vault://caracal/runtime/principal-keys/new"
     assert identity.public_key == "rotated-pub"
     session.commit.assert_called()
 
@@ -136,7 +136,7 @@ def test_rotate_signing_keys_tracks_history_and_updates_metadata() -> None:
     identity_module.generate_and_store_principal_keypair = Mock(
         return_value=SimpleNamespace(
             public_key_pem="new-pub",
-            storage=SimpleNamespace(metadata={"private_key_ref": "/tmp/rotated-key.pem"}),
+            storage=SimpleNamespace(metadata={"vault_key_ref": "vault://caracal/runtime/principal-keys/rotated"}),
         )
     )
     try:
@@ -153,7 +153,7 @@ def test_rotate_signing_keys_tracks_history_and_updates_metadata() -> None:
     assert isinstance(history, list)
     assert history[-1]["old_public_key"] == "old-pub"
     assert history[-1]["reason"] == "Compromised credential"
-    assert row.principal_metadata.get("private_key_ref") == "/tmp/rotated-key.pem"
+    assert row.principal_metadata.get("vault_key_ref") == "vault://caracal/runtime/principal-keys/rotated"
     assert row.principal_metadata.get("key_rotated_by") == "admin-1"
     assert row.public_key_pem == "new-pub"
     assert identity.public_key == "new-pub"
