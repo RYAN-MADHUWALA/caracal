@@ -204,9 +204,32 @@ def test_gateway_features_resolve_gateway_endpoint_through_edition_adapter() -> 
     payload = gateway_features_file.read_text(encoding="utf-8")
 
     assert "get_deployment_edition_adapter" in payload
+    assert "resolve_gateway_feature_overrides" in payload
+    assert "load_enterprise_config" not in payload
     assert "CARACAL_ENTERPRISE_URL" not in payload
     assert "CARACAL_GATEWAY_ENDPOINT" not in payload
     assert "CARACAL_GATEWAY_URL" not in payload
+
+
+@pytest.mark.unit
+def test_core_and_runtime_modules_do_not_import_enterprise_license_directly() -> None:
+    source_roots = (
+        _REPO_ROOT / "caracal" / "core",
+        _REPO_ROOT / "caracal" / "runtime",
+    )
+    offenders: list[str] = []
+    forbidden_markers = (
+        "from caracal.enterprise.license import",
+        "import caracal.enterprise.license",
+    )
+
+    for source_root in source_roots:
+        for py_file in source_root.rglob("*.py"):
+            payload = py_file.read_text(encoding="utf-8")
+            if any(marker in payload for marker in forbidden_markers):
+                offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
 
 
 @pytest.mark.unit

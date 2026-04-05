@@ -148,3 +148,51 @@ def test_adapter_capability_helpers_reflect_edition() -> None:
     assert enterprise_adapter.display_name() == "Enterprise"
     assert enterprise_adapter.uses_gateway_execution() is True
     assert enterprise_adapter.allows_local_provider_management() is False
+
+
+@pytest.mark.unit
+def test_resolve_gateway_feature_overrides_is_noop_for_opensource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.OPENSOURCE))
+
+    def _raise_if_called() -> dict[str, object]:
+        raise AssertionError("enterprise config should not be loaded in OSS mode")
+
+    monkeypatch.setattr("caracal.enterprise.license.load_enterprise_config", _raise_if_called)
+
+    assert adapter.resolve_gateway_feature_overrides() == {}
+
+
+@pytest.mark.unit
+def test_resolve_gateway_feature_overrides_normalizes_enterprise_gateway_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))
+
+    monkeypatch.setattr(
+        "caracal.enterprise.license.load_enterprise_config",
+        lambda: {
+            "gateway": {
+                "enabled": True,
+                "endpoint": "https://enterprise.example/gateway/",
+                "api_key": "sync-key-123",
+                "fail_closed": True,
+                "use_provider_registry": True,
+                "mandate_cache_ttl_seconds": 42,
+                "revocation_sync_interval_seconds": 7,
+                "deployment_type": "managed",
+            }
+        },
+    )
+
+    overrides = adapter.resolve_gateway_feature_overrides()
+
+    assert overrides["enabled"] is True
+    assert overrides["endpoint"] == "https://enterprise.example/gateway"
+    assert overrides["api_key"] == "sync-key-123"
+    assert overrides["fail_closed"] is True
+    assert overrides["use_provider_registry"] is True
+    assert overrides["mandate_cache_ttl_seconds"] == 42
+    assert overrides["revocation_sync_interval_seconds"] == 7
+    assert overrides["deployment_type"] == "managed"
