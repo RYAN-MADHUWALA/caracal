@@ -398,6 +398,7 @@ def test_principal_key_helpers_have_no_raw_private_key_resolution_api() -> None:
 
     assert "def resolve_principal_private_key(" not in payload
     assert "def store_principal_private_key(" not in payload
+    assert "def backup_local_private_key(" not in payload
     assert "ec.generate_private_key(" not in payload
     assert "private_bytes(" not in payload
 
@@ -736,3 +737,53 @@ def test_sdk_clients_resolve_ais_routing_when_socket_path_is_configured() -> Non
     assert "resolve_sdk_base_url" in combined_python
     assert "CARACAL_AIS_UNIX_SOCKET_PATH" in (_REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "ais.py").read_text(encoding="utf-8")
     assert "resolveSdkBaseUrl" in node_payload
+
+
+@pytest.mark.unit
+def test_runtime_identity_layers_do_not_require_sdk_runtime_imports() -> None:
+    runtime_entrypoints = _REPO_ROOT / "caracal" / "runtime" / "entrypoints.py"
+    identity_server = _REPO_ROOT / "caracal" / "identity" / "ais_server.py"
+    identity_service = _REPO_ROOT / "caracal" / "identity" / "service.py"
+
+    combined = "\n".join(
+        [
+            runtime_entrypoints.read_text(encoding="utf-8"),
+            identity_server.read_text(encoding="utf-8"),
+            identity_service.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "caracal_sdk" not in combined
+    assert "sdk/python-sdk" not in combined
+    assert "sdk/node-sdk" not in combined
+
+
+@pytest.mark.unit
+def test_ais_runtime_binding_transport_and_refresh_contracts_are_present() -> None:
+    runtime_entrypoints = _REPO_ROOT / "caracal" / "runtime" / "entrypoints.py"
+    ais_server = _REPO_ROOT / "caracal" / "identity" / "ais_server.py"
+
+    entrypoints_payload = runtime_entrypoints.read_text(encoding="utf-8")
+    ais_payload = ais_server.read_text(encoding="utf-8")
+
+    assert "startup_principal = _consume_ais_startup_attestation()" in entrypoints_payload
+    assert "_complete_ais_startup_attestation(" in entrypoints_payload
+    assert "validate_ais_bind_host" in ais_payload
+    assert "@router.post(\"/refresh\")" in ais_payload
+
+
+@pytest.mark.unit
+def test_ais_runtime_has_no_credential_envelope_disk_persistence_markers() -> None:
+    runtime_entrypoints = _REPO_ROOT / "caracal" / "runtime" / "entrypoints.py"
+    ais_server = _REPO_ROOT / "caracal" / "identity" / "ais_server.py"
+
+    combined = "\n".join(
+        [
+            runtime_entrypoints.read_text(encoding="utf-8").lower(),
+            ais_server.read_text(encoding="utf-8").lower(),
+        ]
+    )
+
+    assert "credential_envelope_path" not in combined
+    assert "credential-envelope" not in combined
+    assert "credential_envelope.json" not in combined
