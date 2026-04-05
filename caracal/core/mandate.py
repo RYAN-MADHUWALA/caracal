@@ -15,10 +15,9 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from caracal.core.crypto import sign_mandate
 from caracal.core.identity import PrincipalRegistry
 from caracal.core.intent import Intent
-from caracal.core.principal_keys import PrincipalKeyStorageError
+from caracal.core.signing_service import SigningService, SigningServiceError, SigningServiceKeyError
 from caracal.db.models import ExecutionMandate, AuthorityPolicy, Principal
 from caracal.logging_config import get_logger
 
@@ -41,7 +40,15 @@ class MandateManager:
     
     """
     
-    def __init__(self, db_session: Session, ledger_writer=None, mandate_cache=None, rate_limiter=None, delegation_graph=None):
+    def __init__(
+        self,
+        db_session: Session,
+        ledger_writer=None,
+        mandate_cache=None,
+        rate_limiter=None,
+        delegation_graph=None,
+        signing_service: Optional[SigningService] = None,
+    ):
         """
         Initialize MandateManager.
         
@@ -57,6 +64,7 @@ class MandateManager:
         self.mandate_cache = mandate_cache
         self.rate_limiter = rate_limiter
         self.delegation_graph = delegation_graph
+        self._signing_service = signing_service or SigningService(PrincipalRegistry(db_session))
         logger.info(
             f"MandateManager initialized (cache_enabled={mandate_cache is not None}, "
             f"rate_limiter_enabled={rate_limiter is not None}, "
@@ -367,17 +375,6 @@ class MandateManager:
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-        try:
-            issuer_private_key = PrincipalRegistry(self.db_session).resolve_private_key(
-                str(issuer_principal.principal_id)
-            )
-        except PrincipalKeyStorageError as exc:
-            error_msg = (
-                f"Issuer principal {issuer_id} has no resolvable private key metadata"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from exc
-        
         # Create mandate data for signing
         mandate_data = {
             "mandate_id": str(mandate_id),
@@ -391,10 +388,17 @@ class MandateManager:
             "intent_hash": intent_hash
         }
         
-        # Sign mandate with issuer's private key
+        # Sign mandate via centralized signing service; mandate manager never handles raw private keys.
         try:
-            signature = sign_mandate(mandate_data, issuer_private_key)
-        except Exception as e:
+            signature = self._signing_service.sign_canonical_payload_for_principal(
+                principal_id=str(issuer_principal.principal_id),
+                payload=mandate_data,
+            )
+        except SigningServiceKeyError as e:
+            error_msg = f"Issuer principal {issuer_id} has no resolvable private key metadata"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+        except SigningServiceError as e:
             error_msg = f"Failed to sign mandate: {e}"
             logger.error(error_msg, exc_info=True)
             raise RuntimeError(error_msg)
