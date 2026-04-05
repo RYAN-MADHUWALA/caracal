@@ -94,6 +94,28 @@ def test_core_crypto_module_has_no_private_key_sign_helpers() -> None:
 
 
 @pytest.mark.unit
+def test_session_manager_signing_routes_only_through_signer_abstraction() -> None:
+    session_manager_file = _REPO_ROOT / "caracal" / "core" / "session_manager.py"
+    payload = session_manager_file.read_text(encoding="utf-8")
+
+    assert "self._token_signer.sign_token(" in payload
+    assert "self._signing_key" not in payload
+    assert "jwt.encode(" not in payload
+
+
+@pytest.mark.unit
+def test_vault_module_has_no_legacy_private_key_compatibility_helpers() -> None:
+    vault_file = _REPO_ROOT / "caracal" / "core" / "vault.py"
+    payload = vault_file.read_text(encoding="utf-8")
+
+    assert "MasterKeyProvider" not in payload
+    assert "CARACAL_VAULT_MEK_SECRET" not in payload
+    assert "_load_private_key(" not in payload
+    assert "private_bytes(" not in payload
+    assert "load_pem_private_key" not in payload
+
+
+@pytest.mark.unit
 def test_runtime_code_has_no_core_crypto_sign_helper_imports() -> None:
     source_root = _REPO_ROOT / "caracal"
     offenders: list[str] = []

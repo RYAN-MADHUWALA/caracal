@@ -301,6 +301,46 @@ def test_run_runtime_mcp_bootstraps_vault_refs_before_starting_ais(
 
 
 @pytest.mark.unit
+def test_create_ais_session_manager_uses_vault_reference_signer_without_loading_private_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved_refs: list[str] = []
+
+    monkeypatch.setenv(entrypoints.AIS_SESSION_SIGNING_KEY_REF_ENV, "keys/session-private")
+    monkeypatch.setenv(entrypoints.AIS_SESSION_VERIFY_KEY_REF_ENV, "keys/session-public")
+    monkeypatch.setenv(entrypoints.AIS_SESSION_CAVEAT_MODE_ENV, "jwt")
+    monkeypatch.delenv(entrypoints.AIS_SESSION_CAVEAT_HMAC_KEY_ENV, raising=False)
+    monkeypatch.setattr(entrypoints, "_create_ais_db_manager", lambda: object())
+
+    def _resolve_secret(secret_ref: str) -> str:
+        resolved_refs.append(secret_ref)
+        return "verify-key-pem"
+
+    monkeypatch.setattr(entrypoints, "_resolve_ais_vault_secret", _resolve_secret)
+
+    manager = entrypoints._create_ais_session_manager()
+
+    assert resolved_refs == ["keys/session-public"]
+    assert manager._algorithm == "RS256"
+    assert manager._token_signer.__class__.__name__ == "VaultReferenceJwtSigner"
+    assert manager._token_signer._key_name == "keys/session-private"
+
+
+@pytest.mark.unit
+def test_create_ais_session_manager_requires_explicit_caveat_hmac_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(entrypoints.AIS_SESSION_SIGNING_KEY_REF_ENV, "keys/session-private")
+    monkeypatch.setenv(entrypoints.AIS_SESSION_VERIFY_KEY_REF_ENV, "keys/session-public")
+    monkeypatch.setenv(entrypoints.AIS_SESSION_CAVEAT_MODE_ENV, "caveat_chain")
+    monkeypatch.delenv(entrypoints.AIS_SESSION_CAVEAT_HMAC_KEY_ENV, raising=False)
+    monkeypatch.setattr(entrypoints, "_resolve_ais_vault_secret", lambda _ref: "verify-key-pem")
+
+    with pytest.raises(RuntimeError, match=entrypoints.AIS_SESSION_CAVEAT_HMAC_KEY_ENV):
+        entrypoints._create_ais_session_manager()
+
+
+@pytest.mark.unit
 def test_host_up_runs_preflight_with_resolved_compose(monkeypatch: pytest.MonkeyPatch) -> None:
     compose_file = Path("/tmp/docker-compose.image.yml")
     captured: dict[str, object] = {}
