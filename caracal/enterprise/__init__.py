@@ -11,7 +11,7 @@ Modules kept here (real implementation logic used by TUI/gateway):
 
 Extension stubs (moved to ``caracal_sdk.enterprise``):
     - ComplianceExtension, AnalyticsExtension, WorkflowsExtension,
-      SSOExtension, LicenseExtension, SyncExtension
+    SSOExtension, LicenseExtension
 
 New code should import extensions from ``caracal_sdk.enterprise.*``.
 """
@@ -39,7 +39,6 @@ def __getattr__(name: str):
         "WorkflowsExtension": "caracal_sdk.enterprise.workflows",
         "SSOExtension": "caracal_sdk.enterprise.sso",
         "LicenseExtension": "caracal_sdk.enterprise.license",
-        "SyncExtension": "caracal_sdk.enterprise.sync",
     }
     if name in _redirected:
         import importlib
@@ -69,5 +68,4 @@ __all__ = [
     "WorkflowsExtension",
     "SSOExtension",
     "LicenseExtension",
-    "SyncExtension",
 ]
