@@ -116,7 +116,6 @@ class EditionManager:
 
         Detection logic:
         - If gateway URL is configured, assume Enterprise Edition
-        - If any workspace has sync enabled with a remote URL, assume Enterprise Edition
         - If enterprise license is connected/valid, assume Enterprise Edition
         - Otherwise, default to Open Source Edition
 
@@ -144,27 +143,6 @@ class EditionManager:
                 env_var="CARACAL_ENTERPRISE_URL"
             )
             return Edition.ENTERPRISE
-
-        # Check for sync-enabled workspaces with configured remote URL.
-        try:
-            from caracal.deployment.config_manager import ConfigManager
-
-            cfg_mgr = ConfigManager()
-            for workspace in cfg_mgr.list_workspaces():
-                try:
-                    ws_config = cfg_mgr.get_workspace_config(workspace)
-                except Exception:
-                    continue
-
-                if ws_config.sync_enabled and ws_config.sync_url:
-                    logger.debug(
-                        "edition_detected_workspace_sync",
-                        workspace=workspace,
-                        sync_url=ws_config.sync_url,
-                    )
-                    return Edition.ENTERPRISE
-        except Exception:
-            logger.debug("edition_workspace_sync_detection_failed", exc_info=True)
 
         # Check persisted enterprise license connectivity.
         try:
