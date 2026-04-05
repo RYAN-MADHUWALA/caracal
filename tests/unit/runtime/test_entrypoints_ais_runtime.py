@@ -121,6 +121,17 @@ class _FakeDbManager:
         yield object()
 
 
+@pytest.mark.unit
+def test_run_ais_server_fails_when_startup_license_gate_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("enterprise license invalid")
+
+    monkeypatch.setattr("caracal.deployment.edition_adapter.get_deployment_edition_adapter", _raise)
+
+    assert entrypoints._run_ais_server() == 1
+
+
 class _FakePrincipalQuery:
     def __init__(self, principal: object | None) -> None:
         self._principal = principal
