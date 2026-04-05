@@ -153,3 +153,35 @@ def test_resolve_revocation_webhook_target_builds_default_sync_path(
 
     assert webhook_url == "https://enterprise.example/api/sync/revocation-events"
     assert sync_api_key == "sync-key-2"
+
+
+@pytest.mark.unit
+def test_license_validation_fails_closed_when_api_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(enterprise_license, "_resolve_api_url", lambda override=None: "")
+
+    validator = enterprise_license.EnterpriseLicenseValidator()
+    result = validator.validate_license("license-key-1")
+
+    assert result.valid is False
+    assert "requires a live Enterprise API" in result.message
+
+
+@pytest.mark.unit
+def test_license_validation_fails_closed_when_api_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(enterprise_license, "_resolve_api_url", lambda override=None: "https://enterprise.example")
+    monkeypatch.setattr(
+        enterprise_license,
+        "_candidate_api_urls",
+        lambda base_url: [base_url],
+    )
+    monkeypatch.setattr(
+        enterprise_license,
+        "_post_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("offline")),
+    )
+
+    validator = enterprise_license.EnterpriseLicenseValidator()
+    result = validator.validate_license("license-key-1")
+
+    assert result.valid is False
+    assert "requires a live Enterprise API" in result.message

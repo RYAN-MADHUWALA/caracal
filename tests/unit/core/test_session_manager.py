@@ -541,6 +541,64 @@ async def test_handoff_transaction_failure_leaves_source_scope_unchanged() -> No
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_handoff_denylist_failure_does_not_leave_partial_revocation_state() -> None:
+    class _FailingDenylist(_InMemoryDenylist):
+        async def add(self, token_jti: str, expires_at: datetime) -> None:
+            raise AssertionError("handoff flow should not depend on denylist writes")
+
+    added_rows: list[object] = []
+
+    class _Session:
+        def add(self, row: object) -> None:
+            added_rows.append(row)
+
+        def flush(self) -> None:
+            return None
+
+        def query(self, _model):
+            class _Query:
+                def filter(self, *_args, **_kwargs):
+                    return self
+
+                def first(self):
+                    return None
+
+            return _Query()
+
+    class _DbManager:
+        @contextmanager
+        def session_scope(self):
+            yield _Session()
+
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=_FailingDenylist(),
+        db_session_manager=_DbManager(),
+    )
+    manager._is_token_revoked_by_handoff_store = lambda _jti: False  # type: ignore[method-assign]
+
+    source = manager.issue_session(
+        subject_id="worker-k",
+        organization_id="org-13",
+        tenant_id="tenant-13",
+        session_kind=SessionKind.TASK,
+        include_refresh=False,
+        extra_claims={"task_token": True, "task_caveats": ["provider:openai"]},
+    )
+
+    handoff = await manager.issue_handoff_token(
+        source_access_token=source.access_token,
+        target_subject_id="worker-l",
+        caveats=["provider:openai"],
+    )
+
+    assert handoff
+    assert len(added_rows) == 1
+
+
+@pytest.mark.unit
 def test_session_manager_rejects_symmetric_algorithms() -> None:
     with pytest.raises(SessionError, match="Symmetric session signing algorithms"):
         SessionManager(signing_key=TEST_SIGNING_KEY, algorithm="HS256")
