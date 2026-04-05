@@ -14,8 +14,6 @@ from typing import Any, Callable, Optional, Protocol
 from uuid import uuid4
 
 import jwt
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
 
 from caracal.core.caveat_chain import (
     CaveatChainError,
@@ -89,6 +87,18 @@ class SessionDbManager(Protocol):
         """Return a transactional context manager yielding a DB session."""
 
 
+class SessionTokenSigner(Protocol):
+    """Protocol for asymmetric session token signing backends."""
+
+    def sign_token(
+        self,
+        *,
+        claims: dict[str, Any],
+        algorithm: str,
+    ) -> str:
+        """Return a signed JWT string for the provided claims."""
+
+
 class RedisSessionDenylistBackend:
     """Redis-backed deny-list implementation."""
 
@@ -144,7 +154,7 @@ class SessionManager:
     def __init__(
         self,
         *,
-        signing_key: str,
+        token_signer: SessionTokenSigner,
         algorithm: str = "RS256",
         verify_key: Optional[str] = None,
         verify_key_provider: Optional[Callable[[], str]] = None,
@@ -166,16 +176,19 @@ class SessionManager:
             raise SessionError(
                 "Unsupported session signing algorithm. Use RS256 or ES256."
             )
+        if verify_key is None and verify_key_provider is None:
+            raise SessionError("verify_key or verify_key_provider is required for session validation")
+
         resolved_caveat_mode = self._resolve_caveat_mode(caveat_mode)
-        resolved_caveat_hmac_key = str(caveat_chain_hmac_key or signing_key or "").strip()
+        resolved_caveat_hmac_key = str(caveat_chain_hmac_key or "").strip()
         if resolved_caveat_mode == "caveat_chain" and not resolved_caveat_hmac_key:
             raise SessionError("Caveat-chain mode requires a non-empty HMAC key")
         if verify_key_provider is not None and verify_key_cache_ttl <= timedelta(seconds=0):
             raise SessionError("verify_key_cache_ttl must be greater than zero")
 
-        self._signing_key = signing_key
+        self._token_signer = token_signer
         self._algorithm = resolved_algorithm
-        self._verify_key = verify_key or self._derive_verify_key(signing_key)
+        self._verify_key = verify_key or ""
         self._verify_key_provider = verify_key_provider
         self._verify_key_cache_ttl = verify_key_cache_ttl
         self._verify_key_cache: Optional[str] = verify_key
@@ -228,27 +241,6 @@ class SessionManager:
         self._verify_key_cache_expires_at = now + self._verify_key_cache_ttl
         return refreshed_key
 
-    @staticmethod
-    def _derive_verify_key(signing_key: str) -> str:
-        """Derive public verify key from an asymmetric PEM private key."""
-        try:
-            private_key = serialization.load_pem_private_key(
-                signing_key.encode() if isinstance(signing_key, str) else signing_key,
-                password=None,
-                backend=default_backend(),
-            )
-            public_key = private_key.public_key()
-            public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            return public_pem.decode("utf-8")
-        except Exception as exc:
-            raise SessionError(
-                "verify_key is required for asymmetric session signing when it cannot be "
-                f"derived from signing_key: {exc}"
-            ) from exc
-
     def issue_session(
         self,
         *,
@@ -287,7 +279,7 @@ class SessionManager:
             directory_scope=directory_scope,
             extra_claims=extra_claims,
         )
-        access_token = jwt.encode(access_claims, self._signing_key, algorithm=self._algorithm)
+        access_token = self._sign_token(access_claims)
 
         refresh_token: Optional[str] = None
         refresh_exp: Optional[datetime] = None
@@ -313,7 +305,7 @@ class SessionManager:
                 directory_scope=directory_scope,
                 extra_claims=extra_claims,
             )
-            refresh_token = jwt.encode(refresh_claims, self._signing_key, algorithm=self._algorithm)
+            refresh_token = self._sign_token(refresh_claims)
 
         return IssuedSession(
             access_token=access_token,
@@ -472,7 +464,7 @@ class SessionManager:
             directory_scope=source_claims.get("dir_scope"),
             extra_claims=handoff_extra_claims,
         )
-        token = jwt.encode(handoff_claims, self._signing_key, algorithm=self._algorithm)
+        token = self._sign_token(handoff_claims)
 
         # Persist issuance + source scope narrowing in a single DB transaction.
         self._record_handoff_transfer(
@@ -1018,3 +1010,12 @@ class SessionManager:
                 claims[key] = value
 
         return claims
+
+    def _sign_token(self, claims: dict[str, Any]) -> str:
+        try:
+            return self._token_signer.sign_token(
+                claims=claims,
+                algorithm=self._algorithm,
+            )
+        except Exception as exc:
+            raise SessionError("Session token signing failed") from exc

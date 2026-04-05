@@ -167,3 +167,46 @@ class SigningService:
             raise SigningServiceExpiredToken("Token has expired") from exc
         except jwt.InvalidTokenError as exc:
             raise SigningServiceInvalidToken(f"Invalid token: {exc}") from exc
+
+
+class VaultReferenceJwtSigner:
+    """JWT signer backed by an opaque vault key reference."""
+
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        env_id: str,
+        key_name: str,
+        actor: str,
+    ) -> None:
+        self._org_id = str(org_id or "").strip()
+        self._env_id = str(env_id or "").strip()
+        self._key_name = str(key_name or "").strip()
+        self._actor = str(actor or "signing-service").strip() or "signing-service"
+        if not self._org_id or not self._env_id or not self._key_name:
+            raise SigningServiceKeyError("Vault signer requires org_id, env_id, and key_name")
+
+    def sign_token(
+        self,
+        *,
+        claims: dict[str, Any],
+        algorithm: str,
+    ) -> str:
+        try:
+            with gateway_context():
+                return get_vault().sign_jwt(
+                    org_id=self._org_id,
+                    env_id=self._env_id,
+                    name=self._key_name,
+                    payload=claims,
+                    headers={},
+                    algorithm=algorithm,
+                    actor=self._actor,
+                )
+        except Exception as exc:
+            if isinstance(exc, SigningServiceError):
+                raise
+            raise SigningServiceError(
+                f"Failed to sign JWT with vault reference '{self._org_id}/{self._env_id}/{self._key_name}': {exc}"
+            ) from exc
