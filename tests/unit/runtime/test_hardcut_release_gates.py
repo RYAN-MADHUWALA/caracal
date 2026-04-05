@@ -279,3 +279,28 @@ def test_merkle_config_and_cli_enforce_hardcut_vault_guard() -> None:
     assert "CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF" in settings_payload
     assert "Local file-backed Merkle signing is forbidden." in settings_payload
     assert "Local Merkle key-file commands are disabled in hard-cut mode." in cli_payload
+
+
+@pytest.mark.unit
+def test_db_models_have_no_legacy_sync_state_orm_classes() -> None:
+    models_file = _REPO_ROOT / "caracal" / "db" / "models.py"
+    payload = models_file.read_text(encoding="utf-8")
+
+    assert "class SyncOperation(" not in payload
+    assert "class SyncConflict(" not in payload
+    assert "class SyncMetadata(" not in payload
+
+
+@pytest.mark.unit
+def test_sync_compatibility_modules_have_no_sync_state_orm_imports() -> None:
+    sync_engine_file = _REPO_ROOT / "caracal" / "deployment" / "sync_engine.py"
+    sync_state_file = _REPO_ROOT / "caracal" / "deployment" / "sync_state.py"
+
+    combined = "\n".join(
+        [
+            sync_engine_file.read_text(encoding="utf-8"),
+            sync_state_file.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "from caracal.db.models import Sync" not in combined
