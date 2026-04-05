@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Iterable
 
 import jwt
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 
 class SigningServiceError(RuntimeError):
@@ -93,6 +97,43 @@ class SigningService:
         except Exception as exc:
             raise SigningServiceError(
                 f"Failed to sign JWT for principal '{principal_id}': {exc}"
+            ) from exc
+
+    def sign_canonical_payload_for_principal(
+        self,
+        *,
+        principal_id: str,
+        payload: dict[str, Any],
+    ) -> str:
+        """Sign canonicalized payload with principal ECDSA-P256 private key.
+
+        This preserves the historical detached-signature format used for
+        execution mandates: SHA-256(canonical-json) bytes signed with
+        ECDSA(SHA-256), returned as a hex string.
+        """
+        if not isinstance(payload, dict):
+            raise SigningServiceError(f"payload must be a dictionary, got {type(payload)}")
+        if not payload:
+            raise SigningServiceError("payload cannot be empty")
+
+        private_key = self._resolve_private_key(principal_id)
+        if not isinstance(private_key, ec.EllipticCurvePrivateKey):
+            raise SigningServiceKeyError(
+                f"Principal '{principal_id}' private key is not ECDSA"
+            )
+        if not isinstance(private_key.curve, ec.SECP256R1):
+            raise SigningServiceKeyError(
+                f"Principal '{principal_id}' private key is not P-256"
+            )
+
+        try:
+            canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            message_hash = hashlib.sha256(canonical_json.encode()).digest()
+            signature = private_key.sign(message_hash, ec.ECDSA(hashes.SHA256()))
+            return signature.hex()
+        except Exception as exc:
+            raise SigningServiceError(
+                f"Failed to sign canonical payload for principal '{principal_id}': {exc}"
             ) from exc
 
     def verify_jwt_for_principal(

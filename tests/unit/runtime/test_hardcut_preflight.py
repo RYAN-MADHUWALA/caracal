@@ -185,6 +185,43 @@ def test_runtime_preflight_blocks_local_vault_mode_in_hardcut() -> None:
 
 
 @pytest.mark.unit
+def test_runtime_preflight_blocks_symmetric_session_signing_algorithm() -> None:
+    with pytest.raises(HardCutPreflightError, match="asymmetric signing algorithms"):
+        env_vars = _valid_vault_env()
+        env_vars["CARACAL_SESSION_SIGNING_ALGORITHM"] = "HS256"
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars=env_vars,
+        )
+
+
+@pytest.mark.unit
+def test_migration_preflight_blocks_symmetric_session_signing_algorithm() -> None:
+    with pytest.raises(HardCutPreflightError, match="asymmetric signing algorithms"):
+        env_vars = _valid_vault_env()
+        env_vars["CARACAL_SESSION_SIGNING_ALGORITHM"] = "HS256"
+        assert_migration_hardcut(
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars=env_vars,
+        )
+
+
+@pytest.mark.unit
+def test_runtime_preflight_allows_asymmetric_session_signing_algorithm() -> None:
+    env_vars = _valid_vault_env()
+    env_vars["CARACAL_SESSION_SIGNING_ALGORITHM"] = "RS256"
+    assert_runtime_hardcut(
+        compose_file=None,
+        database_urls={"DATABASE_URL": "postgresql://ok"},
+        check_jsonb=False,
+        env_vars=env_vars,
+    )
+
+
+@pytest.mark.unit
 def test_migration_cli_is_always_blocked() -> None:
     with pytest.raises(HardCutPreflightError, match="migration"):
         assert_migration_cli_allowed()
