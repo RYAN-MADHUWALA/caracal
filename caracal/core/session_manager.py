@@ -13,6 +13,8 @@ from typing import Any, Optional, Protocol
 from uuid import uuid4
 
 import jwt
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
 
 
 class SessionError(RuntimeError):
@@ -127,7 +129,7 @@ class SessionManager:
         self,
         *,
         signing_key: str,
-        algorithm: str = "HS256",
+        algorithm: str = "RS256",
         verify_key: Optional[str] = None,
         access_ttl: timedelta = timedelta(hours=1),
         refresh_ttl: timedelta = timedelta(days=14),
@@ -136,15 +138,44 @@ class SessionManager:
         issuer: Optional[str] = None,
         audience: Optional[str] = None,
     ) -> None:
+        resolved_algorithm = str(algorithm or "").strip().upper()
+        if resolved_algorithm.startswith("HS"):
+            raise SessionError("Symmetric session signing algorithms are not supported")
+        if resolved_algorithm not in {"RS256", "ES256"}:
+            raise SessionError(
+                "Unsupported session signing algorithm. Use RS256 or ES256."
+            )
+
         self._signing_key = signing_key
-        self._verify_key = verify_key or signing_key
-        self._algorithm = algorithm
+        self._algorithm = resolved_algorithm
+        self._verify_key = verify_key or self._derive_verify_key(signing_key)
         self._access_ttl = access_ttl
         self._refresh_ttl = refresh_ttl
         self._denylist = denylist_backend
         self._audit_sink = audit_sink
         self._issuer = issuer
         self._audience = audience
+
+    @staticmethod
+    def _derive_verify_key(signing_key: str) -> str:
+        """Derive public verify key from an asymmetric PEM private key."""
+        try:
+            private_key = serialization.load_pem_private_key(
+                signing_key.encode() if isinstance(signing_key, str) else signing_key,
+                password=None,
+                backend=default_backend(),
+            )
+            public_key = private_key.public_key()
+            public_pem = public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            return public_pem.decode("utf-8")
+        except Exception as exc:
+            raise SessionError(
+                "verify_key is required for asymmetric session signing when it cannot be "
+                f"derived from signing_key: {exc}"
+            ) from exc
 
     def issue_session(
         self,

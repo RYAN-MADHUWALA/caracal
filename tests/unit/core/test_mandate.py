@@ -9,7 +9,7 @@ from uuid import uuid4
 from unittest.mock import Mock, MagicMock, patch
 
 from caracal.core.mandate import MandateManager
-from caracal.core.principal_keys import PrincipalKeyStorageError
+from caracal.core.signing_service import SigningServiceKeyError
 from caracal.db.models import ExecutionMandate, AuthorityPolicy, Principal
 
 
@@ -20,7 +20,8 @@ class TestMandateManager:
     def setup_method(self):
         """Set up test fixtures before each test method."""
         self.mock_db_session = Mock()
-        self.manager = MandateManager(self.mock_db_session)
+        self.mock_signing_service = Mock()
+        self.manager = MandateManager(self.mock_db_session, signing_service=self.mock_signing_service)
     
     def test_issue_mandate_with_valid_data(self):
         """Test mandate creation with valid data."""
@@ -60,17 +61,16 @@ class TestMandateManager:
         
         self.mock_db_session.query.side_effect = mock_query_side_effect
         
-        # Mock metadata-backed key resolution and signature function
-        with patch('caracal.core.identity.PrincipalRegistry.resolve_private_key', return_value="test_private_key"):
-            with patch('caracal.core.mandate.sign_mandate', return_value="test_signature"):
-            # Act
-                mandate = self.manager.issue_mandate(
-                    issuer_id=issuer_id,
-                    subject_id=subject_id,
-                    resource_scope=["secret/test"],
-                    action_scope=["read:secrets"],
-                    validity_seconds=3600
-                )
+        self.mock_signing_service.sign_canonical_payload_for_principal.return_value = "test_signature"
+
+        # Act
+        mandate = self.manager.issue_mandate(
+            issuer_id=issuer_id,
+            subject_id=subject_id,
+            resource_scope=["secret/test"],
+            action_scope=["read:secrets"],
+            validity_seconds=3600
+        )
         
         # Assert
         assert mandate is not None
@@ -168,18 +168,18 @@ class TestMandateManager:
 
         self.mock_db_session.query.side_effect = mock_query_side_effect
 
-        with patch(
-            'caracal.core.identity.PrincipalRegistry.resolve_private_key',
-            side_effect=PrincipalKeyStorageError("missing private key metadata"),
-        ):
-            with pytest.raises(RuntimeError, match="no resolvable private key metadata"):
-                self.manager.issue_mandate(
-                    issuer_id=issuer_id,
-                    subject_id=subject_id,
-                    resource_scope=["secret/test"],
-                    action_scope=["read:secrets"],
-                    validity_seconds=3600,
-                )
+        self.mock_signing_service.sign_canonical_payload_for_principal.side_effect = SigningServiceKeyError(
+            "missing private key metadata"
+        )
+
+        with pytest.raises(RuntimeError, match="no resolvable private key metadata"):
+            self.manager.issue_mandate(
+                issuer_id=issuer_id,
+                subject_id=subject_id,
+                resource_scope=["secret/test"],
+                action_scope=["read:secrets"],
+                validity_seconds=3600,
+            )
 
     def test_delegate_mandate_propagates_source_lineage(self):
         """Delegated mandate creation must preserve source_mandate_id lineage."""
