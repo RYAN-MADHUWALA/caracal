@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -297,6 +298,67 @@ def test_run_runtime_mcp_bootstraps_vault_refs_before_starting_ais(
 
     assert exit_code == 0
     assert calls[:2] == ["preflight", "bootstrap"]
+
+
+@pytest.mark.unit
+def test_host_up_runs_preflight_with_resolved_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    compose_file = Path("/tmp/docker-compose.image.yml")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda _override=None: compose_file)
+    monkeypatch.setattr(
+        entrypoints,
+        "assert_runtime_hardcut",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(entrypoints, "_runtime_database_url_candidates", lambda: ["postgresql://runtime-db"])
+    monkeypatch.setattr(entrypoints, "_caracal_home_dir", lambda: Path("/tmp/caracal-runtime"))
+    monkeypatch.setattr(entrypoints, "_runtime_hardcut_env", lambda: {"CARACAL_HARDCUT_MODE": "1"})
+    monkeypatch.setattr(entrypoints, "_compose_cmd", lambda _compose: ["docker", "compose"])
+    monkeypatch.setattr(entrypoints, "_service_uses_local_build", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(entrypoints.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0))
+
+    exit_code = entrypoints._host_up(SimpleNamespace(compose_file=None, no_pull=True))
+
+    assert exit_code == 0
+    assert captured["compose_file"] == compose_file
+    assert captured["database_urls"] == ["postgresql://runtime-db"]
+    assert captured["state_roots"] == [Path("/tmp/caracal-runtime")]
+    assert captured["env_vars"] == {"CARACAL_HARDCUT_MODE": "1"}
+
+
+@pytest.mark.unit
+def test_host_flow_runs_preflight_with_resolved_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    compose_file = Path("/tmp/docker-compose.image.yml")
+    captured: dict[str, object] = {}
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(entrypoints, "_resolve_compose_file", lambda _override=None: compose_file)
+    monkeypatch.setattr(
+        entrypoints,
+        "assert_runtime_hardcut",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(entrypoints, "_runtime_database_url_candidates", lambda: ["postgresql://runtime-db"])
+    monkeypatch.setattr(entrypoints, "_caracal_home_dir", lambda: Path("/tmp/caracal-runtime"))
+    monkeypatch.setattr(entrypoints, "_runtime_hardcut_env", lambda: {"CARACAL_HARDCUT_MODE": "1"})
+    monkeypatch.setattr(entrypoints, "_compose_cmd", lambda _compose: ["docker", "compose"])
+    monkeypatch.setattr(entrypoints, "_service_uses_local_build", lambda *_args, **_kwargs: False)
+
+    def _run(cmd, **_kwargs):
+        commands.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(entrypoints.subprocess, "run", _run)
+
+    exit_code = entrypoints._host_flow(SimpleNamespace(compose_file=None))
+
+    assert exit_code == 0
+    assert captured["compose_file"] == compose_file
+    assert captured["database_urls"] == ["postgresql://runtime-db"]
+    assert captured["state_roots"] == [Path("/tmp/caracal-runtime")]
+    assert captured["env_vars"] == {"CARACAL_HARDCUT_MODE": "1"}
+    assert ["docker", "compose", "up", "-d", "postgres", "redis", "vault"] in commands
 
 
 @pytest.mark.unit

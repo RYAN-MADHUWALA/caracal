@@ -237,6 +237,14 @@ def test_runtime_host_up_pulls_and_starts_vault_sidecar() -> None:
 
 
 @pytest.mark.unit
+def test_runtime_host_flow_starts_vault_sidecar() -> None:
+    runtime_entrypoints = _REPO_ROOT / "caracal" / "runtime" / "entrypoints.py"
+    payload = runtime_entrypoints.read_text(encoding="utf-8")
+
+    assert 'compose_cmd + ["up", "-d", "postgres", "redis", "vault"]' in payload
+
+
+@pytest.mark.unit
 def test_config_manager_has_no_local_secret_storage_markers() -> None:
     config_manager_file = _REPO_ROOT / "caracal" / "deployment" / "config_manager.py"
     payload = config_manager_file.read_text(encoding="utf-8")
