@@ -218,3 +218,39 @@ def test_runtime_host_up_pulls_and_starts_vault_sidecar() -> None:
 
     assert 'pull_services = ["postgres", "redis", "vault"]' in payload
     assert '[*up_cmd, "postgres", "redis", "vault", "mcp"]' in payload
+
+
+@pytest.mark.unit
+def test_config_manager_has_no_local_secret_storage_markers() -> None:
+    config_manager_file = _REPO_ROOT / "caracal" / "deployment" / "config_manager.py"
+    payload = config_manager_file.read_text(encoding="utf-8")
+
+    assert "secrets.vault" not in payload
+    assert "CARACAL_CONFIG_ENCRYPTION_KEY" not in payload
+    assert "aead_v1:" not in payload
+
+
+@pytest.mark.unit
+def test_operator_secret_surfaces_have_no_aws_secret_backend_copy() -> None:
+    secrets_flow_file = _REPO_ROOT / "caracal" / "flow" / "screens" / "secrets_flow.py"
+    secrets_cli_file = _REPO_ROOT / "caracal" / "cli" / "secrets.py"
+    enterprise_flow_file = _REPO_ROOT / "caracal" / "flow" / "screens" / "enterprise_flow.py"
+
+    combined = "\n".join(
+        [
+            secrets_flow_file.read_text(encoding="utf-8"),
+            secrets_cli_file.read_text(encoding="utf-8"),
+            enterprise_flow_file.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "AWS Secrets Manager" not in combined
+    assert "AWS SM" not in combined
+
+
+@pytest.mark.unit
+def test_principal_key_helpers_have_no_raw_private_key_resolution_api() -> None:
+    principal_keys_file = _REPO_ROOT / "caracal" / "core" / "principal_keys.py"
+    payload = principal_keys_file.read_text(encoding="utf-8")
+
+    assert "def resolve_principal_private_key(" not in payload
