@@ -223,6 +223,7 @@ def test_run_runtime_mcp_restarts_ais_when_unhealthy(monkeypatch: pytest.MonkeyP
     health_checks = iter([False])
 
     monkeypatch.setattr(entrypoints, "assert_runtime_hardcut", lambda **_kwargs: None)
+    monkeypatch.setattr(entrypoints, "_bootstrap_runtime_vault_refs", lambda: None)
     monkeypatch.setattr(entrypoints, "_create_ais_server_config", lambda: object())
     monkeypatch.setattr(entrypoints, "_wait_for_ais_healthy", lambda *_args, **_kwargs: True)
 
@@ -247,6 +248,28 @@ def test_run_runtime_mcp_restarts_ais_when_unhealthy(monkeypatch: pytest.MonkeyP
     assert len(started) == 2
     assert ais_processes[0] in terminated
     assert ais_processes[1] in terminated
+
+
+@pytest.mark.unit
+def test_run_runtime_mcp_bootstraps_vault_refs_before_starting_ais(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    ais_process = _FakeAisProcess([None])
+    mcp_process = _FakeMcpProcess([0])
+
+    monkeypatch.setattr(entrypoints, "assert_runtime_hardcut", lambda **_kwargs: calls.append("preflight"))
+    monkeypatch.setattr(entrypoints, "_bootstrap_runtime_vault_refs", lambda: calls.append("bootstrap"))
+    monkeypatch.setattr(entrypoints, "_create_ais_server_config", lambda: object())
+    monkeypatch.setattr(entrypoints, "_start_ais_subprocess", lambda: ais_process)
+    monkeypatch.setattr(entrypoints, "_wait_for_ais_healthy", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(entrypoints.subprocess, "Popen", lambda *_args, **_kwargs: mcp_process)
+    monkeypatch.setattr(entrypoints, "_terminate_subprocess", lambda *_args, **_kwargs: None)
+
+    exit_code = entrypoints._run_runtime_mcp()
+
+    assert exit_code == 0
+    assert calls[:2] == ["preflight", "bootstrap"]
 
 
 @pytest.mark.unit

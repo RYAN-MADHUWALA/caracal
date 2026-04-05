@@ -71,6 +71,37 @@ class TestPrincipalLifecycleStateMachine:
                 to_status="active",
             )
 
+    @pytest.mark.parametrize(
+        ("principal_kind", "from_status", "to_status", "attestation_status", "allowed"),
+        [
+            ("human", "active", "suspended", None, True),
+            ("human", "expired", "active", None, True),
+            ("service", "deactivated", "active", None, True),
+            ("worker", "pending_attestation", "expired", "pending", True),
+            ("worker", "expired", "active", "attested", False),
+            ("worker", "suspended", "active", "attested", False),
+            ("orchestrator", "deactivated", "active", "attested", False),
+            ("orchestrator", "active", "deactivated", None, True),
+            ("worker", "active", "pending_attestation", None, False),
+        ],
+    )
+    def test_transition_matrix_examples(
+        self,
+        principal_kind: str,
+        from_status: str,
+        to_status: str,
+        attestation_status: str | None,
+        allowed: bool,
+    ) -> None:
+        decision = self.state_machine.validate_transition(
+            principal_kind=principal_kind,
+            from_status=from_status,
+            to_status=to_status,
+            attestation_status=attestation_status,
+        )
+
+        assert decision.allowed is allowed
+
 
 @pytest.mark.unit
 class TestPrincipalRegistryLifecycleTransition:
