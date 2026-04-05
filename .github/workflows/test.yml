@@ -59,6 +59,10 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e ".[dev]"
+
+      - name: Run hard-cut forbidden marker gate
+        run: |
+          python scripts/hardcut_forbidden_marker_scan.py --mode gate
       
       - name: Run unit tests
         run: |

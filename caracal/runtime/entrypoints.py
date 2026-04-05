@@ -417,7 +417,6 @@ def _host_purge(namespace: argparse.Namespace) -> int:
         "networks": [],
         "images": [],
         "paths": [],
-        "keyring": [],
     }
     failures: list[str] = []
 
@@ -450,9 +449,6 @@ def _host_purge(namespace: argparse.Namespace) -> int:
             removed["paths"].append(str(path))
         else:
             failures.append(f"path:{path}")
-
-    if _purge_keyring_credentials():
-        removed["keyring"].append("caracal/encryption_key")
 
     _print_purge_summary(removed)
 
@@ -974,19 +970,6 @@ def _handle_remove_readonly(func, path: str, exc_info) -> None:
     func(path)
 
 
-def _purge_keyring_credentials() -> bool:
-    try:
-        import keyring
-    except Exception:
-        return False
-
-    try:
-        keyring.delete_password("caracal", "encryption_key")
-        return True
-    except Exception:
-        return False
-
-
 def _print_purge_summary(removed: dict[str, list[str]]) -> None:
     labels = {
         "containers": "containers",
@@ -994,11 +977,10 @@ def _print_purge_summary(removed: dict[str, list[str]]) -> None:
         "networks": "networks",
         "images": "images",
         "paths": "paths",
-        "keyring": "keyring entries",
     }
 
     found_any = False
-    for key in ("containers", "volumes", "networks", "images", "paths", "keyring"):
+    for key in ("containers", "volumes", "networks", "images", "paths"):
         values = removed.get(key, [])
         if not values:
             continue
@@ -1275,7 +1257,10 @@ def _runtime_database_url_candidates() -> dict[str, str | None]:
 
 def _runtime_hardcut_env() -> dict[str, str]:
     normalized = dict(os.environ)
-    normalized.setdefault("CARACAL_PRINCIPAL_KEY_BACKEND", "aws_kms")
+    normalized.setdefault("CARACAL_PRINCIPAL_KEY_BACKEND", "vault")
+    normalized.setdefault("CARACAL_VAULT_URL", "http://127.0.0.1:8080")
+    normalized.setdefault("CARACAL_VAULT_SIGNING_KEY_REF", "keys/mandate-signing")
+    normalized.setdefault("CARACAL_VAULT_SESSION_PUBLIC_KEY_REF", "keys/session-public")
     return normalized
 
 
