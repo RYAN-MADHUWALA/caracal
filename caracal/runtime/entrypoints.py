@@ -11,10 +11,14 @@ import json
 import os
 import platform
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from caracal.runtime.hardcut_preflight import assert_runtime_hardcut
 from caracal.storage.layout import resolve_caracal_home
@@ -26,6 +30,21 @@ HOST_IO_ROOT_ENV = "CARACAL_HOST_IO_ROOT"
 HOST_IO_ROOT_IN_CONTAINER = "/caracal-host-io"
 NETWORK_IN_USE_MARKER = "Resource is still in use"
 PURGE_CONFIRMATION_TEXT = "purge"
+
+AIS_STARTUP_NONCE_ENV = "CARACAL_AIS_ATTESTATION_NONCE"
+AIS_STARTUP_PRINCIPAL_ENV = "CARACAL_AIS_ATTESTATION_PRINCIPAL_ID"
+AIS_API_PREFIX_ENV = "CARACAL_AIS_API_PREFIX"
+AIS_UNIX_SOCKET_PATH_ENV = "CARACAL_AIS_UNIX_SOCKET_PATH"
+AIS_LISTEN_HOST_ENV = "CARACAL_AIS_LISTEN_HOST"
+AIS_LISTEN_PORT_ENV = "CARACAL_AIS_LISTEN_PORT"
+AIS_HEALTHCHECK_TIMEOUT_ENV = "CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS"
+AIS_HEALTHCHECK_INTERVAL_ENV = "CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS"
+AIS_STARTUP_TIMEOUT_ENV = "CARACAL_AIS_STARTUP_TIMEOUT_SECONDS"
+AIS_MAX_RESTARTS_ENV = "CARACAL_AIS_MAX_RESTARTS"
+AIS_DEFAULT_API_PREFIX = "/v1/ais"
+AIS_DEFAULT_UNIX_SOCKET_PATH = "/tmp/caracal-ais.sock"
+AIS_DEFAULT_LISTEN_HOST = "127.0.0.1"
+AIS_DEFAULT_LISTEN_PORT = 7079
 
 _EMBEDDED_COMPOSE_FILE = resolve_caracal_home(require_explicit=False) / "runtime" / "docker-compose.image.yml"
 _EMBEDDED_COMPOSE_CONTENT = """name: caracal
@@ -115,11 +134,20 @@ services:
             REDIS_HOST: redis
             REDIS_PORT: 6379
             REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+            CARACAL_AIS_ATTESTATION_NONCE: ${CARACAL_AIS_ATTESTATION_NONCE:-}
+            CARACAL_AIS_ATTESTATION_PRINCIPAL_ID: ${CARACAL_AIS_ATTESTATION_PRINCIPAL_ID:-}
+            CARACAL_AIS_API_PREFIX: ${CARACAL_AIS_API_PREFIX:-/v1/ais}
+            CARACAL_AIS_UNIX_SOCKET_PATH: ${CARACAL_AIS_UNIX_SOCKET_PATH:-/tmp/caracal-ais.sock}
+            CARACAL_AIS_LISTEN_HOST: ${CARACAL_AIS_LISTEN_HOST:-127.0.0.1}
+            CARACAL_AIS_LISTEN_PORT: ${CARACAL_AIS_LISTEN_PORT:-7079}
+            CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS: ${CARACAL_AIS_HEALTHCHECK_TIMEOUT_SECONDS:-3}
+            CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS: ${CARACAL_AIS_HEALTHCHECK_INTERVAL_SECONDS:-10}
+            CARACAL_AIS_STARTUP_TIMEOUT_SECONDS: ${CARACAL_AIS_STARTUP_TIMEOUT_SECONDS:-30}
+            CARACAL_AIS_MAX_RESTARTS: ${CARACAL_AIS_MAX_RESTARTS:-3}
             LOG_LEVEL: ${LOG_LEVEL:-INFO}
         command:
-            - python
-            - -m
-            - caracal.mcp.service
+            - caracal
+            - runtime-mcp
         volumes:
             - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
@@ -1235,6 +1263,12 @@ def _resolve_compose_command() -> list[str]:
 
 
 def _run_local_caracal(args: Sequence[str]) -> None:
+    if args and args[0] == "runtime-mcp":
+        raise SystemExit(_run_runtime_mcp())
+
+    if args and args[0] == "ais-serve":
+        raise SystemExit(_run_ais_server())
+
     from caracal.runtime.restricted_shell import run_restricted_command
 
     assert_runtime_hardcut(
@@ -1245,6 +1279,285 @@ def _run_local_caracal(args: Sequence[str]) -> None:
     )
 
     raise SystemExit(run_restricted_command(list(args)))
+
+
+def _parse_int_env(env_key: str, default: int) -> int:
+    raw_value = (os.environ.get(env_key) or "").strip()
+    if not raw_value:
+        return default
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{env_key} must be an integer value") from exc
+
+
+def _create_ais_server_config():
+    from caracal.identity import AISServerConfig
+
+    return AISServerConfig(
+        api_prefix=(os.environ.get(AIS_API_PREFIX_ENV) or AIS_DEFAULT_API_PREFIX).strip() or AIS_DEFAULT_API_PREFIX,
+        unix_socket_path=os.environ.get(AIS_UNIX_SOCKET_PATH_ENV, AIS_DEFAULT_UNIX_SOCKET_PATH),
+        listen_host=(os.environ.get(AIS_LISTEN_HOST_ENV) or AIS_DEFAULT_LISTEN_HOST).strip() or AIS_DEFAULT_LISTEN_HOST,
+        listen_port=_parse_int_env(AIS_LISTEN_PORT_ENV, AIS_DEFAULT_LISTEN_PORT),
+    )
+
+
+def _consume_ais_startup_attestation(
+    *,
+    nonce_manager_factory: Callable[[], object] | None = None,
+) -> str:
+    from caracal.identity import (
+        AttestationNonceConsumedError,
+        AttestationNonceManager,
+        AttestationNonceValidationError,
+    )
+    from caracal.redis.client import RedisClient
+
+    startup_nonce = (os.environ.get(AIS_STARTUP_NONCE_ENV) or "").strip()
+    if not startup_nonce:
+        raise RuntimeError(
+            f"{AIS_STARTUP_NONCE_ENV} is required for AIS startup attestation"
+        )
+
+    expected_principal = (os.environ.get(AIS_STARTUP_PRINCIPAL_ENV) or "").strip() or None
+
+    if nonce_manager_factory is None:
+        redis_host = (os.environ.get("REDIS_HOST") or "localhost").strip() or "localhost"
+        redis_port = _parse_int_env("REDIS_PORT", 6379)
+        redis_password = (os.environ.get("REDIS_PASSWORD") or "").strip() or None
+        redis_client = RedisClient(host=redis_host, port=redis_port, password=redis_password)
+        manager = AttestationNonceManager(redis_client)
+    else:
+        manager = nonce_manager_factory()
+
+    consume_nonce = getattr(manager, "consume_nonce", None)
+    if not callable(consume_nonce):
+        raise RuntimeError("AIS nonce manager does not expose consume_nonce")
+
+    try:
+        principal_id = consume_nonce(startup_nonce, expected_principal_id=expected_principal)
+    except (AttestationNonceConsumedError, AttestationNonceValidationError) as exc:
+        raise RuntimeError("AIS startup attestation nonce is invalid or already consumed") from exc
+
+    normalized_principal = str(principal_id or "").strip()
+    if not normalized_principal:
+        raise RuntimeError("AIS startup attestation returned an empty principal_id")
+    return normalized_principal
+
+
+def _build_ais_handlers():
+    from fastapi import HTTPException
+    from caracal.identity import AISHandlers
+
+    def _unwired(_: object) -> dict[str, str]:
+        raise HTTPException(status_code=503, detail="AIS runtime handlers are not wired")
+
+    return AISHandlers(
+        get_identity=lambda _principal_id: None,
+        issue_token=_unwired,
+        sign_payload=_unwired,
+        spawn_principal=_unwired,
+        derive_task_token=_unwired,
+        issue_handoff_token=_unwired,
+        refresh_session=_unwired,
+    )
+
+
+def _run_ais_server() -> int:
+    import asyncio
+
+    from caracal.identity import create_ais_app, resolve_ais_listen_target
+
+    try:
+        _consume_ais_startup_attestation()
+        ais_config = _create_ais_server_config()
+        listen_target = resolve_ais_listen_target(ais_config)
+        app = create_ais_app(_build_ais_handlers(), ais_config)
+    except Exception as exc:
+        print(f"Error: AIS startup failed: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        import uvicorn
+
+        if listen_target.transport == "unix":
+            if listen_target.unix_socket_path is None:
+                raise RuntimeError("AIS Unix socket path is not configured")
+
+            socket_path = Path(listen_target.unix_socket_path)
+            socket_path.parent.mkdir(parents=True, exist_ok=True)
+            if socket_path.exists():
+                socket_path.unlink()
+
+            config = uvicorn.Config(
+                app=app,
+                uds=listen_target.unix_socket_path,
+                log_level=(os.environ.get("LOG_LEVEL") or "info").lower(),
+            )
+        else:
+            if listen_target.host is None or listen_target.port is None:
+                raise RuntimeError("AIS TCP listen target is not fully configured")
+            config = uvicorn.Config(
+                app=app,
+                host=listen_target.host,
+                port=listen_target.port,
+                log_level=(os.environ.get("LOG_LEVEL") or "info").lower(),
+            )
+
+        server = uvicorn.Server(config)
+        asyncio.run(server.serve())
+        return 0
+    except Exception as exc:
+        print(f"Error: AIS runtime server crashed: {exc}", file=sys.stderr)
+        return 1
+
+
+def _start_ais_subprocess() -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from caracal.runtime.entrypoints import _run_ais_server; raise SystemExit(_run_ais_server())",
+        ],
+        env=dict(os.environ),
+        stdout=None,
+        stderr=None,
+    )
+
+
+def _terminate_subprocess(process: subprocess.Popen[bytes] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    process.kill()
+    process.wait(timeout=5)
+
+
+def _check_ais_health_tcp(host: str, port: int, api_prefix: str, timeout_seconds: float) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://{host}:{port}{api_prefix}/health",
+            timeout=timeout_seconds,
+        ) as response:
+            return int(getattr(response, "status", 0)) == 200
+    except Exception:
+        return False
+
+
+def _check_ais_health_unix(socket_path: str, api_prefix: str, timeout_seconds: float) -> bool:
+    if not socket_path:
+        return False
+
+    if not Path(socket_path).exists():
+        return False
+
+    request = (
+        f"GET {api_prefix}/health HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout_seconds)
+            client.connect(socket_path)
+            client.sendall(request)
+            response_head = client.recv(256).decode("ascii", errors="ignore")
+            return response_head.startswith("HTTP/1.1 200") or response_head.startswith("HTTP/1.0 200")
+    except Exception:
+        return False
+
+
+def _check_ais_health(config: object, timeout_seconds: float) -> bool:
+    from caracal.identity import resolve_ais_listen_target
+
+    listen_target = resolve_ais_listen_target(config)
+    api_prefix = getattr(config, "api_prefix", AIS_DEFAULT_API_PREFIX)
+    if listen_target.transport == "unix":
+        return _check_ais_health_unix(
+            listen_target.unix_socket_path or "",
+            api_prefix,
+            timeout_seconds,
+        )
+
+    return _check_ais_health_tcp(
+        listen_target.host or AIS_DEFAULT_LISTEN_HOST,
+        int(listen_target.port or AIS_DEFAULT_LISTEN_PORT),
+        api_prefix,
+        timeout_seconds,
+    )
+
+
+def _wait_for_ais_healthy(config: object, timeout_seconds: int, probe_timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(timeout_seconds, 1)
+    while time.monotonic() < deadline:
+        if _check_ais_health(config, probe_timeout_seconds):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _run_runtime_mcp() -> int:
+    assert_runtime_hardcut(
+        compose_file=None,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
+
+    ais_config = _create_ais_server_config()
+    startup_timeout = _parse_int_env(AIS_STARTUP_TIMEOUT_ENV, 30)
+    probe_timeout = float(_parse_int_env(AIS_HEALTHCHECK_TIMEOUT_ENV, 3))
+    monitor_interval = float(_parse_int_env(AIS_HEALTHCHECK_INTERVAL_ENV, 10))
+    max_restarts = _parse_int_env(AIS_MAX_RESTARTS_ENV, 3)
+
+    ais_process = _start_ais_subprocess()
+    if not _wait_for_ais_healthy(ais_config, startup_timeout, probe_timeout):
+        _terminate_subprocess(ais_process)
+        print("Error: AIS failed startup health checks", file=sys.stderr)
+        return 1
+
+    mcp_process = subprocess.Popen([sys.executable, "-m", "caracal.mcp.service"], env=dict(os.environ))
+
+    restart_count = 0
+    try:
+        while True:
+            mcp_exit = mcp_process.poll()
+            if mcp_exit is not None:
+                _terminate_subprocess(ais_process)
+                return int(mcp_exit)
+
+            ais_exited = ais_process.poll() is not None
+            ais_unhealthy = not _check_ais_health(ais_config, probe_timeout)
+            if ais_exited or ais_unhealthy:
+                restart_count += 1
+                _terminate_subprocess(ais_process)
+
+                if restart_count > max_restarts:
+                    print("Error: AIS exceeded restart limit; stopping runtime", file=sys.stderr)
+                    _terminate_subprocess(mcp_process)
+                    return 1
+
+                ais_process = _start_ais_subprocess()
+                if not _wait_for_ais_healthy(ais_config, startup_timeout, probe_timeout):
+                    print("Error: AIS failed health checks after restart", file=sys.stderr)
+                    _terminate_subprocess(ais_process)
+                    _terminate_subprocess(mcp_process)
+                    return 1
+
+            time.sleep(max(monitor_interval, 1.0))
+    except KeyboardInterrupt:
+        _terminate_subprocess(mcp_process)
+        _terminate_subprocess(ais_process)
+        return int(signal.SIGINT)
 
 
 def _runtime_database_url_candidates() -> dict[str, str | None]:
