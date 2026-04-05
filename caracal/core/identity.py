@@ -207,6 +207,7 @@ class PrincipalRegistry:
             principal_kind=str(principal.principal_kind),
             from_status=current_status,
             to_status=target_status,
+            attestation_status=str(principal.attestation_status or "").strip().lower(),
         )
 
         normalized_target = str(target_status).strip().lower()

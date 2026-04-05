@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -102,6 +103,17 @@ class _FakeDbManager:
     @contextmanager
     def session_scope(self):
         yield object()
+
+
+class _FakePrincipalQuery:
+    def __init__(self, principal: object | None) -> None:
+        self._principal = principal
+
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self._principal
 
 
 @pytest.mark.unit
@@ -383,3 +395,43 @@ def test_build_ais_handlers_spawn_response_includes_metadata_without_private_key
     assert response["attestation_nonce"] == "nonce-1"
     assert "private_key_pem" not in response
     assert all("private_key" not in key for key in response.keys())
+
+
+@pytest.mark.unit
+def test_complete_ais_startup_attestation_marks_attested_and_transitions_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    principal_id = str(uuid4())
+    principal = SimpleNamespace(
+        principal_id=principal_id,
+        principal_kind="worker",
+        lifecycle_status="pending_attestation",
+        attestation_status="pending",
+        principal_metadata={},
+    )
+
+    class _FakeSession:
+        def query(self, *_args, **_kwargs):
+            return _FakePrincipalQuery(principal)
+
+        def flush(self) -> None:
+            return None
+
+    transitions: list[tuple[str, str, str | None]] = []
+
+    def _transition(self, principal_id: str, target_status: str, actor_principal_id: str | None = None):
+        transitions.append((principal_id, target_status, actor_principal_id))
+
+    monkeypatch.setattr("caracal.core.identity.PrincipalRegistry.transition_lifecycle_status", _transition)
+
+    class _FakeDbManagerLocal:
+        @contextmanager
+        def session_scope(self):
+            yield _FakeSession()
+
+    entrypoints._complete_ais_startup_attestation(principal_id, db_manager=_FakeDbManagerLocal())
+
+    assert principal.attestation_status == "attested"
+    assert principal.principal_metadata["attestation_status"] == "attested"
+    assert "attested_at" in principal.principal_metadata
+    assert transitions == [(principal_id, "active", principal_id)]
