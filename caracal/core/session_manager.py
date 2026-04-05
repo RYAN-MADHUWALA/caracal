@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 from uuid import uuid4
 
 import jwt
@@ -131,6 +131,8 @@ class SessionManager:
         signing_key: str,
         algorithm: str = "RS256",
         verify_key: Optional[str] = None,
+        verify_key_provider: Optional[Callable[[], str]] = None,
+        verify_key_cache_ttl: timedelta = timedelta(minutes=5),
         access_ttl: timedelta = timedelta(hours=1),
         refresh_ttl: timedelta = timedelta(days=14),
         denylist_backend: Optional[SessionDenylistBackend] = None,
@@ -145,16 +147,60 @@ class SessionManager:
             raise SessionError(
                 "Unsupported session signing algorithm. Use RS256 or ES256."
             )
+        if verify_key_provider is not None and verify_key_cache_ttl <= timedelta(seconds=0):
+            raise SessionError("verify_key_cache_ttl must be greater than zero")
 
         self._signing_key = signing_key
         self._algorithm = resolved_algorithm
         self._verify_key = verify_key or self._derive_verify_key(signing_key)
+        self._verify_key_provider = verify_key_provider
+        self._verify_key_cache_ttl = verify_key_cache_ttl
+        self._verify_key_cache: Optional[str] = verify_key
+        self._verify_key_cache_expires_at: Optional[datetime] = None
+        if self._verify_key_provider is not None and self._verify_key_cache is not None:
+            self._verify_key_cache_expires_at = datetime.now(timezone.utc) + self._verify_key_cache_ttl
         self._access_ttl = access_ttl
         self._refresh_ttl = refresh_ttl
         self._denylist = denylist_backend
         self._audit_sink = audit_sink
         self._issuer = issuer
         self._audience = audience
+
+    def refresh_verify_key_cache(self) -> None:
+        """Force-refresh verify key cache from provider when configured."""
+        if self._verify_key_provider is None:
+            return
+
+        self._verify_key_cache = None
+        self._verify_key_cache_expires_at = None
+        self._resolve_verify_key_for_validation()
+
+    def _resolve_verify_key_for_validation(self) -> str:
+        if self._verify_key_provider is None:
+            return self._verify_key
+
+        now = datetime.now(timezone.utc)
+        if (
+            self._verify_key_cache
+            and self._verify_key_cache_expires_at
+            and now < self._verify_key_cache_expires_at
+        ):
+            return self._verify_key_cache
+
+        try:
+            refreshed = self._verify_key_provider()
+        except Exception as exc:
+            raise SessionValidationError("Session verify key refresh failed") from exc
+
+        refreshed_key = str(refreshed or "").strip()
+        if not refreshed_key:
+            raise SessionValidationError(
+                "Session verify key refresh returned an empty key"
+            )
+
+        self._verify_key_cache = refreshed_key
+        self._verify_key_cache_expires_at = now + self._verify_key_cache_ttl
+        return refreshed_key
 
     @staticmethod
     def _derive_verify_key(signing_key: str) -> str:
@@ -593,7 +639,10 @@ class SessionManager:
             kwargs["options"]["verify_aud"] = False
 
         try:
-            claims = jwt.decode(token, self._verify_key, **kwargs)
+            verify_key = self._resolve_verify_key_for_validation()
+            claims = jwt.decode(token, verify_key, **kwargs)
+        except SessionValidationError:
+            raise
         except jwt.ExpiredSignatureError as exc:
             raise SessionValidationError("Session token has expired") from exc
         except jwt.InvalidTokenError as exc:

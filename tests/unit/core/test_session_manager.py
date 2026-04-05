@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 import pytest
@@ -351,3 +352,83 @@ async def test_task_and_handoff_emit_audit_events() -> None:
 def test_session_manager_rejects_symmetric_algorithms() -> None:
     with pytest.raises(SessionError, match="Symmetric session signing algorithms"):
         SessionManager(signing_key=TEST_SIGNING_KEY, algorithm="HS256")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_verify_key_cache_reuses_and_refreshes_provider_value() -> None:
+    signing_key, verify_key = _generate_rsa_key_pair()
+    provider_calls = {"count": 0}
+
+    def provider() -> str:
+        provider_calls["count"] += 1
+        return verify_key
+
+    manager = SessionManager(
+        signing_key=signing_key,
+        verify_key_provider=provider,
+        verify_key_cache_ttl=timedelta(milliseconds=50),
+    )
+    issued = manager.issue_session(
+        subject_id="cache-user",
+        organization_id="cache-org",
+        tenant_id="cache-tenant",
+        session_kind=SessionKind.INTERACTIVE,
+    )
+
+    await manager.validate_access_token(issued.access_token)
+    await manager.validate_access_token(issued.access_token)
+    assert provider_calls["count"] == 1
+
+    await asyncio.sleep(0.07)
+    await manager.validate_access_token(issued.access_token)
+    assert provider_calls["count"] == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_verify_key_refresh_failure_after_cache_expiry_fails_closed() -> None:
+    signing_key, verify_key = _generate_rsa_key_pair()
+    provider_calls = {"count": 0}
+
+    def provider() -> str:
+        provider_calls["count"] += 1
+        if provider_calls["count"] == 1:
+            return verify_key
+        raise RuntimeError("provider unavailable")
+
+    manager = SessionManager(
+        signing_key=signing_key,
+        verify_key_provider=provider,
+        verify_key_cache_ttl=timedelta(milliseconds=50),
+    )
+    issued = manager.issue_session(
+        subject_id="refresh-user",
+        organization_id="refresh-org",
+        tenant_id="refresh-tenant",
+        session_kind=SessionKind.INTERACTIVE,
+    )
+
+    await manager.validate_access_token(issued.access_token)
+    await asyncio.sleep(0.07)
+
+    with pytest.raises(SessionValidationError, match="refresh failed"):
+        await manager.validate_access_token(issued.access_token)
+
+
+@pytest.mark.unit
+def test_refresh_verify_key_cache_forces_provider_reload() -> None:
+    provider_calls = {"count": 0}
+
+    def provider() -> str:
+        provider_calls["count"] += 1
+        return TEST_VERIFY_KEY
+
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key_provider=provider,
+        verify_key_cache_ttl=timedelta(minutes=1),
+    )
+
+    manager.refresh_verify_key_cache()
+    assert provider_calls["count"] == 1
