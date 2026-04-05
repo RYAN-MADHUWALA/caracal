@@ -21,6 +21,23 @@ services:
     networks:
       - caracal-runtime
 
+  vault:
+    image: ${CARACAL_VAULT_SIDECAR_IMAGE:-infisical/infisical:latest}
+    container_name: caracal-vault-sidecar
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${CARACAL_VAULT_SIDECAR_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - caracal-runtime
+
   redis:
     image: redis:7-alpine
     container_name: caracal-redis
@@ -62,6 +79,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
@@ -73,6 +92,9 @@ services:
       CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
       CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
       CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+      CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+      CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+      CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
       CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
       CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
       CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
@@ -119,6 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
@@ -129,6 +153,9 @@ services:
       CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
       CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
       CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+      CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+      CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+      CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
       CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
       CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
       CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
@@ -168,6 +195,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     environment:
       HOME: /home/caracal
       CARACAL_RUNTIME_IN_CONTAINER: "1"
@@ -178,6 +207,9 @@ services:
       CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
       CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
       CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+      CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+      CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+      CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
       CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
       CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
       CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
