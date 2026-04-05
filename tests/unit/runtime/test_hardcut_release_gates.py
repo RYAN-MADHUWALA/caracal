@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -108,6 +109,74 @@ def test_runtime_code_has_no_direct_registry_register_callsites() -> None:
             continue
 
         if "registry.register_principal(" in payload:
+            offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_runtime_code_uses_identity_service_for_registration_callsites() -> None:
+    source_root = _REPO_ROOT / "caracal"
+    offenders: list[str] = []
+
+    allowed_files = {
+        "caracal/core/identity.py",
+        "caracal/identity/service.py",
+    }
+    disallowed_pattern = re.compile(r"\b(?!identity_service\b)[A-Za-z_][A-Za-z0-9_]*\.register_principal\(")
+
+    for py_file in source_root.rglob("*.py"):
+        relative_path = py_file.relative_to(_REPO_ROOT).as_posix()
+        if relative_path in allowed_files:
+            continue
+
+        payload = py_file.read_text(encoding="utf-8")
+        if disallowed_pattern.search(payload):
+            offenders.append(relative_path)
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_runtime_code_uses_identity_service_for_spawn_callsites() -> None:
+    source_root = _REPO_ROOT / "caracal"
+    offenders: list[str] = []
+
+    allowed_files = {
+        "caracal/identity/service.py",
+        "caracal/identity/ais_server.py",
+    }
+    disallowed_pattern = re.compile(r"\b(?!identity_service\b)[A-Za-z_][A-Za-z0-9_]*\.spawn_principal\(")
+
+    for py_file in source_root.rglob("*.py"):
+        relative_path = py_file.relative_to(_REPO_ROOT).as_posix()
+        if relative_path in allowed_files:
+            continue
+
+        payload = py_file.read_text(encoding="utf-8")
+        if disallowed_pattern.search(payload):
+            offenders.append(relative_path)
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_enterprise_code_has_no_direct_registry_or_spawn_manager_usage() -> None:
+    enterprise_root = _REPO_ROOT / "caracal" / "enterprise"
+    offenders: list[str] = []
+
+    forbidden_markers = (
+        "PrincipalRegistry(",
+        "SpawnManager(",
+        ".register_principal(",
+        ".spawn_principal(",
+        "from caracal.core.identity import PrincipalRegistry",
+        "from caracal.core.spawn import SpawnManager",
+    )
+
+    for py_file in enterprise_root.rglob("*.py"):
+        payload = py_file.read_text(encoding="utf-8")
+        if any(marker in payload for marker in forbidden_markers):
             offenders.append(str(py_file.relative_to(_REPO_ROOT)))
 
     assert offenders == []
