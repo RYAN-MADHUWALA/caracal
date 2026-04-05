@@ -36,6 +36,15 @@ class DeploymentEditionAdapter:
     def is_opensource(self) -> bool:
         return self.get_edition() == Edition.OPENSOURCE
 
+    def display_name(self) -> str:
+        return "Enterprise" if self.is_enterprise() else "Open Source"
+
+    def uses_gateway_execution(self) -> bool:
+        return self.is_enterprise()
+
+    def allows_local_provider_management(self) -> bool:
+        return not self.uses_gateway_execution()
+
     def get_gateway_url(self) -> Optional[str]:
         return self._edition_manager.get_gateway_url()
 

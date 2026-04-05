@@ -1098,7 +1098,7 @@ def provider_add(
         )
         effective_service_type = service_type.strip().lower() if service_type else "api"
 
-        if edition_adapter.is_enterprise():
+        if edition_adapter.uses_gateway_execution():
             raise click.ClickException(
                 "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
             )
@@ -1175,7 +1175,7 @@ def provider_list(workspace: Optional[str], format: str):
 
         providers_data: List[Dict[str, Any]] = []
 
-        if edition_adapter.is_enterprise():
+        if edition_adapter.uses_gateway_execution():
             from caracal.deployment.gateway_client import GatewayClient
 
             gateway_url = edition_adapter.require_gateway_url()
@@ -1276,7 +1276,7 @@ def provider_test(name: str, workspace: Optional[str]):
         ) as progress:
             task = progress.add_task(f"Testing provider '{name}'...", total=None)
 
-            if edition_adapter.is_enterprise():
+            if edition_adapter.uses_gateway_execution():
                 from caracal.deployment.gateway_client import GatewayClient
 
                 gateway_url = edition_adapter.require_gateway_url()
