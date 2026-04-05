@@ -1598,6 +1598,7 @@ def _create_ais_session_manager():
         verify_key=verify_key,
         algorithm=_resolve_session_signing_algorithm(signing_key),
         denylist_backend=RedisSessionDenylistBackend(_resolve_runtime_redis_url()),
+        db_session_manager=_create_ais_db_manager(),
         issuer="caracal-runtime-ais",
         audience="caracal-session",
     )
@@ -1791,11 +1792,13 @@ def _build_ais_handlers(
 
     def _issue_handoff_token(request: object) -> dict[str, Any]:
         try:
-            token = resolved_session_manager.issue_handoff_token(
-                source_access_token=str(getattr(request, "source_access_token")),
-                target_subject_id=str(getattr(request, "target_subject_id")),
-                caveats=getattr(request, "caveats", None),
-                ttl=timedelta(seconds=int(getattr(request, "ttl_seconds", 120))),
+            token = _run_sync(
+                resolved_session_manager.issue_handoff_token(
+                    source_access_token=str(getattr(request, "source_access_token")),
+                    target_subject_id=str(getattr(request, "target_subject_id")),
+                    caveats=getattr(request, "caveats", None),
+                    ttl=timedelta(seconds=int(getattr(request, "ttl_seconds", 120))),
+                )
             )
             return {"handoff_token": token}
         except Exception as exc:
