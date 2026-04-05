@@ -222,6 +222,62 @@ async def test_revoke_principal_publisher_failure_is_non_fatal() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.asyncio
+async def test_revoke_principal_orders_denylist_revoke_cache_commit_publish() -> None:
+    order: list[str] = []
+
+    class _OrderedDenylist:
+        async def add(self, token_jti: str, expires_at: datetime) -> None:
+            del token_jti, expires_at
+            order.append("denylist")
+
+    session = Mock()
+    publisher = _RecordingPublisher(commit_probe=lambda: session.commit.called)
+    cache = Mock()
+
+    def _invalidate_mandate(_mandate_id):
+        order.append("cache")
+
+    def _invalidate_subject(_principal_id):
+        order.append("cache")
+        return 0
+
+    cache.invalidate_mandate.side_effect = _invalidate_mandate
+    cache.invalidate_mandates_by_subject.side_effect = _invalidate_subject
+
+    root_id = uuid4()
+    mandate_id = uuid4()
+
+    orchestrator = PrincipalRevocationOrchestrator(
+        db_session=session,
+        denylist_backend=_OrderedDenylist(),
+        mandate_cache=cache,
+        revocation_event_publisher=publisher,
+    )
+    orchestrator._resolve_leaves_first_order = Mock(return_value=[root_id])
+
+    def _revoke_single(*, principal_id, reason, actor_principal_id):
+        del reason, actor_principal_id
+        order.append("durable_revoke")
+        return SimpleNamespace(principal_id=principal_id, mandate_ids=[mandate_id])
+
+    orchestrator._revoke_single_principal = Mock(side_effect=_revoke_single)
+
+    await orchestrator.revoke_principal(
+        principal_id=str(root_id),
+        reason="security_event",
+        actor_principal_id="admin-9",
+        session_token_jtis=["jti-1"],
+    )
+
+    assert order[0] == "denylist"
+    assert "durable_revoke" in order
+    assert order.index("denylist") < order.index("durable_revoke")
+    assert order.index("durable_revoke") < order.index("cache")
+    assert publisher.events[0]["commit_seen"] is True
+
+
+@pytest.mark.unit
 def test_revoke_single_principal_updates_status_and_mandates() -> None:
     session = Mock()
     orchestrator = PrincipalRevocationOrchestrator(db_session=session)

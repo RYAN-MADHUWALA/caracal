@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -533,3 +534,51 @@ def test_complete_ais_startup_attestation_marks_attested_and_transitions_active(
     assert "attested_at" in principal.principal_metadata
     assert activated == [principal_id]
     assert transitions == [(principal_id, "active", principal_id)]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_create_runtime_revocation_event_publisher_uses_configured_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, str]] = []
+
+    class _FakeRedis:
+        def publish(self, channel: str, message: str) -> int:
+            published.append((channel, message))
+            return 1
+
+    monkeypatch.setenv(entrypoints.AIS_REVOCATION_EVENTS_CHANNEL_ENV, "caracal:revocation:runtime")
+    publisher = entrypoints._create_runtime_revocation_event_publisher(redis_client=_FakeRedis())
+
+    await publisher.publish_principal_revocation_event(
+        event_type="principal_revoked",
+        principal_id="principal-1",
+        reason="ttl_expired",
+        actor_principal_id="principal-1",
+        root_principal_id="principal-1",
+        revoked_mandate_ids=["m-1"],
+        metadata={"source": "runtime"},
+    )
+
+    assert len(published) == 1
+    channel, payload = published[0]
+    parsed = json.loads(payload)
+    assert channel == "caracal:revocation:runtime"
+    assert parsed["event_type"] == "principal_revoked"
+    assert parsed["metadata"] == {"source": "runtime"}
+
+
+@pytest.mark.unit
+def test_create_ttl_revocation_orchestrator_factory_assigns_publisher() -> None:
+    class _FakeRedis:
+        def publish(self, channel: str, message: str) -> int:
+            del channel, message
+            return 1
+
+    orchestrator_factory = entrypoints._create_ttl_revocation_orchestrator_factory(
+        redis_client=_FakeRedis(),
+    )
+    orchestrator = orchestrator_factory(SimpleNamespace())
+
+    assert orchestrator.revocation_event_publisher is not None
