@@ -127,6 +127,14 @@ SELF_MARKER_SCANNER_NAMES = {
     "hardcut_migration_safety_snapshot.py",
 }
 
+# Marker-specific path excludes to avoid counting intentional hard-cut guard text
+# as runtime legacy usage regressions.
+MARKER_PATH_EXCLUDES: dict[str, set[str]] = {
+    "sync_state_tables": {
+        "caracal/runtime/hardcut_preflight.py",
+    },
+}
+
 
 def _discover_roots() -> tuple[Path, Path, Path | None]:
     caracal_root = Path(__file__).resolve().parents[1]
@@ -190,6 +198,9 @@ def _scan_root(root: Path, definitions: tuple[MarkerDefinition, ...]) -> dict[st
 
         relative_path = str(path.relative_to(root))
         for item in definitions:
+            excluded_paths = MARKER_PATH_EXCLUDES.get(item.key, set())
+            if relative_path in excluded_paths:
+                continue
             matches = list(compiled[item.key].finditer(payload))
             if not matches:
                 continue
