@@ -77,6 +77,24 @@ services:
         networks:
             - caracal-runtime
 
+    vault:
+        image: ${CARACAL_VAULT_SIDECAR_IMAGE:-infisical/infisical:latest}
+        environment:
+            NODE_ENV: production
+        ports:
+            - "${CARACAL_VAULT_SIDECAR_PORT:-8080}:8080"
+        healthcheck:
+            test:
+                - CMD-SHELL
+                - wget -q -O /dev/null http://127.0.0.1:8080 || exit 1
+            interval: 15s
+            timeout: 5s
+            retries: 20
+            start_period: 30s
+        restart: unless-stopped
+        networks:
+            - caracal-runtime
+
     redis:
         image: redis:7-alpine
         command:
@@ -116,14 +134,28 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
             CARACAL_MCP_LISTEN_ADDRESS: 0.0.0.0:8080
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -155,7 +187,6 @@ services:
             - caracal
             - runtime-mcp
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         ports:
             - ${CARACAL_API_PORT:-8000}:8080
@@ -182,13 +213,27 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -209,7 +254,6 @@ services:
         command:
             - caracal
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         stdin_open: true
         tty: true
@@ -225,13 +269,27 @@ services:
                 condition: service_healthy
             redis:
                 condition: service_healthy
+            vault:
+                condition: service_healthy
         environment:
             HOME: /home/caracal
             CARACAL_RUNTIME_IN_CONTAINER: "1"
-            CARACAL_HOME: /home/caracal/.caracal
+            CARACAL_HOME: /home/caracal/runtime
             CARACAL_HOST_IO_ROOT: /caracal-host-io
             CARACAL_API_URL: http://mcp:8080
-            CARACAL_CONFIG_PATH: /home/caracal/.caracal/config.yaml
+            CARACAL_CONFIG_PATH: /home/caracal/runtime/config.yaml
+            CARACAL_PRINCIPAL_KEY_BACKEND: ${CARACAL_PRINCIPAL_KEY_BACKEND:-vault}
+            CARACAL_VAULT_URL: ${CARACAL_VAULT_URL:-http://vault:8080}
+            CARACAL_VAULT_TOKEN: ${CARACAL_VAULT_TOKEN:-dev-local-token}
+            CARACAL_VAULT_PROJECT_ID: ${CARACAL_VAULT_PROJECT_ID:-}
+            CARACAL_VAULT_ENVIRONMENT: ${CARACAL_VAULT_ENVIRONMENT:-dev}
+            CARACAL_VAULT_SECRET_PATH: ${CARACAL_VAULT_SECRET_PATH:-/}
+            CARACAL_VAULT_SIGNING_KEY_REF: ${CARACAL_VAULT_SIGNING_KEY_REF:-keys/mandate-signing}
+            CARACAL_VAULT_SESSION_PUBLIC_KEY_REF: ${CARACAL_VAULT_SESSION_PUBLIC_KEY_REF:-keys/session-public}
+            CARACAL_SESSION_SIGNING_ALGORITHM: ${CARACAL_SESSION_SIGNING_ALGORITHM:-RS256}
+            CARACAL_VAULT_MODE: ${CARACAL_VAULT_MODE:-managed}
+            CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
+            CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
             CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
             CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
@@ -256,7 +314,6 @@ services:
             - -m
             - caracal.flow.main
         volumes:
-            - caracal_state:/home/caracal/.caracal
             - ${CARACAL_HOST_IO_DIR:-./caracal-host-io}:/caracal-host-io:z
         stdin_open: true
         tty: true
@@ -266,7 +323,6 @@ services:
 volumes:
     postgres_data:
     redis_data:
-    caracal_state:
 
 networks:
     caracal-runtime:
@@ -381,7 +437,7 @@ def _host_up(namespace: argparse.Namespace) -> int:
     uses_local_build = _service_uses_local_build(compose_file, "mcp")
 
     if not namespace.no_pull:
-        pull_services = ["postgres", "redis"]
+        pull_services = ["postgres", "redis", "vault"]
         if not uses_local_build:
             pull_services.insert(0, "mcp")
 
@@ -395,7 +451,7 @@ def _host_up(namespace: argparse.Namespace) -> int:
         up_cmd.append("--build")
 
     up_result = subprocess.run(
-        [*up_cmd, "postgres", "redis", "mcp"],
+        [*up_cmd, "postgres", "redis", "vault", "mcp"],
         check=False,
     )
     return up_result.returncode
@@ -1447,6 +1503,49 @@ def _resolve_ais_vault_secret(secret_ref: str) -> str:
         return get_vault().get(org_id=str(org_id), env_id=str(env_id), name=normalized_ref)
 
 
+def _bootstrap_runtime_vault_refs() -> None:
+    from caracal.core.vault import gateway_context, get_vault
+
+    signing_key_ref = (os.environ.get(AIS_SESSION_SIGNING_KEY_REF_ENV) or "").strip().strip("/")
+    verify_key_ref = (os.environ.get(AIS_SESSION_VERIFY_KEY_REF_ENV) or "").strip().strip("/")
+    if not signing_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_SIGNING_KEY_REF_ENV} is required to bootstrap AIS session signing"
+        )
+    if not verify_key_ref:
+        raise RuntimeError(
+            f"{AIS_SESSION_VERIFY_KEY_REF_ENV} is required to bootstrap AIS session verification"
+        )
+
+    org_id = (
+        os.environ.get("CARACAL_VAULT_PROJECT_ID")
+        or os.environ.get("CARACAL_VAULT_PROJECT_SLUG")
+        or os.environ.get("CARACAL_VAULT_ORG_ID")
+        or "caracal"
+    )
+    env_id = (
+        os.environ.get("CARACAL_VAULT_ENVIRONMENT")
+        or os.environ.get("CARACAL_VAULT_ENV")
+        or os.environ.get("CARACAL_VAULT_ENV_ID")
+        or "runtime"
+    )
+    algorithm = (
+        os.environ.get(AIS_SESSION_ALGORITHM_ENV)
+        or os.environ.get(AIS_SESSION_ALGORITHM_FALLBACK_ENV)
+        or "RS256"
+    ).strip().upper()
+
+    with gateway_context():
+        get_vault().ensure_asymmetric_keypair(
+            org_id=str(org_id),
+            env_id=str(env_id),
+            private_key_name=signing_key_ref,
+            public_key_name=verify_key_ref,
+            algorithm=algorithm,
+            actor="runtime-bootstrap",
+        )
+
+
 def _resolve_session_signing_algorithm(signing_key_pem: str) -> str:
     configured = (
         os.environ.get(AIS_SESSION_ALGORITHM_ENV)
@@ -1976,6 +2075,7 @@ def _run_runtime_mcp() -> int:
         state_roots=[_caracal_home_dir()],
         env_vars=_runtime_hardcut_env(),
     )
+    _bootstrap_runtime_vault_refs()
 
     ais_config = _create_ais_server_config()
     startup_timeout = _parse_int_env(AIS_STARTUP_TIMEOUT_ENV, 30)

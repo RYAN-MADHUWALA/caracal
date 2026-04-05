@@ -107,6 +107,11 @@ def _parse_vault_reference(reference: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def parse_vault_key_reference(reference: str) -> tuple[str, str, str]:
+    """Parse a vault signing-key reference."""
+    return _parse_vault_reference(reference)
+
+
 def _vault_put_secret(org_id: str, env_id: str, secret_name: str, value: str) -> None:
     try:
         with gateway_context():
@@ -225,6 +230,40 @@ def resolve_principal_private_key(
     if not key_reference:
         raise PrincipalKeyStorageError("Missing vault key reference in custody record")
     return _vault_get_secret(key_reference)
+
+
+def resolve_principal_key_reference(
+    principal_id: UUID,
+    db_session: Session,
+    principal_metadata: Optional[Mapping[str, object]] = None,
+) -> str:
+    """Resolve the opaque vault reference for a principal signing key."""
+    custody = db_session.query(PrincipalKeyCustody).filter_by(principal_id=principal_id).first()
+    if custody is not None:
+        backend = str(custody.backend or "").strip().lower()
+        if backend != _VAULT_BACKEND:
+            raise PrincipalKeyStorageError(
+                "Unsupported key backend in custody record: "
+                f"{backend!r}. Expected '{_VAULT_BACKEND}'."
+            )
+        key_reference = str(custody.key_reference or "").strip()
+        if not key_reference:
+            raise PrincipalKeyStorageError("Missing vault key reference in custody record")
+        return key_reference
+
+    metadata = dict(principal_metadata or {})
+    backend = str(metadata.get("key_backend") or _VAULT_BACKEND).strip().lower()
+    if backend != _VAULT_BACKEND:
+        raise PrincipalKeyStorageError(
+            "Unsupported key_backend in principal metadata: "
+            f"{backend!r}. Expected '{_VAULT_BACKEND}'."
+        )
+    key_reference = metadata.get("vault_key_ref") or metadata.get("key_reference")
+    if not isinstance(key_reference, str) or not key_reference.strip():
+        raise PrincipalKeyStorageError(
+            f"Missing vault_key_ref for principal key resolution ({principal_id})"
+        )
+    return key_reference.strip()
 
 
 def _resolve_from_metadata(principal_id: UUID, principal_metadata: Mapping[str, object]) -> str:
