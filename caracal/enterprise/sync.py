@@ -51,6 +51,27 @@ _AIS_API_PREFIX_ENV = "CARACAL_AIS_API_PREFIX"
 _SESSION_KIND_ENV = "CARACAL_SESSION_KIND"
 
 
+def resolve_revocation_webhook_target(
+    *,
+    webhook_url_override: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve enterprise revocation webhook URL and sync API key from runtime config."""
+    normalized_override = str(webhook_url_override or "").strip() or None
+
+    config = load_enterprise_config()
+    sync_api_key = str(config.get("sync_api_key") or "").strip() or None
+
+    if normalized_override:
+        return normalized_override, sync_api_key
+
+    configured_base = str(config.get("enterprise_api_url") or "").strip() or None
+    resolved_base = _resolve_api_url(configured_base)
+    if not resolved_base:
+        return None, sync_api_key
+
+    return f"{resolved_base.rstrip('/')}/api/sync/revocation-events", sync_api_key
+
+
 # ---------------------------------------------------------------------------
 # Retry helper
 # ---------------------------------------------------------------------------

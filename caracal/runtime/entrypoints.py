@@ -55,6 +55,10 @@ AIS_SESSION_CAVEAT_MODE_ENV = "CARACAL_SESSION_CAVEAT_MODE"
 AIS_SESSION_CAVEAT_HMAC_KEY_ENV = "CARACAL_SESSION_CAVEAT_HMAC_KEY"
 AIS_REVOCATION_EVENTS_CHANNEL_ENV = "CARACAL_REVOCATION_EVENTS_CHANNEL"
 AIS_DEFAULT_REVOCATION_EVENTS_CHANNEL = "caracal:identity:revocation_events"
+AIS_REVOCATION_PUBLISHER_MODE_ENV = "CARACAL_REVOCATION_PUBLISHER_MODE"
+AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV = "CARACAL_ENTERPRISE_REVOCATION_WEBHOOK_URL"
+AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV = "CARACAL_ENTERPRISE_SYNC_API_KEY"
+AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH = "/api/sync/revocation-events"
 
 _EMBEDDED_COMPOSE_FILE = resolve_caracal_home(require_explicit=False) / "runtime" / "docker-compose.image.yml"
 _EMBEDDED_COMPOSE_CONTENT = """name: caracal
@@ -1634,8 +1638,100 @@ def _create_runtime_redis_client():
     return RedisClient(host=redis_host, port=redis_port, password=redis_password)
 
 
-def _create_runtime_revocation_event_publisher(*, redis_client: object | None = None):
+def _resolve_runtime_revocation_publisher_mode(*, edition_manager: object | None = None) -> str:
+    explicit_mode = (os.environ.get(AIS_REVOCATION_PUBLISHER_MODE_ENV) or "").strip().lower()
+    if explicit_mode:
+        if explicit_mode in {"redis", "enterprise_webhook"}:
+            return explicit_mode
+        raise RuntimeError(
+            f"{AIS_REVOCATION_PUBLISHER_MODE_ENV} must be one of: redis, enterprise_webhook"
+        )
+
+    from caracal.deployment.edition import Edition, EditionManager
+
+    manager = edition_manager or EditionManager()
+    resolved_get_edition = getattr(manager, "get_edition", None)
+    if not callable(resolved_get_edition):
+        return "redis"
+
+    try:
+        edition = resolved_get_edition()
+    except Exception:
+        return "redis"
+
+    return "enterprise_webhook" if edition == Edition.ENTERPRISE else "redis"
+
+
+def _resolve_enterprise_revocation_webhook_url(*, edition_manager: object | None = None) -> str:
+    configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip()
+    if configured_url:
+        return configured_url
+
+    gateway_url = (
+        (os.environ.get("CARACAL_ENTERPRISE_URL") or "").strip()
+        or (os.environ.get("CARACAL_GATEWAY_ENDPOINT") or "").strip()
+        or (os.environ.get("CARACAL_GATEWAY_URL") or "").strip()
+    )
+
+    if not gateway_url and edition_manager is not None:
+        resolved_gateway_url = getattr(edition_manager, "get_gateway_url", None)
+        if callable(resolved_gateway_url):
+            gateway_url = str(resolved_gateway_url() or "").strip()
+
+    if not gateway_url:
+        raise RuntimeError(
+            "Enterprise revocation webhook URL is not configured. "
+            f"Set {AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV} or enterprise gateway URL settings."
+        )
+
+    return f"{gateway_url.rstrip('/')}{AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH}"
+
+
+def _resolve_enterprise_revocation_sync_api_key() -> str | None:
+    configured = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip()
+    if configured:
+        return configured
+
+    try:
+        from caracal.enterprise.sync import resolve_revocation_webhook_target
+
+        _, resolved = resolve_revocation_webhook_target()
+        return resolved or None
+    except Exception:
+        return None
+
+
+def _create_enterprise_revocation_event_publisher(*, edition_manager: object | None = None):
+    from caracal.core.revocation_publishers import EnterpriseWebhookRevocationEventPublisher
+    from caracal.enterprise.sync import resolve_revocation_webhook_target
+
+    configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip() or None
+    configured_sync_api_key = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip() or None
+
+    resolved_webhook_url, resolved_sync_api_key = resolve_revocation_webhook_target(
+        webhook_url_override=configured_url,
+    )
+
+    webhook_url = resolved_webhook_url or _resolve_enterprise_revocation_webhook_url(
+        edition_manager=edition_manager,
+    )
+    sync_api_key = configured_sync_api_key or resolved_sync_api_key or _resolve_enterprise_revocation_sync_api_key()
+    return EnterpriseWebhookRevocationEventPublisher(
+        webhook_url=webhook_url,
+        sync_api_key=sync_api_key,
+    )
+
+
+def _create_runtime_revocation_event_publisher(
+    *,
+    redis_client: object | None = None,
+    edition_manager: object | None = None,
+):
     from caracal.core.revocation_publishers import RedisPubSubRevocationEventPublisher
+
+    publisher_mode = _resolve_runtime_revocation_publisher_mode(edition_manager=edition_manager)
+    if publisher_mode == "enterprise_webhook":
+        return _create_enterprise_revocation_event_publisher(edition_manager=edition_manager)
 
     resolved_channel = (
         os.environ.get(AIS_REVOCATION_EVENTS_CHANNEL_ENV) or AIS_DEFAULT_REVOCATION_EVENTS_CHANNEL
@@ -1650,10 +1746,17 @@ def _create_runtime_revocation_event_publisher(*, redis_client: object | None = 
     )
 
 
-def _create_ttl_revocation_orchestrator_factory(*, redis_client: object | None = None):
+def _create_ttl_revocation_orchestrator_factory(
+    *,
+    redis_client: object | None = None,
+    edition_manager: object | None = None,
+):
     from caracal.core.revocation import PrincipalRevocationOrchestrator
 
-    publisher = _create_runtime_revocation_event_publisher(redis_client=redis_client)
+    publisher = _create_runtime_revocation_event_publisher(
+        redis_client=redis_client,
+        edition_manager=edition_manager,
+    )
 
     def _factory(session: object) -> PrincipalRevocationOrchestrator:
         return PrincipalRevocationOrchestrator(
