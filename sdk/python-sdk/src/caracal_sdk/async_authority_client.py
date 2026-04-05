@@ -19,6 +19,7 @@ from caracal_sdk._compat import (
     SDKConfigurationError,
 )
 from caracal_sdk._compat import get_logger
+from caracal_sdk.ais import resolve_sdk_base_url
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,7 @@ class AsyncAuthorityClient:
 
     def __init__(
         self,
-        base_url: str,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         timeout: int = 30,
         max_connections: int = 100,
@@ -66,10 +67,11 @@ class AsyncAuthorityClient:
             logger.info("Initializing Async Caracal Authority SDK client")
             
             # Validate configuration
-            if not base_url:
+            resolved_base_url = base_url or resolve_sdk_base_url()
+            if not resolved_base_url:
                 raise SDKConfigurationError("base_url is required")
-            
-            self.base_url = base_url.rstrip('/')
+
+            self.base_url = resolved_base_url.rstrip('/')
             self.api_key = api_key
             self.timeout = ClientTimeout(total=timeout)
             self.workspace_id = workspace_id
