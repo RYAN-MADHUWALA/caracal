@@ -101,6 +101,42 @@ def test_runtime_code_has_no_core_crypto_sign_helper_imports() -> None:
 
 
 @pytest.mark.unit
+def test_runtime_and_cli_gateway_resolution_is_centralized_in_edition_adapter() -> None:
+    source_root = _REPO_ROOT / "caracal"
+    offenders: list[str] = []
+    forbidden_markers = (
+        'os.environ.get("CARACAL_ENTERPRISE_URL")',
+        'os.environ.get("CARACAL_GATEWAY_ENDPOINT")',
+        'os.environ.get("CARACAL_GATEWAY_URL")',
+    )
+    allowed_files = {
+        "caracal/deployment/edition.py",
+        "caracal/runtime/hardcut_preflight.py",
+    }
+
+    for py_file in source_root.rglob("*.py"):
+        relative_path = py_file.relative_to(_REPO_ROOT).as_posix()
+        if relative_path in allowed_files:
+            continue
+
+        payload = py_file.read_text(encoding="utf-8")
+        if any(marker in payload for marker in forbidden_markers):
+            offenders.append(relative_path)
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_enterprise_license_validation_has_no_offline_acceptance_fallback() -> None:
+    license_file = _REPO_ROOT / "caracal" / "enterprise" / "license.py"
+    payload = license_file.read_text(encoding="utf-8")
+
+    assert "validated from cache" not in payload
+    assert "trying cached license" not in payload
+    assert "falling back to cached license" not in payload
+
+
+@pytest.mark.unit
 def test_mandate_manager_uses_signing_service_for_signature_generation() -> None:
     mandate_file = _REPO_ROOT / "caracal" / "core" / "mandate.py"
     payload = mandate_file.read_text(encoding="utf-8")
@@ -505,3 +541,12 @@ def test_sdk_sources_have_no_legacy_security_or_sync_markers() -> None:
                 offenders.append(str(path.relative_to(_REPO_ROOT)))
 
     assert offenders == []
+
+
+@pytest.mark.unit
+def test_migration_cli_exposes_explicit_hardcut_bidirectional_commands() -> None:
+    migration_cli_file = _REPO_ROOT / "caracal" / "cli" / "migration.py"
+    payload = migration_cli_file.read_text(encoding="utf-8")
+
+    assert '@migrate_group.command(name="oss-to-enterprise")' in payload
+    assert '@migrate_group.command(name="enterprise-to-oss")' in payload

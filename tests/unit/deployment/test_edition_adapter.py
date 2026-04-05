@@ -118,3 +118,19 @@ def test_get_provider_client_returns_gateway_in_enterprise(monkeypatch: pytest.M
 
     assert isinstance(client, _FakeGatewayClient)
     assert created["gateway_url"] == "https://gateway.example"
+
+
+@pytest.mark.unit
+def test_require_gateway_url_uses_centralized_resolution() -> None:
+    adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))
+
+    assert adapter.require_gateway_url() == "https://gateway.example"
+
+
+@pytest.mark.unit
+def test_resolve_revocation_publisher_mode_defaults_from_edition() -> None:
+    oss_adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.OPENSOURCE))
+    enterprise_adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))
+
+    assert oss_adapter.resolve_revocation_publisher_mode() == "redis"
+    assert enterprise_adapter.resolve_revocation_publisher_mode() == "enterprise_webhook"
