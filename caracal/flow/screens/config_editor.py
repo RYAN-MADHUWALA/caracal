@@ -90,7 +90,7 @@ def _view_configuration(console: Console, state: FlowState) -> None:
         
         # Edition
         edition_adapter = get_deployment_edition_adapter()
-        edition_str = "Enterprise" if edition_adapter.is_enterprise() else "Open Source"
+        edition_str = edition_adapter.display_name()
         
         console.print(f"  [{Colors.INFO}]Edition:[/] [{Colors.SUCCESS}]{edition_str}[/]")
         console.print()
@@ -195,9 +195,9 @@ def _set_edition(console: Console, state: FlowState) -> None:
     
     try:
         edition_adapter = get_deployment_edition_adapter()
-        current_edition_is_enterprise = edition_adapter.is_enterprise()
+        current_edition_is_enterprise = edition_adapter.uses_gateway_execution()
 
-        console.print(f"  [{Colors.INFO}]Current edition:[/] {'Enterprise' if current_edition_is_enterprise else 'Open Source'} [dim](auto)[/]")
+        console.print(f"  [{Colors.INFO}]Current edition:[/] {edition_adapter.display_name()} [dim](auto)[/]")
         console.print()
         console.print(f"  [{Colors.INFO}]Edition is automatically determined by connectivity:[/]")
         console.print(f"    - [{Colors.SUCCESS}]Enterprise[/] when connected via [bold]caracal enterprise login[/bold]")
