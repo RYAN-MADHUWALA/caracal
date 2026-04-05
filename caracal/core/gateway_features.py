@@ -197,9 +197,12 @@ def _merge_workspace_config(flags: GatewayFeatureFlags) -> None:
     """Read gateway section from workspace config and enterprise runtime metadata."""
     # --- enterprise runtime metadata (written by gateway sync flow) ---
     try:
-        from caracal.enterprise.license import load_enterprise_config
-        ecfg = load_enterprise_config()
-        gw = ecfg.get("gateway")
+        from caracal.deployment.edition_adapter import get_deployment_edition_adapter
+
+        edition_adapter = get_deployment_edition_adapter()
+        resolve_overrides = getattr(edition_adapter, "resolve_gateway_feature_overrides", None)
+        gw = resolve_overrides() if callable(resolve_overrides) else {}
+
         if isinstance(gw, dict) and gw.get("enabled"):
             flags.gateway_enabled = True
             flags._source = "enterprise-runtime"

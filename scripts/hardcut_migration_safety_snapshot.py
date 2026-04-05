@@ -134,7 +134,7 @@ def _fetch_table_baseline(engine: Engine, table_names: list[str]) -> list[dict[s
                 ).scalar()
             )
 
-            row_count: int | None = None
+            row_count = 0
             if exists:
                 row_count = int(conn.execute(text(f"SELECT COUNT(*) FROM public.{safe_name}")).scalar() or 0)
 
@@ -209,7 +209,7 @@ def _build_report_base(db_source: str, table_names: list[str]) -> dict[str, Any]
             {
                 "table": table,
                 "exists": None,
-                "row_count": None,
+                "row_count": 0,
             }
             for table in table_names
         ],
