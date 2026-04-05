@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pytest
+import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -246,6 +247,96 @@ async def test_task_token_caveats_must_be_attenuated_subset() -> None:
             task_id="task-5",
             caveats=["provider:openai", "action:infer", "resource:admin"],
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_issue_task_token_caveat_chain_mode_enforces_typed_constraints() -> None:
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        caveat_mode="caveat_chain",
+        caveat_chain_hmac_key="test-caveat-chain-key",
+    )
+    parent = manager.issue_session(
+        subject_id="user-chain-1",
+        organization_id="org-chain-1",
+        tenant_id="tenant-chain-1",
+        session_kind=SessionKind.AUTOMATION,
+    )
+
+    task = manager.issue_task_token(
+        parent_access_token=parent.access_token,
+        task_id="task-chain-1",
+        caveats=["action:infer", "resource:model/*", "task-binding:task-chain-1"],
+    )
+
+    claims = await manager.validate_task_token(
+        task.access_token,
+        required_caveats=["action:infer"],
+        required_action="infer",
+        required_resource="model/gpt-4o",
+        required_task_id="task-chain-1",
+    )
+    assert claims["task_caveats"] == [
+        "action:infer",
+        "resource:model/*",
+        "task-binding:task-chain-1",
+    ]
+    assert isinstance(claims.get("task_caveat_chain"), list)
+    assert len(claims["task_caveat_chain"]) == 3
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_task_token_rejects_tampered_caveat_chain() -> None:
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        caveat_mode="caveat_chain",
+        caveat_chain_hmac_key="test-caveat-chain-key",
+    )
+    parent = manager.issue_session(
+        subject_id="user-chain-2",
+        organization_id="org-chain-2",
+        tenant_id="tenant-chain-2",
+        session_kind=SessionKind.AUTOMATION,
+    )
+    task = manager.issue_task_token(
+        parent_access_token=parent.access_token,
+        task_id="task-chain-2",
+        caveats=["action:infer"],
+    )
+
+    tampered_claims = manager.decode_unverified(task.access_token)
+    tampered_claims["task_caveat_chain"][0]["value"] = "delete"
+    tampered_token = jwt.encode(tampered_claims, TEST_SIGNING_KEY, algorithm="RS256")
+
+    with pytest.raises(SessionValidationError, match="integrity validation failed"):
+        await manager.validate_task_token(tampered_token)
+
+
+@pytest.mark.unit
+def test_issue_task_token_jwt_caveat_mode_omits_chain_claim() -> None:
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        caveat_mode="jwt",
+    )
+    parent = manager.issue_session(
+        subject_id="user-jwt-1",
+        organization_id="org-jwt-1",
+        tenant_id="tenant-jwt-1",
+        session_kind=SessionKind.AUTOMATION,
+    )
+    task = manager.issue_task_token(
+        parent_access_token=parent.access_token,
+        task_id="task-jwt-1",
+        caveats=["provider:openai"],
+    )
+
+    claims = manager.decode_unverified(task.access_token)
+    assert "task_caveat_chain" not in claims
 
 
 @pytest.mark.unit

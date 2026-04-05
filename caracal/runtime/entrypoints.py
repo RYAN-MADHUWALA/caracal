@@ -51,6 +51,8 @@ AIS_SESSION_SIGNING_KEY_REF_ENV = "CARACAL_VAULT_SIGNING_KEY_REF"
 AIS_SESSION_VERIFY_KEY_REF_ENV = "CARACAL_VAULT_SESSION_PUBLIC_KEY_REF"
 AIS_SESSION_ALGORITHM_ENV = "CARACAL_SESSION_SIGNING_ALGORITHM"
 AIS_SESSION_ALGORITHM_FALLBACK_ENV = "CARACAL_SESSION_JWT_ALGORITHM"
+AIS_SESSION_CAVEAT_MODE_ENV = "CARACAL_SESSION_CAVEAT_MODE"
+AIS_SESSION_CAVEAT_HMAC_KEY_ENV = "CARACAL_SESSION_CAVEAT_HMAC_KEY"
 
 _EMBEDDED_COMPOSE_FILE = resolve_caracal_home(require_explicit=False) / "runtime" / "docker-compose.image.yml"
 _EMBEDDED_COMPOSE_CONTENT = """name: caracal
@@ -1593,12 +1595,20 @@ def _create_ais_session_manager():
         )
     verify_key = _resolve_ais_vault_secret(verify_key_ref)
 
+    caveat_mode = (os.environ.get(AIS_SESSION_CAVEAT_MODE_ENV) or "caveat_chain").strip().lower()
+    caveat_hmac_key = (
+        os.environ.get(AIS_SESSION_CAVEAT_HMAC_KEY_ENV)
+        or signing_key
+    )
+
     return SessionManager(
         signing_key=signing_key,
         verify_key=verify_key,
         algorithm=_resolve_session_signing_algorithm(signing_key),
         denylist_backend=RedisSessionDenylistBackend(_resolve_runtime_redis_url()),
         db_session_manager=_create_ais_db_manager(),
+        caveat_mode=caveat_mode,
+        caveat_chain_hmac_key=caveat_hmac_key,
         issuer="caracal-runtime-ais",
         audience="caracal-session",
     )
