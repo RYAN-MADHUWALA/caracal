@@ -465,6 +465,23 @@ class RedisClient:
         except redis.RedisError as e:
             logger.error(f"Redis ZREMRANGEBYSCORE failed for sorted set {name}: {e}")
             raise RedisConnectionError(f"Failed to remove from sorted set: {e}") from e
+
+    def publish(self, channel: str, message: str) -> int:
+        """
+        Publish a message to a pub/sub channel.
+
+        Args:
+            channel: Channel name
+            message: Message payload
+
+        Returns:
+            Number of subscribers that received the message
+        """
+        try:
+            return int(self._client.publish(channel, message))
+        except redis.RedisError as e:
+            logger.error(f"Redis PUBLISH failed for channel {channel}: {e}")
+            raise RedisConnectionError(f"Failed to publish message to channel {channel}: {e}") from e
     
     def close(self):
         """Close Redis connection pool."""
