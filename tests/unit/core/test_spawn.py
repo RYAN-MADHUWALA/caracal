@@ -1,6 +1,6 @@
 """Unit tests for atomic spawn orchestration."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from caracal.core.spawn import SpawnManager
-from caracal.db.models import Principal
+from caracal.db.models import ExecutionMandate, Principal
 from caracal.exceptions import PrincipalNotFoundError
 
 
@@ -209,6 +209,155 @@ class TestSpawnManager:
             spawn_module.generate_and_store_principal_keypair = original_generate
 
         assert self.mock_mandate_manager.issue_mandate.call_args.kwargs["validity_seconds"] == 120
+
+    def test_spawn_rejects_scope_amplification_before_transaction(self) -> None:
+        issuer_id = uuid4()
+        source_mandate_id = uuid4()
+        self.manager._find_existing_spawn = Mock(return_value=None)
+
+        source_mandate = SimpleNamespace(
+            mandate_id=source_mandate_id,
+            subject_id=issuer_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=1),
+            valid_until=datetime.utcnow() + timedelta(minutes=5),
+            resource_scope=["provider:openai:*"],
+            action_scope=["infer"],
+            network_distance=2,
+        )
+        source_query = Mock()
+        source_query.filter.return_value.first.return_value = source_mandate
+
+        def _query_side_effect(model):
+            if model is ExecutionMandate:
+                return source_query
+            raise AssertionError("Unexpected query after pre-write source mandate validation failure")
+
+        self.mock_session.query.side_effect = _query_side_effect
+
+        with pytest.raises(ValueError, match="resource scope"):
+            self.manager.spawn_principal(
+                issuer_principal_id=str(issuer_id),
+                principal_name="worker-invalid-scope",
+                principal_kind="worker",
+                owner="ops",
+                resource_scope=["provider:anthropic:models"],
+                action_scope=["infer"],
+                validity_seconds=300,
+                idempotency_key="spawn-invalid-scope",
+                source_mandate_id=str(source_mandate_id),
+            )
+
+        self.mock_session.begin_nested.assert_not_called()
+        self.mock_session.add.assert_not_called()
+        self.mock_mandate_manager.issue_mandate.assert_not_called()
+
+    def test_spawn_rejects_depth_amplification_before_transaction(self) -> None:
+        issuer_id = uuid4()
+        source_mandate_id = uuid4()
+        self.manager._find_existing_spawn = Mock(return_value=None)
+
+        source_mandate = SimpleNamespace(
+            mandate_id=source_mandate_id,
+            subject_id=issuer_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=1),
+            valid_until=datetime.utcnow() + timedelta(minutes=5),
+            resource_scope=["provider:openai:*"],
+            action_scope=["infer"],
+            network_distance=1,
+        )
+        source_query = Mock()
+        source_query.filter.return_value.first.return_value = source_mandate
+
+        def _query_side_effect(model):
+            if model is ExecutionMandate:
+                return source_query
+            raise AssertionError("Unexpected query after pre-write source mandate validation failure")
+
+        self.mock_session.query.side_effect = _query_side_effect
+
+        with pytest.raises(ValueError, match="delegation depth"):
+            self.manager.spawn_principal(
+                issuer_principal_id=str(issuer_id),
+                principal_name="worker-invalid-depth",
+                principal_kind="worker",
+                owner="ops",
+                resource_scope=["provider:openai:models"],
+                action_scope=["infer"],
+                validity_seconds=300,
+                idempotency_key="spawn-invalid-depth",
+                source_mandate_id=str(source_mandate_id),
+                network_distance=1,
+            )
+
+        self.mock_session.begin_nested.assert_not_called()
+        self.mock_session.add.assert_not_called()
+        self.mock_mandate_manager.issue_mandate.assert_not_called()
+
+    def test_spawn_derives_child_depth_from_source_mandate_when_unspecified(self) -> None:
+        issuer_id = uuid4()
+        principal_id = uuid4()
+        source_mandate_id = uuid4()
+        mandate_id = uuid4()
+        self.manager._find_existing_spawn = Mock(return_value=None)
+
+        source_mandate = SimpleNamespace(
+            mandate_id=source_mandate_id,
+            subject_id=issuer_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=1),
+            valid_until=datetime.utcnow() + timedelta(minutes=5),
+            resource_scope=["provider:openai:*"],
+            action_scope=["infer"],
+            network_distance=3,
+        )
+        source_query = Mock()
+        source_query.filter.return_value.first.return_value = source_mandate
+
+        issuer_row = SimpleNamespace(principal_id=issuer_id)
+        duplicate = None
+        principal_query = Mock()
+        principal_query.filter.return_value.first.side_effect = [issuer_row, duplicate]
+
+        def _query_side_effect(model):
+            if model is ExecutionMandate:
+                return source_query
+            if model is Principal:
+                return principal_query
+            return principal_query
+
+        self.mock_session.query.side_effect = _query_side_effect
+
+        def _capture_add(obj):
+            if isinstance(obj, Principal):
+                obj.principal_id = principal_id
+
+        self.mock_session.add.side_effect = _capture_add
+        self.mock_mandate_manager.issue_mandate.return_value = SimpleNamespace(mandate_id=mandate_id)
+
+        from caracal.core import spawn as spawn_module
+
+        original_generate = spawn_module.generate_and_store_principal_keypair
+        spawn_module.generate_and_store_principal_keypair = Mock(
+            return_value=SimpleNamespace(public_key_pem="pub", storage=SimpleNamespace(metadata={}))
+        )
+        try:
+            self.manager.spawn_principal(
+                issuer_principal_id=str(issuer_id),
+                principal_name="worker-derived-depth",
+                principal_kind="worker",
+                owner="ops",
+                resource_scope=["provider:openai:models"],
+                action_scope=["infer"],
+                validity_seconds=300,
+                idempotency_key="spawn-derived-depth",
+                source_mandate_id=str(source_mandate_id),
+            )
+        finally:
+            spawn_module.generate_and_store_principal_keypair = original_generate
+
+        assert self.mock_mandate_manager.issue_mandate.call_args.kwargs["network_distance"] == 2
 
     @staticmethod
     def _build_spawn_result(idempotent_replay: bool):

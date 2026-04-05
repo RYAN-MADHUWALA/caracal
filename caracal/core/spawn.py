@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from fnmatch import fnmatchcase
 from typing import Optional
 from uuid import UUID
 
@@ -91,6 +92,16 @@ class SpawnManager:
 
         issuer_uuid = UUID(str(issuer_principal_id))
         source_mandate_uuid = UUID(str(source_mandate_id)) if source_mandate_id else None
+        resolved_network_distance = network_distance
+
+        if source_mandate_uuid is not None:
+            resolved_network_distance = self._resolve_source_mandate_network_distance(
+                issuer_id=issuer_uuid,
+                source_mandate_id=source_mandate_uuid,
+                requested_resource_scope=resource_scope,
+                requested_action_scope=action_scope,
+                requested_network_distance=network_distance,
+            )
 
         effective_validity_seconds = int(validity_seconds)
         ttl_decision = None
@@ -175,7 +186,7 @@ class SpawnManager:
                     action_scope=action_scope,
                     validity_seconds=effective_validity_seconds,
                     source_mandate_id=source_mandate_uuid,
-                    network_distance=network_distance,
+                    network_distance=resolved_network_distance,
                     context_tags=context_tags,
                 )
 
@@ -255,6 +266,126 @@ class SpawnManager:
             attestation_nonce=issued_nonce.nonce,
             idempotent_replay=spawn_result.idempotent_replay,
         )
+
+    def _resolve_source_mandate_network_distance(
+        self,
+        *,
+        issuer_id: UUID,
+        source_mandate_id: UUID,
+        requested_resource_scope: list[str],
+        requested_action_scope: list[str],
+        requested_network_distance: Optional[int],
+    ) -> int:
+        """Validate delegated spawn constraints before any write-side transaction begins."""
+        source_mandate = (
+            self.db_session.query(ExecutionMandate)
+            .filter(ExecutionMandate.mandate_id == source_mandate_id)
+            .first()
+        )
+        if source_mandate is None:
+            logger.warning(
+                "Spawn rejected: source mandate missing",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+            )
+            raise ValueError(f"Source mandate '{source_mandate_id}' does not exist")
+        if source_mandate.revoked:
+            logger.warning(
+                "Spawn rejected: source mandate revoked",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+            )
+            raise ValueError(f"Source mandate '{source_mandate_id}' is revoked")
+        if source_mandate.subject_id != issuer_id:
+            logger.warning(
+                "Spawn rejected: source mandate subject mismatch",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                source_subject_id=str(source_mandate.subject_id),
+            )
+            raise ValueError(
+                "Source mandate subject does not match spawn issuer principal"
+            )
+
+        now = datetime.utcnow()
+        if source_mandate.valid_from and now < source_mandate.valid_from:
+            logger.warning(
+                "Spawn rejected: source mandate not yet valid",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+            )
+            raise ValueError(f"Source mandate '{source_mandate_id}' is not yet valid")
+        if source_mandate.valid_until and now > source_mandate.valid_until:
+            logger.warning(
+                "Spawn rejected: source mandate expired",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+            )
+            raise ValueError(f"Source mandate '{source_mandate_id}' has expired")
+
+        if not self._scope_is_subset(requested_resource_scope, source_mandate.resource_scope):
+            logger.warning(
+                "Spawn rejected: resource scope amplification attempt",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                requested_resource_scope=requested_resource_scope,
+                source_resource_scope=source_mandate.resource_scope,
+            )
+            raise ValueError("Spawn resource scope must be a subset of source mandate scope")
+        if not self._scope_is_subset(requested_action_scope, source_mandate.action_scope):
+            logger.warning(
+                "Spawn rejected: action scope amplification attempt",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                requested_action_scope=requested_action_scope,
+                source_action_scope=source_mandate.action_scope,
+            )
+            raise ValueError("Spawn action scope must be a subset of source mandate scope")
+
+        source_depth = int(source_mandate.network_distance or 0)
+        if source_depth <= 0:
+            logger.warning(
+                "Spawn rejected: source mandate has no remaining delegation depth",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                source_network_distance=source_depth,
+            )
+            raise ValueError(
+                f"Source mandate '{source_mandate_id}' has no remaining delegation depth"
+            )
+
+        max_child_depth = source_depth - 1
+        if requested_network_distance is None:
+            return max_child_depth
+
+        resolved_network_distance = int(requested_network_distance)
+        if resolved_network_distance < 0:
+            logger.warning(
+                "Spawn rejected: negative delegation depth requested",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                requested_network_distance=resolved_network_distance,
+            )
+            raise ValueError("Spawn delegation depth cannot be negative")
+        if resolved_network_distance > max_child_depth:
+            logger.warning(
+                "Spawn rejected: delegation depth amplification attempt",
+                source_mandate_id=str(source_mandate_id),
+                issuer_principal_id=str(issuer_id),
+                requested_network_distance=resolved_network_distance,
+                max_child_depth=max_child_depth,
+            )
+            raise ValueError(
+                "Spawn delegation depth exceeds source mandate remaining delegation depth"
+            )
+        return resolved_network_distance
+
+    @staticmethod
+    def _scope_is_subset(requested_scope: list[str], source_scope: list[str]) -> bool:
+        for requested_entry in requested_scope:
+            if not any(fnmatchcase(requested_entry, pattern) for pattern in source_scope):
+                return False
+        return True
 
     def _find_existing_spawn(self, issuer_id: UUID, idempotency_key: str) -> Optional[SpawnResult]:
         """Resolve idempotent replay when a spawn already exists for the key."""
