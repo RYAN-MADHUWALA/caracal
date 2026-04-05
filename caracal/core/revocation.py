@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from collections import deque
 from typing import Optional, Protocol
 from uuid import UUID
 
@@ -104,7 +105,7 @@ class PrincipalRevocationOrchestrator:
             self.cascade_job_dispatcher is not None
             and len(ordered_ids) > cascade_async_threshold
         ):
-            descendants = ordered_ids[:-1]
+            descendants = self._resolve_breadth_first_descendants(principal_uuid)
             for descendant_id in descendants:
                 await self.cascade_job_dispatcher.enqueue_principal_revocation(
                     principal_id=str(descendant_id),
@@ -189,12 +190,7 @@ class PrincipalRevocationOrchestrator:
         if root is None:
             raise PrincipalNotFoundError(f"Principal {principal_id} not found")
 
-        rows = self.db_session.query(Principal).all()
-        children: dict[UUID, list[UUID]] = {}
-        for row in rows:
-            if row.source_principal_id is None:
-                continue
-            children.setdefault(row.source_principal_id, []).append(row.principal_id)
+        children = self._build_child_map()
 
         visited: set[UUID] = set()
         stack: list[tuple[UUID, int]] = [(principal_id, 0)]
@@ -211,6 +207,29 @@ class PrincipalRevocationOrchestrator:
 
         order.sort(key=lambda item: item[1], reverse=True)
         return [node_id for node_id, _ in order]
+
+    def _resolve_breadth_first_descendants(self, principal_id: UUID) -> list[UUID]:
+        root = self._get_principal_row(principal_id)
+        if root is None:
+            raise PrincipalNotFoundError(f"Principal {principal_id} not found")
+
+        children = self._build_child_map()
+        queue: deque[UUID] = deque(children.get(principal_id, []))
+        ordered: list[UUID] = []
+        while queue:
+            node_id = queue.popleft()
+            ordered.append(node_id)
+            queue.extend(children.get(node_id, []))
+        return ordered
+
+    def _build_child_map(self) -> dict[UUID, list[UUID]]:
+        rows = self.db_session.query(Principal).all()
+        children: dict[UUID, list[UUID]] = {}
+        for row in rows:
+            if row.source_principal_id is None:
+                continue
+            children.setdefault(row.source_principal_id, []).append(row.principal_id)
+        return children
 
     def _get_principal_row(self, principal_id: UUID) -> Optional[Principal]:
         return (
