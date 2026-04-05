@@ -265,3 +265,17 @@ def test_delegation_manager_has_no_private_key_generation_helper() -> None:
     payload = delegation_file.read_text(encoding="utf-8")
 
     assert "def generate_key_pair(" not in payload
+
+
+@pytest.mark.unit
+def test_merkle_config_and_cli_enforce_hardcut_vault_guard() -> None:
+    settings_file = _REPO_ROOT / "caracal" / "config" / "settings.py"
+    merkle_cli_file = _REPO_ROOT / "caracal" / "cli" / "merkle.py"
+
+    settings_payload = settings_file.read_text(encoding="utf-8")
+    cli_payload = merkle_cli_file.read_text(encoding="utf-8")
+
+    assert "CARACAL_VAULT_MERKLE_SIGNING_KEY_REF" in settings_payload
+    assert "CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF" in settings_payload
+    assert "Local file-backed Merkle signing is forbidden." in settings_payload
+    assert "Local Merkle key-file commands are disabled in hard-cut mode." in cli_payload
