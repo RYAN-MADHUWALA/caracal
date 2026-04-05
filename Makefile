@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help ensure-uv check-tools deps deps-dev infra-up infra-down infra-logs infra-status setup-user setup-dev runtime-up runtime-down runtime-logs runtime-reset runtime-cli runtime-flow
+.PHONY: help ensure-uv check-tools deps deps-dev infra-up infra-down infra-logs infra-status setup-user setup-dev runtime-up runtime-down runtime-logs runtime-reset runtime-cli runtime-flow hardcut-marker-scan hardcut-marker-baseline hardcut-marker-gate hardcut-migration-baseline
 
 # Auto-detect Docker Compose command.
 DOCKER_COMPOSE := $(shell if docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo ""; fi)
@@ -110,3 +110,15 @@ runtime-cli:
 
 runtime-flow:
 	caracal flow
+
+hardcut-marker-scan:
+	python3 scripts/hardcut_forbidden_marker_scan.py --mode scan
+
+hardcut-marker-baseline:
+	python3 scripts/hardcut_forbidden_marker_scan.py --mode baseline
+
+hardcut-marker-gate:
+	python3 scripts/hardcut_forbidden_marker_scan.py --mode gate
+
+hardcut-migration-baseline:
+	python3 scripts/hardcut_migration_safety_snapshot.py --allow-missing-db
