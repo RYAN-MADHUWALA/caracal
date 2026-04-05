@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 import pytest
@@ -266,7 +267,7 @@ async def test_handoff_token_is_one_time_and_transfers_task_scope() -> None:
         extra_claims={"task_token": True, "task_caveats": ["provider:openai"]},
     )
 
-    handoff = manager.issue_handoff_token(
+    handoff = await manager.issue_handoff_token(
         source_access_token=source.access_token,
         target_subject_id="worker-b",
         caveats=["provider:openai"],
@@ -283,7 +284,7 @@ async def test_handoff_token_is_one_time_and_transfers_task_scope() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_handoff_consumption_revokes_source_token_jti() -> None:
+async def test_handoff_issuance_revokes_source_token_jti_immediately() -> None:
     denylist = _InMemoryDenylist()
     manager = SessionManager(
         signing_key=TEST_SIGNING_KEY,
@@ -300,16 +301,17 @@ async def test_handoff_consumption_revokes_source_token_jti() -> None:
         extra_claims={"task_token": True, "task_caveats": ["action:infer"]},
     )
 
-    handoff = manager.issue_handoff_token(
+    handoff = await manager.issue_handoff_token(
         source_access_token=source.access_token,
         target_subject_id="worker-d",
         caveats=["action:infer"],
     )
 
-    await manager.consume_handoff_token(handoff)
-
     with pytest.raises(SessionRevokedError):
         await manager.validate_access_token(source.access_token)
+
+    # Handoff consumption still succeeds once for the target principal.
+    await manager.consume_handoff_token(handoff)
 
 
 @pytest.mark.unit
@@ -335,7 +337,7 @@ async def test_task_and_handoff_emit_audit_events() -> None:
         task_id="task-audit-1",
         caveats=["provider:openai"],
     )
-    handoff = manager.issue_handoff_token(
+    handoff = await manager.issue_handoff_token(
         source_access_token=task.access_token,
         target_subject_id="worker-f",
         caveats=["provider:openai"],
@@ -346,6 +348,105 @@ async def test_task_and_handoff_emit_audit_events() -> None:
     assert "task_token_issued" in event_types
     assert "handoff_token_issued" in event_types
     assert "handoff_token_consumed" in event_types
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_handoff_issuance_persists_transactional_transfer_state() -> None:
+    denylist = _InMemoryDenylist()
+    added_rows: list[object] = []
+
+    class _Session:
+        def add(self, row: object) -> None:
+            added_rows.append(row)
+
+        def flush(self) -> None:
+            return None
+
+    class _DbManager:
+        @contextmanager
+        def session_scope(self):
+            yield _Session()
+
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=denylist,
+        db_session_manager=_DbManager(),
+    )
+
+    # This test targets transactional issuance persistence directly; query-based
+    # revocation checks are covered by runtime integration paths.
+    manager._is_token_revoked_by_handoff_store = lambda _jti: False  # type: ignore[method-assign]
+
+    source = manager.issue_session(
+        subject_id="worker-g",
+        organization_id="org-11",
+        tenant_id="tenant-11",
+        session_kind=SessionKind.TASK,
+        include_refresh=False,
+        extra_claims={"task_token": True, "task_caveats": ["provider:openai", "action:infer"]},
+    )
+
+    handoff = await manager.issue_handoff_token(
+        source_access_token=source.access_token,
+        target_subject_id="worker-h",
+        caveats=["provider:openai"],
+    )
+
+    assert handoff
+    assert len(added_rows) == 1
+    row = added_rows[0]
+    assert getattr(row, "source_subject_id") == "worker-g"
+    assert getattr(row, "target_subject_id") == "worker-h"
+    assert getattr(row, "transferred_caveats") == ["provider:openai"]
+    assert getattr(row, "source_remaining_caveats") == ["action:infer"]
+    assert getattr(row, "source_token_revoked_at") is not None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_handoff_transaction_failure_leaves_source_scope_unchanged() -> None:
+    denylist = _InMemoryDenylist()
+
+    class _FailingSession:
+        def add(self, _row: object) -> None:
+            raise RuntimeError("transaction failed")
+
+        def flush(self) -> None:
+            return None
+
+    class _DbManager:
+        @contextmanager
+        def session_scope(self):
+            yield _FailingSession()
+
+    manager = SessionManager(
+        signing_key=TEST_SIGNING_KEY,
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=denylist,
+        db_session_manager=_DbManager(),
+    )
+    manager._is_token_revoked_by_handoff_store = lambda _jti: False  # type: ignore[method-assign]
+
+    source = manager.issue_session(
+        subject_id="worker-i",
+        organization_id="org-12",
+        tenant_id="tenant-12",
+        session_kind=SessionKind.TASK,
+        include_refresh=False,
+        extra_claims={"task_token": True, "task_caveats": ["provider:openai"]},
+    )
+
+    with pytest.raises(RuntimeError, match="transaction failed"):
+        await manager.issue_handoff_token(
+            source_access_token=source.access_token,
+            target_subject_id="worker-j",
+            caveats=["provider:openai"],
+        )
+
+    claims = await manager.validate_access_token(source.access_token)
+    assert claims["sub"] == "worker-i"
 
 
 @pytest.mark.unit
