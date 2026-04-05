@@ -6,7 +6,10 @@ import json
 
 import pytest
 
-from caracal.core.revocation_publishers import RedisPubSubRevocationEventPublisher
+from caracal.core.revocation_publishers import (
+    EnterpriseWebhookRevocationEventPublisher,
+    RedisPubSubRevocationEventPublisher,
+)
 
 
 class _FakeRedis:
@@ -56,3 +59,45 @@ async def test_redis_revocation_publisher_emits_json_payload_to_configured_chann
 def test_redis_revocation_publisher_rejects_empty_channel() -> None:
     with pytest.raises(ValueError, match="channel cannot be empty"):
         RedisPubSubRevocationEventPublisher(_FakeRedis(), channel="")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_enterprise_webhook_revocation_publisher_posts_payload_with_sync_header() -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_post(*, webhook_url, payload, headers, timeout_seconds) -> None:
+        captured["webhook_url"] = webhook_url
+        captured["payload"] = payload
+        captured["headers"] = headers
+        captured["timeout_seconds"] = timeout_seconds
+
+    publisher = EnterpriseWebhookRevocationEventPublisher(
+        webhook_url="https://enterprise.example/api/sync/revocation-events",
+        sync_api_key="sync-key-123",
+        timeout_seconds=7.5,
+        post_json_fn=_capture_post,
+    )
+
+    await publisher.publish_principal_revocation_event(
+        event_type="principal_revoked",
+        principal_id="principal-1",
+        reason="policy_violation",
+        actor_principal_id="admin-1",
+        root_principal_id="principal-root",
+        revoked_mandate_ids=["m-1"],
+        metadata={"source": "enterprise"},
+    )
+
+    assert captured["webhook_url"] == "https://enterprise.example/api/sync/revocation-events"
+    assert captured["headers"]["X-Sync-Api-Key"] == "sync-key-123"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["timeout_seconds"] == 7.5
+    assert captured["payload"]["event_type"] == "principal_revoked"
+    assert captured["payload"]["metadata"] == {"source": "enterprise"}
+
+
+@pytest.mark.unit
+def test_enterprise_webhook_revocation_publisher_rejects_invalid_webhook_url() -> None:
+    with pytest.raises(ValueError, match="webhook_url"):
+        EnterpriseWebhookRevocationEventPublisher(webhook_url="enterprise.example/no-scheme")

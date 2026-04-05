@@ -100,6 +100,12 @@ async def test_revoke_principal_processes_leaves_first_and_flushes_cache() -> No
         return SimpleNamespace(principal_id=principal_id, mandate_ids=[mandate_id])
 
     orchestrator._resolve_leaves_first_order = Mock(return_value=[leaf_id, root_id])
+    orchestrator._list_active_mandates_for_principal = Mock(
+        side_effect=[
+            [SimpleNamespace(mandate_id=uuid4())],
+            [SimpleNamespace(mandate_id=uuid4())],
+        ]
+    )
     orchestrator._revoke_single_principal = Mock(side_effect=_revoke_single)
 
     result = await orchestrator.revoke_principal(
@@ -223,7 +229,7 @@ async def test_revoke_principal_publisher_failure_is_non_fatal() -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_revoke_principal_orders_denylist_revoke_cache_commit_publish() -> None:
+async def test_revoke_principal_orders_denylist_cache_revoke_commit_publish() -> None:
     order: list[str] = []
 
     class _OrderedDenylist:
@@ -255,6 +261,9 @@ async def test_revoke_principal_orders_denylist_revoke_cache_commit_publish() ->
         revocation_event_publisher=publisher,
     )
     orchestrator._resolve_leaves_first_order = Mock(return_value=[root_id])
+    orchestrator._list_active_mandates_for_principal = Mock(
+        return_value=[SimpleNamespace(mandate_id=mandate_id)]
+    )
 
     def _revoke_single(*, principal_id, reason, actor_principal_id):
         del reason, actor_principal_id
@@ -272,8 +281,9 @@ async def test_revoke_principal_orders_denylist_revoke_cache_commit_publish() ->
 
     assert order[0] == "denylist"
     assert "durable_revoke" in order
-    assert order.index("denylist") < order.index("durable_revoke")
-    assert order.index("durable_revoke") < order.index("cache")
+    assert "cache" in order
+    assert order.index("denylist") < order.index("cache")
+    assert order.index("cache") < order.index("durable_revoke")
     assert publisher.events[0]["commit_seen"] is True
 
 
