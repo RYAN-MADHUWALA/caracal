@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from caracal.deployment.edition import Edition, EditionManager
 from caracal.deployment.exceptions import EditionConfigurationError
@@ -96,6 +96,54 @@ class DeploymentEditionAdapter:
             webhook_url = f"{gateway_url.rstrip('/')}/api/sync/revocation-events"
 
         return webhook_url, normalized_sync_override or sync_api_key
+
+    def resolve_gateway_feature_overrides(self) -> dict[str, Any]:
+        """Return enterprise runtime gateway overrides for adapter consumers.
+
+        This keeps enterprise config loading isolated behind the adapter so core
+        modules do not import enterprise license modules directly.
+        """
+        if not self.is_enterprise():
+            return {}
+
+        from caracal.enterprise.license import load_enterprise_config
+
+        raw_config = load_enterprise_config()
+        if not isinstance(raw_config, dict):
+            return {}
+
+        gateway = raw_config.get("gateway")
+        if not isinstance(gateway, dict):
+            return {}
+
+        normalized: dict[str, Any] = {
+            "enabled": bool(gateway.get("enabled", False)),
+        }
+
+        endpoint = str(gateway.get("endpoint") or "").strip()
+        if endpoint:
+            normalized["endpoint"] = endpoint.rstrip("/")
+
+        api_key = str(gateway.get("api_key") or "").strip()
+        if api_key:
+            normalized["api_key"] = api_key
+
+        if "fail_closed" in gateway:
+            normalized["fail_closed"] = bool(gateway["fail_closed"])
+        if "use_provider_registry" in gateway:
+            normalized["use_provider_registry"] = bool(gateway["use_provider_registry"])
+        if "mandate_cache_ttl_seconds" in gateway:
+            normalized["mandate_cache_ttl_seconds"] = int(gateway["mandate_cache_ttl_seconds"])
+        if "revocation_sync_interval_seconds" in gateway:
+            normalized["revocation_sync_interval_seconds"] = int(
+                gateway["revocation_sync_interval_seconds"]
+            )
+
+        deployment_type = str(gateway.get("deployment_type") or "").strip().lower()
+        if deployment_type in {"managed", "on_prem", "oss"}:
+            normalized["deployment_type"] = deployment_type
+
+        return normalized
 
     def get_provider_client(self) -> Union["Broker", "GatewayClient"]:
         from caracal.deployment.broker import Broker

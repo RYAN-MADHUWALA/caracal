@@ -1688,24 +1688,9 @@ def _resolve_enterprise_revocation_webhook_url(*, edition_manager: object | None
     return f"{gateway_url.rstrip('/')}{AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH}"
 
 
-def _resolve_enterprise_revocation_sync_api_key() -> str | None:
-    configured = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip()
-    if configured:
-        return configured
-
-    try:
-        from caracal.enterprise.license import resolve_revocation_webhook_target
-
-        _, resolved = resolve_revocation_webhook_target()
-        return resolved or None
-    except Exception:
-        return None
-
-
 def _create_enterprise_revocation_event_publisher(*, edition_manager: object | None = None):
     from caracal.core.revocation_publishers import EnterpriseWebhookRevocationEventPublisher
     from caracal.deployment.edition_adapter import get_deployment_edition_adapter
-    from caracal.enterprise.license import resolve_revocation_webhook_target
 
     configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip() or None
     configured_sync_api_key = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip() or None
@@ -1717,13 +1702,8 @@ def _create_enterprise_revocation_event_publisher(*, edition_manager: object | N
             sync_api_key_override=configured_sync_api_key,
         )
     else:
-        resolved_webhook_url, resolved_sync_api_key = resolve_revocation_webhook_target(
-            webhook_url_override=configured_url,
-        )
-        webhook_url = resolved_webhook_url or _resolve_enterprise_revocation_webhook_url(
-            edition_manager=adapter,
-        )
-        sync_api_key = configured_sync_api_key or resolved_sync_api_key or _resolve_enterprise_revocation_sync_api_key()
+        webhook_url = _resolve_enterprise_revocation_webhook_url(edition_manager=adapter)
+        sync_api_key = configured_sync_api_key
 
     return EnterpriseWebhookRevocationEventPublisher(
         webhook_url=webhook_url,
