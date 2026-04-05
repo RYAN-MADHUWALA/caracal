@@ -6,6 +6,15 @@ from .attestation_nonce import (
     AttestationNonceValidationError,
     IssuedAttestationNonce,
 )
+from .principal_ttl import (
+    ChildTTLDecision,
+    PrincipalTTLExpiryProcessor,
+    PrincipalTTLLease,
+    PrincipalTTLLeaseExpiredError,
+    PrincipalTTLManager,
+    PrincipalTTLValidationError,
+    serialize_ttl_decision,
+)
 from .ais_server import (
     AISBindTargetError,
     AISHandlers,
@@ -32,9 +41,16 @@ __all__ = [
     "AttestationNonceConsumedError",
     "AttestationNonceManager",
     "AttestationNonceValidationError",
+    "ChildTTLDecision",
     "IdentityService",
     "IssuedAttestationNonce",
+    "PrincipalTTLExpiryProcessor",
+    "PrincipalTTLLease",
+    "PrincipalTTLLeaseExpiredError",
+    "PrincipalTTLManager",
+    "PrincipalTTLValidationError",
     "create_ais_app",
     "resolve_ais_listen_target",
+    "serialize_ttl_decision",
     "validate_ais_bind_host",
 ]
