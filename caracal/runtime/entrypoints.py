@@ -1509,6 +1509,22 @@ def _resolve_ais_vault_secret(secret_ref: str) -> str:
         return get_vault().get(org_id=str(org_id), env_id=str(env_id), name=normalized_ref)
 
 
+def _resolve_ais_vault_context() -> tuple[str, str]:
+    org_id = (
+        os.environ.get("CARACAL_VAULT_PROJECT_ID")
+        or os.environ.get("CARACAL_VAULT_PROJECT_SLUG")
+        or os.environ.get("CARACAL_VAULT_ORG_ID")
+        or "caracal"
+    )
+    env_id = (
+        os.environ.get("CARACAL_VAULT_ENVIRONMENT")
+        or os.environ.get("CARACAL_VAULT_ENV")
+        or os.environ.get("CARACAL_VAULT_ENV_ID")
+        or "runtime"
+    )
+    return str(org_id), str(env_id)
+
+
 def _bootstrap_runtime_vault_refs() -> None:
     from caracal.core.vault import gateway_context, get_vault
 
@@ -1523,18 +1539,7 @@ def _bootstrap_runtime_vault_refs() -> None:
             f"{AIS_SESSION_VERIFY_KEY_REF_ENV} is required to bootstrap AIS session verification"
         )
 
-    org_id = (
-        os.environ.get("CARACAL_VAULT_PROJECT_ID")
-        or os.environ.get("CARACAL_VAULT_PROJECT_SLUG")
-        or os.environ.get("CARACAL_VAULT_ORG_ID")
-        or "caracal"
-    )
-    env_id = (
-        os.environ.get("CARACAL_VAULT_ENVIRONMENT")
-        or os.environ.get("CARACAL_VAULT_ENV")
-        or os.environ.get("CARACAL_VAULT_ENV_ID")
-        or "runtime"
-    )
+    org_id, env_id = _resolve_ais_vault_context()
     algorithm = (
         os.environ.get(AIS_SESSION_ALGORITHM_ENV)
         or os.environ.get(AIS_SESSION_ALGORITHM_FALLBACK_ENV)
@@ -1543,8 +1548,8 @@ def _bootstrap_runtime_vault_refs() -> None:
 
     with gateway_context():
         get_vault().ensure_asymmetric_keypair(
-            org_id=str(org_id),
-            env_id=str(env_id),
+            org_id=org_id,
+            env_id=env_id,
             private_key_name=signing_key_ref,
             public_key_name=verify_key_ref,
             algorithm=algorithm,
@@ -1552,7 +1557,7 @@ def _bootstrap_runtime_vault_refs() -> None:
         )
 
 
-def _resolve_session_signing_algorithm(signing_key_pem: str) -> str:
+def _resolve_session_signing_algorithm() -> str:
     configured = (
         os.environ.get(AIS_SESSION_ALGORITHM_ENV)
         or os.environ.get(AIS_SESSION_ALGORITHM_FALLBACK_ENV)
@@ -1561,36 +1566,18 @@ def _resolve_session_signing_algorithm(signing_key_pem: str) -> str:
     if configured:
         return configured.upper()
 
-    try:
-        from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec, rsa
-
-        private_key = serialization.load_pem_private_key(
-            signing_key_pem.encode("utf-8"),
-            password=None,
-            backend=default_backend(),
-        )
-        if isinstance(private_key, rsa.RSAPrivateKey):
-            return "RS256"
-        if isinstance(private_key, ec.EllipticCurvePrivateKey):
-            return "ES256"
-    except Exception:
-        pass
-
     return "RS256"
 
 
 def _create_ais_session_manager():
     from caracal.core.session_manager import RedisSessionDenylistBackend, SessionManager
+    from caracal.core.signing_service import VaultReferenceJwtSigner
 
     signing_key_ref = (os.environ.get(AIS_SESSION_SIGNING_KEY_REF_ENV) or "").strip()
     if not signing_key_ref:
         raise RuntimeError(
             f"{AIS_SESSION_SIGNING_KEY_REF_ENV} is required to issue AIS session tokens"
         )
-
-    signing_key = _resolve_ais_vault_secret(signing_key_ref)
 
     verify_key_ref = (os.environ.get(AIS_SESSION_VERIFY_KEY_REF_ENV) or "").strip()
     if not verify_key_ref:
@@ -1600,15 +1587,22 @@ def _create_ais_session_manager():
     verify_key = _resolve_ais_vault_secret(verify_key_ref)
 
     caveat_mode = (os.environ.get(AIS_SESSION_CAVEAT_MODE_ENV) or "caveat_chain").strip().lower()
-    caveat_hmac_key = (
-        os.environ.get(AIS_SESSION_CAVEAT_HMAC_KEY_ENV)
-        or signing_key
-    )
+    caveat_hmac_key = (os.environ.get(AIS_SESSION_CAVEAT_HMAC_KEY_ENV) or "").strip()
+    if caveat_mode == "caveat_chain" and not caveat_hmac_key:
+        raise RuntimeError(
+            f"{AIS_SESSION_CAVEAT_HMAC_KEY_ENV} is required when {AIS_SESSION_CAVEAT_MODE_ENV}=caveat_chain"
+        )
+    org_id, env_id = _resolve_ais_vault_context()
 
     return SessionManager(
-        signing_key=signing_key,
+        token_signer=VaultReferenceJwtSigner(
+            org_id=org_id,
+            env_id=env_id,
+            key_name=signing_key_ref,
+            actor="runtime-ais-session-manager",
+        ),
         verify_key=verify_key,
-        algorithm=_resolve_session_signing_algorithm(signing_key),
+        algorithm=_resolve_session_signing_algorithm(),
         denylist_backend=RedisSessionDenylistBackend(_resolve_runtime_redis_url()),
         db_session_manager=_create_ais_db_manager(),
         caveat_mode=caveat_mode,

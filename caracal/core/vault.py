@@ -10,8 +10,6 @@ Hard-cut requirements:
 from __future__ import annotations
 
 import os
-import hashlib
-import json
 import threading
 import time
 from dataclasses import dataclass
@@ -21,10 +19,6 @@ from typing import Any, Optional, Tuple
 from uuid import uuid4
 
 import httpx
-import jwt
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from caracal.logging_config import get_logger
 
@@ -113,10 +107,6 @@ class SecretNotFound(VaultError):
 
 class VaultRateLimitExceeded(VaultError):
     """Raised when org rate limit is exceeded."""
-
-
-class MasterKeyError(VaultError):
-    """Compatibility error for legacy MasterKeyProvider users."""
 
 
 class VaultConfigurationError(VaultError):
@@ -288,32 +278,6 @@ class _VaultRateLimiter:
                     f"Limit: {self._limit} requests per {int(self._window)}s."
                 )
             bucket.tokens -= 1
-
-
-class MasterKeyProvider:
-    """Compatibility shim for legacy callers; not used for vault-backed storage."""
-
-    _ENV_MEK_SECRET = "CARACAL_VAULT_MEK_SECRET"
-
-    def __init__(self) -> None:
-        raw = _read_env_or_dotenv(self._ENV_MEK_SECRET)
-        if not raw:
-            raise MasterKeyError(f"{self._ENV_MEK_SECRET} is not set.")
-        self._root = raw.encode("utf-8")
-
-    def derive(self, org_id: str, env_id: str, key_version: int) -> bytes:
-        import hashlib
-
-        material = b"|".join(
-            [
-                self._root,
-                org_id.encode("utf-8"),
-                env_id.encode("utf-8"),
-                str(key_version).encode("utf-8"),
-            ]
-        )
-        digest = hashlib.sha256(material).digest()
-        return digest
 
 
 _GATEWAY_CONTEXT_FLAG = threading.local()
@@ -501,6 +465,126 @@ class CaracalVault:
             _append_from(payload["secret"])
 
         return sorted(set(names))
+
+    @staticmethod
+    def _extract_string_value(payload: dict[str, Any], *paths: tuple[str, ...]) -> Optional[str]:
+        for path in paths:
+            cursor: Any = payload
+            found = True
+            for key in path:
+                if isinstance(cursor, dict) and key in cursor:
+                    cursor = cursor[key]
+                else:
+                    found = False
+                    break
+            if found and isinstance(cursor, str) and cursor.strip():
+                return cursor.strip()
+        return None
+
+    def _sign_jwt_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        key_name: str,
+        payload: dict[str, Any],
+        headers: dict[str, Any],
+        algorithm: str,
+    ) -> str:
+        endpoint = (_read_env_or_dotenv("CARACAL_VAULT_SIGN_JWT_ENDPOINT") or "/api/caracal/sign/jwt").strip()
+        response = self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "keyName": key_name,
+                "algorithm": algorithm,
+                "payload": payload,
+                "headers": headers,
+            },
+            allowed_statuses={200, 201},
+        )
+        token = self._extract_string_value(
+            self._json(response),
+            ("signedJwt",),
+            ("signed_token",),
+            ("token",),
+            ("jwt",),
+            ("data", "signedJwt"),
+            ("data", "token"),
+        )
+        if token is None:
+            raise VaultError("Vault sign_jwt response did not contain a signed token.")
+        return token
+
+    def _sign_canonical_payload_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        key_name: str,
+        payload: dict[str, Any],
+    ) -> str:
+        endpoint = (
+            _read_env_or_dotenv("CARACAL_VAULT_SIGN_CANONICAL_PAYLOAD_ENDPOINT")
+            or "/api/caracal/sign/canonical-payload"
+        ).strip()
+        response = self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "keyName": key_name,
+                "payload": payload,
+            },
+            allowed_statuses={200, 201},
+        )
+        signature = self._extract_string_value(
+            self._json(response),
+            ("signatureHex",),
+            ("signature",),
+            ("data", "signatureHex"),
+            ("data", "signature"),
+        )
+        if signature is None:
+            raise VaultError(
+                "Vault sign_canonical_payload response did not contain a signature."
+            )
+        return signature
+
+    def _bootstrap_asymmetric_keypair_via_vault_api(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        private_key_name: str,
+        public_key_name: str,
+        algorithm: str,
+    ) -> None:
+        endpoint = (
+            _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_KEYPAIR_ENDPOINT")
+            or "/api/caracal/keys/bootstrap"
+        ).strip()
+        self._request(
+            "POST",
+            endpoint,
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "privateKeyName": private_key_name,
+                "publicKeyName": public_key_name,
+                "algorithm": algorithm,
+            },
+            allowed_statuses={200, 201, 202, 409},
+        )
 
     def _secret_exists(self, project_id: str, environment: str, secret_path: str, name: str) -> bool:
         try:
@@ -739,9 +823,17 @@ class CaracalVault:
         self._rl.check(org_id)
         self._ensure_service_health()
 
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
         try:
-            private_key = self._load_private_key(org_id, env_id, name)
-            token = jwt.encode(payload, private_key, algorithm=algorithm, headers=headers)
+            token = self._sign_jwt_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                key_name=name,
+                payload=payload,
+                headers=headers,
+                algorithm=algorithm,
+            )
             self._audit_event(org_id, env_id, name, "sign_jwt", 1, actor, True)
             return token
         except Exception as exc:
@@ -763,17 +855,17 @@ class CaracalVault:
         self._rl.check(org_id)
         self._ensure_service_health()
 
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
         try:
-            private_key = self._load_private_key(org_id, env_id, name)
-            if not isinstance(private_key, ec.EllipticCurvePrivateKey):
-                raise VaultError(f"Vault-backed key '{name}' is not ECDSA")
-            if not isinstance(private_key.curve, ec.SECP256R1):
-                raise VaultError(f"Vault-backed key '{name}' is not P-256")
-            canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            message_hash = hashlib.sha256(canonical_json.encode("utf-8")).digest()
-            signature = private_key.sign(message_hash, ec.ECDSA(hashes.SHA256()))
+            signature = self._sign_canonical_payload_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                key_name=name,
+                payload=payload,
+            )
             self._audit_event(org_id, env_id, name, "sign_canonical_payload", 1, actor, True)
-            return signature.hex()
+            return signature
         except Exception as exc:
             self._audit_event(
                 org_id,
@@ -846,45 +938,15 @@ class CaracalVault:
             )
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
-        private_exists = self._secret_exists(project_id, environment, secret_path, private_key_name)
-        public_exists = self._secret_exists(project_id, environment, secret_path, public_key_name)
-
         try:
-            if private_exists:
-                if public_exists:
-                    return
-
-                private_key = self._load_private_key(org_id, env_id, private_key_name)
-                public_key_pem = private_key.public_key().public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                ).decode("utf-8")
-                self._upsert_secret(project_id, environment, secret_path, public_key_name, public_key_pem)
-                self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
-                return
-
-            if public_exists:
-                raise VaultError(
-                    "Vault bootstrap found a public verification key but no matching private signing key."
-                )
-
-            if normalized_algorithm == "ES256":
-                private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
-            else:
-                private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-            private_key_pem = private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
-            ).decode("utf-8")
-            public_key_pem = private_key.public_key().public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            ).decode("utf-8")
-
-            self._upsert_secret(project_id, environment, secret_path, private_key_name, private_key_pem)
-            self._upsert_secret(project_id, environment, secret_path, public_key_name, public_key_pem)
+            self._bootstrap_asymmetric_keypair_via_vault_api(
+                project_id=project_id,
+                environment=environment,
+                secret_path=secret_path,
+                private_key_name=private_key_name,
+                public_key_name=public_key_name,
+                algorithm=normalized_algorithm,
+            )
             self._audit_event(org_id, env_id, private_key_name, "create", 1, actor, True)
             self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
         except Exception as exc:
@@ -914,20 +976,6 @@ class CaracalVault:
                 "Failed to bootstrap asymmetric vault key material "
                 f"({private_key_name}, {public_key_name}): {exc}"
             ) from exc
-
-    def _load_private_key(self, org_id: str, env_id: str, name: str):
-        try:
-            project_id, environment, secret_path = self._resolve_context(org_id, env_id)
-            private_key_pem = self._get_secret_value(project_id, environment, secret_path, name)
-            return serialization.load_pem_private_key(
-                private_key_pem.encode("utf-8") if isinstance(private_key_pem, str) else private_key_pem,
-                password=None,
-                backend=default_backend(),
-            )
-        except Exception as exc:
-            if isinstance(exc, VaultError):
-                raise
-            raise VaultError(f"Failed to load vault-backed private key '{name}': {exc}") from exc
 
     def rotate_master_key(self, org_id: str, env_id: str, actor: str = "admin") -> RotationResult:
         _assert_gateway_context()
