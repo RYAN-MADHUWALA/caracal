@@ -1647,10 +1647,17 @@ def _resolve_runtime_revocation_publisher_mode(*, edition_manager: object | None
             f"{AIS_REVOCATION_PUBLISHER_MODE_ENV} must be one of: redis, enterprise_webhook"
         )
 
-    from caracal.deployment.edition import Edition, EditionManager
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
 
-    manager = edition_manager or EditionManager()
-    resolved_get_edition = getattr(manager, "get_edition", None)
+    adapter = edition_manager or get_deployment_edition_adapter()
+    resolved_is_enterprise = getattr(adapter, "is_enterprise", None)
+    if callable(resolved_is_enterprise):
+        try:
+            return "enterprise_webhook" if bool(resolved_is_enterprise()) else "redis"
+        except Exception:
+            return "redis"
+
+    resolved_get_edition = getattr(adapter, "get_edition", None)
     if not callable(resolved_get_edition):
         return "redis"
 
@@ -1659,7 +1666,8 @@ def _resolve_runtime_revocation_publisher_mode(*, edition_manager: object | None
     except Exception:
         return "redis"
 
-    return "enterprise_webhook" if edition == Edition.ENTERPRISE else "redis"
+    normalized = str(getattr(edition, "value", edition) or "").strip().lower()
+    return "enterprise_webhook" if normalized == "enterprise" else "redis"
 
 
 def _resolve_enterprise_revocation_webhook_url(*, edition_manager: object | None = None) -> str:
