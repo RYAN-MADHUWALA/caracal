@@ -292,18 +292,12 @@ def test_db_models_have_no_legacy_sync_state_orm_classes() -> None:
 
 
 @pytest.mark.unit
-def test_sync_compatibility_modules_have_no_sync_state_orm_imports() -> None:
+def test_legacy_sync_modules_are_removed() -> None:
     sync_engine_file = _REPO_ROOT / "caracal" / "deployment" / "sync_engine.py"
     sync_state_file = _REPO_ROOT / "caracal" / "deployment" / "sync_state.py"
 
-    combined = "\n".join(
-        [
-            sync_engine_file.read_text(encoding="utf-8"),
-            sync_state_file.read_text(encoding="utf-8"),
-        ]
-    )
-
-    assert "from caracal.db.models import Sync" not in combined
+    assert not sync_engine_file.exists()
+    assert not sync_state_file.exists()
 
 
 @pytest.mark.unit

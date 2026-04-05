@@ -73,3 +73,61 @@ def test_save_vault_compatibility_shim_updates_secret_refs_without_local_secret_
 
     assert metadata["secret_refs"] == {"provider_api_key": "ENC[v4:vault://default/dev/provider]"}
     assert not manager._legacy_secret_store_path("alpha").exists()
+
+
+@pytest.mark.unit
+def test_workspace_config_write_does_not_emit_legacy_sync_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_manager_paths(monkeypatch, tmp_path)
+
+    manager = ConfigManager()
+    manager.create_workspace("alpha", template="enterprise")
+
+    config = manager._load_workspace_toml("alpha")
+
+    assert "sync_enabled" not in config
+    assert "sync_url" not in config
+    assert "sync_direction" not in config
+    assert "auto_sync_interval" not in config
+    assert "last_sync" not in config
+    assert "conflict_strategy" not in config
+
+
+@pytest.mark.unit
+def test_legacy_sync_fields_load_and_are_removed_on_next_save(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_manager_paths(monkeypatch, tmp_path)
+
+    manager = ConfigManager()
+    manager.create_workspace("alpha")
+
+    legacy = manager._load_workspace_toml("alpha")
+    legacy.update(
+        {
+            "sync_enabled": True,
+            "sync_url": "https://enterprise.example",
+            "sync_direction": "bidirectional",
+            "auto_sync_interval": 300,
+            "last_sync": "2026-01-01T00:00:00",
+            "conflict_strategy": "operational_transform",
+        }
+    )
+    manager._save_workspace_toml("alpha", legacy)
+
+    cfg = manager.get_workspace_config("alpha")
+    assert cfg.name == "alpha"
+    assert cfg.is_default is True
+
+    manager.set_workspace_config("alpha", cfg)
+    cleaned = manager._load_workspace_toml("alpha")
+
+    assert "sync_enabled" not in cleaned
+    assert "sync_url" not in cleaned
+    assert "sync_direction" not in cleaned
+    assert "auto_sync_interval" not in cleaned
+    assert "last_sync" not in cleaned
+    assert "conflict_strategy" not in cleaned
