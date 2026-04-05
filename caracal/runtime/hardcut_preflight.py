@@ -7,6 +7,11 @@ These checks enforce the strict hard-cut constraints:
 - no compatibility aliases
 - no dual-write compatibility windows
 - no legacy migration command path
+
+Frozen hard-cut contracts:
+- `/api/sync` is the only allowed enterprise API family
+- `caracal enterprise` is the only allowed enterprise CLI family
+- runtime code must not depend on legacy sync-state models
 """
 
 from __future__ import annotations
@@ -19,6 +24,13 @@ class HardCutPreflightError(RuntimeError):
     """Raised when strict hard-cut preflight constraints are violated."""
 
 
+_CANONICAL_ENTERPRISE_API_FAMILY = "/api/sync"
+_CANONICAL_ENTERPRISE_CLI_FAMILY = "caracal enterprise"
+_FORBIDDEN_SYNC_RUNTIME_MODEL_MARKERS = (
+    "sync_operations",
+    "sync_conflicts",
+    "sync_metadata",
+)
 _FORBIDDEN_SQLITE_PREFIXES = ("sqlite://", "sqlite+")
 _FORBIDDEN_RUNTIME_COMPOSE_MARKERS = (
     "caracal_state:",

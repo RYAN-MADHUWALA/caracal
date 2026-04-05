@@ -309,7 +309,7 @@ class EnterpriseFlow:
         
         Validates the license against the Enterprise API, persists
         the license key and sync API key to the workspace, and
-        enables automatic sync.
+        enables explicit enterprise management actions.
         """
         self.console.clear()
         
@@ -317,7 +317,7 @@ class EnterpriseFlow:
         info_panel = Panel(
             f"[bold]Connect Enterprise License[/bold]\n\n"
             f"Enter your Caracal Enterprise license token to activate enterprise features\n"
-            f"and enable automatic sync between your local CLI and the Enterprise dashboard.\n\n"
+            f"and unlock explicit Enterprise sync and gateway management actions.\n\n"
             f"License tokens are found in your Enterprise dashboard under\n"
             f"[bold]Settings → Plan & Billing → Enterprise License Token[/bold].\n\n"
             f"If you don't have a license token, visit [{Colors.LINK}]https://garudexlabs.com[/]\n"
@@ -384,10 +384,10 @@ class EnterpriseFlow:
                 masked = key[:8] + "..." + key[-4:] if len(key) > 12 else key
                 success_lines.append(f"\n[bold]Sync API Key:[/] {masked}")
                 success_lines.append(
-                    f"[{Colors.DIM}]This key is stored in your workspace and will be used[/]"
+                    f"[{Colors.DIM}]This key is stored in your workspace and used for[/]"
                 )
                 success_lines.append(
-                    f"[{Colors.DIM}]for automatic sync between CLI and Enterprise dashboard.[/]"
+                    f"[{Colors.DIM}]explicit Enterprise sync and gateway management actions.[/]"
                 )
             
             success_panel = Panel(
@@ -397,37 +397,13 @@ class EnterpriseFlow:
                 padding=(1, 2),
             )
             self.console.print(success_panel)
-            
-            # Auto-sync gateway config from Enterprise
+
             self.console.print(
-                f"\n[{Colors.DIM}]Syncing gateway configuration from Enterprise...[/]"
+                f"\n[{Colors.DIM}]Gateway configuration is not pulled automatically in hard-cut mode.[/]"
             )
-            try:
-                from caracal.enterprise.sync import EnterpriseSyncClient
-                client = EnterpriseSyncClient()
-                gw_result = client.pull_gateway_config()
-                if gw_result.get("success") and gw_result.get("gateway_configured"):
-                    deploy = gw_result.get("deployment_type", "managed")
-                    mode_label = (
-                        "Managed (Caracal platform)" if deploy == "managed"
-                        else "On-Prem (customer)"
-                    )
-                    self.console.print(
-                        f"[{Colors.SUCCESS}]✓ Gateway auto-configured: "
-                        f"{mode_label} → {gw_result.get('gateway_endpoint', '—')}[/]"
-                    )
-                elif gw_result.get("success"):
-                    self.console.print(
-                        f"[{Colors.DIM}]Gateway not yet provisioned on Enterprise.[/]"
-                    )
-                else:
-                    self.console.print(
-                        f"[{Colors.WARNING}]Gateway sync skipped: {gw_result.get('message', '')}[/]"
-                    )
-            except Exception as exc:
-                self.console.print(
-                    f"[{Colors.WARNING}]Gateway auto-config skipped: {exc}[/]"
-                )
+            self.console.print(
+                f"[{Colors.DIM}]Use Enterprise → API Gateway when you want to sync gateway settings explicitly.[/]"
+            )
 
             # Offer to sync data now
             self.console.print()
