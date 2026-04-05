@@ -690,6 +690,18 @@ def test_migration_cli_exposes_explicit_hardcut_bidirectional_commands() -> None
 
 
 @pytest.mark.unit
+def test_enterprise_login_disconnect_do_not_embed_credential_migration_flows() -> None:
+    deployment_cli_file = _REPO_ROOT / "caracal" / "cli" / "deployment_cli.py"
+    payload = deployment_cli_file.read_text(encoding="utf-8")
+
+    assert "--no-credential-migration" not in payload
+    assert "Connected, but enterprise migration had warnings" not in payload
+    assert "run `caracal migrate oss-to-enterprise`" in payload
+    assert "run `caracal migrate enterprise-to-oss`" in payload
+    assert "Use --allow-local-secrets-migration" not in payload
+
+
+@pytest.mark.unit
 def test_sdk_exports_include_management_migration_and_ais_groups() -> None:
     python_sdk_init = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "__init__.py"
     node_sdk_index = _REPO_ROOT / "sdk" / "node-sdk" / "src" / "index.ts"
