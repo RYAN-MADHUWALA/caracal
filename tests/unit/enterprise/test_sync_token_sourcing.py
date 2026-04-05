@@ -174,6 +174,7 @@ def test_license_validation_fails_closed_when_api_is_unreachable(monkeypatch: py
         "_candidate_api_urls",
         lambda base_url: [base_url],
     )
+    monkeypatch.setattr(enterprise_license, "_get_or_create_client_instance_id", lambda: "client-1")
     monkeypatch.setattr(
         enterprise_license,
         "_post_json",

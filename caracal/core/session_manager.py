@@ -486,6 +486,8 @@ class SessionManager:
             source_remaining_caveats=source_remaining_caveats,
             issued_at=now,
         )
+        if self._db_session_manager is None:
+            await self._denylist.add(source_token_jti, source_exp_dt)
 
         self._record_audit_event(
             event_type="handoff_token_issued",
@@ -560,7 +562,10 @@ class SessionManager:
         )
 
         if handoff_jti:
-            self._consume_handoff_transfer(handoff_jti=handoff_jti)
+            if self._db_session_manager is None:
+                await self._denylist.add(handoff_jti, exp_dt)
+            else:
+                self._consume_handoff_transfer(handoff_jti=handoff_jti)
 
         self._record_audit_event(
             event_type="handoff_token_consumed",
