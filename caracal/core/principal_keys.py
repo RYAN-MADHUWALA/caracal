@@ -122,17 +122,6 @@ def _vault_put_secret(org_id: str, env_id: str, secret_name: str, value: str) ->
         ) from exc
 
 
-def _vault_get_secret(reference: str) -> str:
-    org_id, env_id, secret_name = _parse_vault_reference(reference)
-    try:
-        with gateway_context():
-            return get_vault().get(org_id=org_id, env_id=env_id, name=secret_name)
-    except VaultError as exc:
-        raise PrincipalKeyStorageError(
-            f"Failed to resolve principal key from vault reference: {reference}"
-        ) from exc
-
-
 def generate_and_store_principal_keypair(
     principal_id: UUID,
     db_session: Optional[Session] = None,
@@ -204,34 +193,6 @@ def get_principal_key_backend(principal_id: UUID, db_session: Session) -> Option
     return custody.backend if custody else None
 
 
-def resolve_principal_private_key(
-    principal_id: UUID,
-    db_session: Session,
-    principal_metadata: Optional[Mapping[str, object]] = None,
-) -> str:
-    """Resolve a principal private key PEM from custody records.
-
-    Falls back to metadata references when custody records are absent.
-    """
-    custody = db_session.query(PrincipalKeyCustody).filter_by(principal_id=principal_id).first()
-    if custody is None:
-        if principal_metadata:
-            return _resolve_from_metadata(principal_id, principal_metadata)
-        raise PrincipalKeyStorageError(f"No custody record found for principal '{principal_id}'")
-
-    backend = str(custody.backend or "").strip().lower()
-    if backend != _VAULT_BACKEND:
-        raise PrincipalKeyStorageError(
-            "Unsupported key backend in custody record: "
-            f"{backend!r}. Expected '{_VAULT_BACKEND}'."
-        )
-
-    key_reference = str(custody.key_reference or "").strip()
-    if not key_reference:
-        raise PrincipalKeyStorageError("Missing vault key reference in custody record")
-    return _vault_get_secret(key_reference)
-
-
 def resolve_principal_key_reference(
     principal_id: UUID,
     db_session: Session,
@@ -264,25 +225,6 @@ def resolve_principal_key_reference(
             f"Missing vault_key_ref for principal key resolution ({principal_id})"
         )
     return key_reference.strip()
-
-
-def _resolve_from_metadata(principal_id: UUID, principal_metadata: Mapping[str, object]) -> str:
-    """Resolve key material from vault metadata references."""
-    metadata = dict(principal_metadata or {})
-    backend = str(metadata.get("key_backend") or _VAULT_BACKEND).strip().lower()
-    if backend != _VAULT_BACKEND:
-        raise PrincipalKeyStorageError(
-            "Unsupported key_backend in principal metadata: "
-            f"{backend!r}. Expected '{_VAULT_BACKEND}'."
-        )
-
-    key_reference = metadata.get("vault_key_ref") or metadata.get("key_reference")
-    if not isinstance(key_reference, str) or not key_reference.strip():
-        raise PrincipalKeyStorageError(
-            f"Missing vault_key_ref for principal key resolution ({principal_id})"
-        )
-    return _vault_get_secret(key_reference)
-
 
 def _upsert_custody_record(
     db_session: Session,

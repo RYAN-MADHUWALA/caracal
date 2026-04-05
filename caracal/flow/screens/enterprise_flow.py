@@ -84,7 +84,7 @@ class EnterpriseFlow:
                 MenuItem(
                     key="secrets",
                     label="Secret Vault",
-                    description="Manage tier-appropriate secret backend (CaracalVault / AWS SM)",
+                    description="Manage CaracalVault-backed secret refs",
                     icon="",
                 ),
                 MenuItem(
