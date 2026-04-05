@@ -55,3 +55,38 @@ def test_runtime_compose_has_no_file_backed_state_markers() -> None:
 
     assert "caracal_state:" not in payload
     assert "/home/caracal/.caracal" not in payload
+
+
+@pytest.mark.unit
+def test_core_crypto_module_has_no_private_key_sign_helpers() -> None:
+    crypto_file = _REPO_ROOT / "caracal" / "core" / "crypto.py"
+    payload = crypto_file.read_text(encoding="utf-8")
+
+    assert "def sign_mandate(" not in payload
+    assert "def sign_merkle_root(" not in payload
+
+
+@pytest.mark.unit
+def test_runtime_code_has_no_core_crypto_sign_helper_imports() -> None:
+    source_root = _REPO_ROOT / "caracal"
+    offenders: list[str] = []
+
+    forbidden_import_markers = (
+        "from caracal.core.crypto import sign_mandate",
+        "from caracal.core.crypto import sign_merkle_root",
+    )
+    for py_file in source_root.rglob("*.py"):
+        payload = py_file.read_text(encoding="utf-8")
+        if any(marker in payload for marker in forbidden_import_markers):
+            offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_mandate_manager_uses_signing_service_for_signature_generation() -> None:
+    mandate_file = _REPO_ROOT / "caracal" / "core" / "mandate.py"
+    payload = mandate_file.read_text(encoding="utf-8")
+
+    assert "sign_canonical_payload_for_principal(" in payload
+    assert "from caracal.core.crypto import sign_mandate" not in payload
