@@ -487,9 +487,6 @@ class SessionManager:
             issued_at=now,
         )
 
-        # Enforce immediate source-scope loss at handoff issuance time.
-        await self._denylist.add(source_token_jti, source_exp_dt)
-
         self._record_audit_event(
             event_type="handoff_token_issued",
             principal_id=str(source_claims.get("sub")),
@@ -526,12 +523,6 @@ class SessionManager:
         handoff_jti = str(claims.get("jti") or "").strip()
         source_jti = str(claims.get("source_token_jti") or "").strip()
 
-        if handoff_jti:
-            self._consume_handoff_transfer(handoff_jti=handoff_jti)
-
-        if handoff_jti:
-            await self._denylist.add(handoff_jti, exp_dt)
-
         remaining_ttl = exp_dt - datetime.now(timezone.utc)
         if remaining_ttl <= timedelta(seconds=0):
             raise SessionValidationError("Handoff token has expired")
@@ -567,6 +558,10 @@ class SessionManager:
             access_ttl=task_ttl,
             extra_claims=task_extra_claims,
         )
+
+        if handoff_jti:
+            self._consume_handoff_transfer(handoff_jti=handoff_jti)
+
         self._record_audit_event(
             event_type="handoff_token_consumed",
             principal_id=str(claims.get("sub")),

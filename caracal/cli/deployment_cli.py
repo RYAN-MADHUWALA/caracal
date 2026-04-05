@@ -108,6 +108,22 @@ def _path_scope_label(path: Path) -> str:
     return "container path"
 
 
+def _parse_credential_assignments(entries: tuple[str, ...]) -> Dict[str, str]:
+    """Parse repeated KEY=VALUE options into a dictionary."""
+    parsed: Dict[str, str] = {}
+    for raw in entries:
+        if "=" not in raw:
+            raise click.ClickException(
+                f"Invalid credential assignment '{raw}'. Expected KEY=VALUE format."
+            )
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise click.ClickException("Credential key must not be empty.")
+        parsed[key] = value
+    return parsed
+
+
 def _resolve_workspace_name(config_manager: ConfigManager, workspace: Optional[str]) -> Optional[str]:
     """Resolve workspace name from explicit option, ConfigManager, or registry default."""
     if workspace:
@@ -583,7 +599,24 @@ def enterprise_group():
 @click.argument("url")
 @click.argument("token")
 @click.option("--workspace", "-w", help="Workspace name (default: current workspace)")
-def enterprise_login(url: str, token: str, workspace: Optional[str]):
+@click.option(
+    "--migrate-credential",
+    "migrate_credentials",
+    multiple=True,
+    help="Credential key to migrate to enterprise custody (repeatable). Defaults to all local credentials.",
+)
+@click.option(
+    "--no-credential-migration",
+    is_flag=True,
+    help="Skip local->enterprise credential migration during login.",
+)
+def enterprise_login(
+    url: str,
+    token: str,
+    workspace: Optional[str],
+    migrate_credentials: tuple[str, ...],
+    no_credential_migration: bool,
+):
     """Connect workspace to enterprise backend."""
     try:
         from caracal.enterprise.license import EnterpriseLicenseValidator
@@ -606,7 +639,8 @@ def enterprise_login(url: str, token: str, workspace: Optional[str]):
                     Edition.ENTERPRISE,
                     gateway_url=resolved_api_url,
                     gateway_token=result.sync_api_key,
-                    migrate_api_keys=True,
+                    migrate_api_keys=not no_credential_migration,
+                    credential_keys=list(migrate_credentials) or None,
                 )
         except Exception as migration_error:
             logger.warning("enterprise_login_migration_skipped", error=str(migration_error))
@@ -634,7 +668,25 @@ def enterprise_login(url: str, token: str, workspace: Optional[str]):
     is_flag=True,
     help="Allow Enterprise->Open Source migration to move provider secrets to local storage",
 )
-def enterprise_disconnect(workspace: Optional[str], force: bool, allow_local_secrets_migration: bool):
+@click.option(
+    "--migrate-credential",
+    "migrate_credentials",
+    multiple=True,
+    help="Credential key to migrate into local storage (repeatable). Defaults to all enterprise-marked credentials.",
+)
+@click.option(
+    "--import-credential",
+    "import_credentials",
+    multiple=True,
+    help="Optional enterprise export payload in KEY=VALUE form (repeatable)",
+)
+def enterprise_disconnect(
+    workspace: Optional[str],
+    force: bool,
+    allow_local_secrets_migration: bool,
+    migrate_credentials: tuple[str, ...],
+    import_credentials: tuple[str, ...],
+):
     """Disconnect workspace from enterprise backend."""
     try:
         from caracal.enterprise.license import EnterpriseLicenseValidator
@@ -654,12 +706,29 @@ def enterprise_disconnect(workspace: Optional[str], force: bool, allow_local_sec
                 console.print("Cancelled.")
                 return
 
+        if (migrate_credentials or import_credentials) and not allow_local_secrets_migration:
+            raise click.ClickException(
+                "Use --allow-local-secrets-migration when specifying --migrate-credential/--import-credential."
+            )
+
+        exports: Optional[Dict[str, str]] = None
+        if import_credentials:
+            if not force and not click.confirm(
+                "Import provided credential values into local encrypted storage?"
+            ):
+                console.print("Cancelled.")
+                return
+            exports = _parse_credential_assignments(import_credentials)
+
         # Migrate edition first so gateway indicators are cleared for auto-detection.
         if current_edition == Edition.ENTERPRISE:
             migration_manager = MigrationManager()
             migration_manager.migrate_edition(
                 Edition.OPENSOURCE,
                 migrate_api_keys=allow_local_secrets_migration,
+                credential_keys=list(migrate_credentials) or None,
+                enterprise_exports=exports,
+                deactivate_enterprise_license=True,
             )
 
         # Ensure enterprise license state does not keep edition in enterprise mode.
@@ -1029,12 +1098,6 @@ def provider_add(
         )
         effective_service_type = service_type.strip().lower() if service_type else "api"
 
-        gateway_url = (
-            edition_adapter.get_gateway_url()
-            or os.environ.get("CARACAL_ENTERPRISE_URL")
-            or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
-            or os.environ.get("CARACAL_GATEWAY_URL")
-        )
         if edition_adapter.is_enterprise():
             raise click.ClickException(
                 "Enterprise mode is gateway-managed. Register providers in the gateway/vault instead of local workspace."
@@ -1115,17 +1178,7 @@ def provider_list(workspace: Optional[str], format: str):
         if edition_adapter.is_enterprise():
             from caracal.deployment.gateway_client import GatewayClient
 
-            gateway_url = (
-                edition_adapter.get_gateway_url()
-                or os.environ.get("CARACAL_ENTERPRISE_URL")
-                or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
-                or os.environ.get("CARACAL_GATEWAY_URL")
-            )
-            if not gateway_url:
-                raise click.ClickException(
-                    "Enterprise edition requires gateway URL configuration. "
-                    "Local broker fallback is not allowed in hard-cut mode."
-                )
+            gateway_url = edition_adapter.require_gateway_url()
 
             gateway_client = GatewayClient(
                 gateway_url=gateway_url,
@@ -1226,17 +1279,7 @@ def provider_test(name: str, workspace: Optional[str]):
             if edition_adapter.is_enterprise():
                 from caracal.deployment.gateway_client import GatewayClient
 
-                gateway_url = (
-                    edition_adapter.get_gateway_url()
-                    or os.environ.get("CARACAL_ENTERPRISE_URL")
-                    or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
-                    or os.environ.get("CARACAL_GATEWAY_URL")
-                )
-                if not gateway_url:
-                    raise click.ClickException(
-                        "Enterprise edition requires gateway URL configuration. "
-                        "Local broker fallback is not allowed in hard-cut mode."
-                    )
+                gateway_url = edition_adapter.require_gateway_url()
 
                 gateway_client = GatewayClient(
                     gateway_url=gateway_url,
