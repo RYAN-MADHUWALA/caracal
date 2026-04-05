@@ -87,7 +87,7 @@ def show_deployment_dashboard(console: Console, state: FlowState) -> Optional[st
 def _build_system_info() -> Table:
     """Build system information table."""
     from caracal.deployment.mode import ModeManager
-    from caracal.deployment.edition import EditionManager
+    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
     from caracal.deployment.config_manager import ConfigManager
     
     table = Table(show_header=False, box=None, padding=(0, 1))
@@ -102,9 +102,8 @@ def _build_system_info() -> Table:
         table.add_row("Mode:", f"[{Colors.SUCCESS}]{mode_str}[/]")
         
         # Edition
-        edition_mgr = EditionManager()
-        edition = edition_mgr.get_edition()
-        edition_str = "Enterprise" if edition.is_enterprise else "Open Source"
+        edition_adapter = get_deployment_edition_adapter()
+        edition_str = "Enterprise" if edition_adapter.is_enterprise() else "Open Source"
         table.add_row("Edition:", f"[{Colors.SUCCESS}]{edition_str}[/]")
         
         # Workspace
