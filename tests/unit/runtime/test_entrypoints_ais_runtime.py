@@ -344,9 +344,15 @@ def test_build_ais_handlers_spawn_response_includes_metadata_without_private_key
             self.redis_client = redis_client
 
     class _FakeSpawnManager:
-        def __init__(self, session: object, attestation_nonce_manager: object | None = None) -> None:
+        def __init__(
+            self,
+            session: object,
+            attestation_nonce_manager: object | None = None,
+            principal_ttl_manager: object | None = None,
+        ) -> None:
             self.session = session
             self.attestation_nonce_manager = attestation_nonce_manager
+            self.principal_ttl_manager = principal_ttl_manager
 
     class _FakeIdentityService:
         def __init__(self, *, principal_registry: object, spawn_manager: object | None = None) -> None:
@@ -398,6 +404,65 @@ def test_build_ais_handlers_spawn_response_includes_metadata_without_private_key
 
 
 @pytest.mark.unit
+def test_reconcile_principal_ttl_expiries_processes_and_acknowledges_work_items() -> None:
+    work_items = [SimpleNamespace(principal_id="p-1"), SimpleNamespace(principal_id="p-2")]
+    processed: list[str] = []
+    acknowledged: list[str] = []
+
+    class _FakePrincipalTTLManager:
+        def reconcile_expired_principals(self):
+            return list(work_items)
+
+        def ack_expired_work_item(self, work_item: object) -> None:
+            acknowledged.append(getattr(work_item, "principal_id"))
+
+    class _FakeExpiryProcessor:
+        def process(self, work_item: object) -> None:
+            processed.append(getattr(work_item, "principal_id"))
+
+    count = entrypoints._reconcile_principal_ttl_expiries(
+        principal_ttl_manager=_FakePrincipalTTLManager(),
+        expiry_processor=_FakeExpiryProcessor(),
+    )
+
+    assert count == 2
+    assert processed == ["p-1", "p-2"]
+    assert acknowledged == ["p-1", "p-2"]
+
+
+@pytest.mark.unit
+def test_run_principal_ttl_listener_claims_messages_and_processes_items() -> None:
+    processed: list[str] = []
+    acknowledged: list[str] = []
+    stop_event = entrypoints.threading.Event()
+
+    class _FakePrincipalTTLManager:
+        def iter_expiry_messages(self, *, poll_timeout_seconds: float = 1.0):
+            del poll_timeout_seconds
+            yield {"data": "caracal:identity:principal_ttl:p-1"}
+
+        def claim_expiry_message(self, message: dict):
+            stop_event.set()
+            return SimpleNamespace(principal_id=message["data"].rsplit(":", 1)[-1])
+
+        def ack_expired_work_item(self, work_item: object) -> None:
+            acknowledged.append(getattr(work_item, "principal_id"))
+
+    class _FakeExpiryProcessor:
+        def process(self, work_item: object) -> None:
+            processed.append(getattr(work_item, "principal_id"))
+
+    entrypoints._run_principal_ttl_listener(
+        principal_ttl_manager=_FakePrincipalTTLManager(),
+        expiry_processor=_FakeExpiryProcessor(),
+        stop_event=stop_event,
+    )
+
+    assert processed == ["p-1"]
+    assert acknowledged == ["p-1"]
+
+
+@pytest.mark.unit
 def test_complete_ais_startup_attestation_marks_attested_and_transitions_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -418,6 +483,7 @@ def test_complete_ais_startup_attestation_marks_attested_and_transitions_active(
             return None
 
     transitions: list[tuple[str, str, str | None]] = []
+    activated: list[str] = []
 
     def _transition(self, principal_id: str, target_status: str, actor_principal_id: str | None = None):
         transitions.append((principal_id, target_status, actor_principal_id))
@@ -429,9 +495,18 @@ def test_complete_ais_startup_attestation_marks_attested_and_transitions_active(
         def session_scope(self):
             yield _FakeSession()
 
-    entrypoints._complete_ais_startup_attestation(principal_id, db_manager=_FakeDbManagerLocal())
+    class _FakePrincipalTTLManager:
+        def activate_principal(self, resolved_principal_id: str) -> None:
+            activated.append(resolved_principal_id)
+
+    entrypoints._complete_ais_startup_attestation(
+        principal_id,
+        db_manager=_FakeDbManagerLocal(),
+        principal_ttl_manager=_FakePrincipalTTLManager(),
+    )
 
     assert principal.attestation_status == "attested"
     assert principal.principal_metadata["attestation_status"] == "attested"
     assert "attested_at" in principal.principal_metadata
+    assert activated == [principal_id]
     assert transitions == [(principal_id, "active", principal_id)]

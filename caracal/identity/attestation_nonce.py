@@ -46,6 +46,11 @@ class AttestationNonceManager:
     def _key(self, nonce: str) -> str:
         return f"{self._NONCE_PREFIX}:{nonce}"
 
+    @property
+    def ttl_seconds(self) -> int:
+        """Configured nonce lifetime in seconds."""
+        return self._ttl_seconds
+
     @staticmethod
     def _normalize_principal_id(principal_id: str) -> str:
         normalized = str(principal_id or "").strip()
