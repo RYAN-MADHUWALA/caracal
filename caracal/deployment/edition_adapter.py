@@ -42,18 +42,58 @@ class DeploymentEditionAdapter:
     def get_gateway_token(self) -> Optional[str]:
         return self._edition_manager.get_gateway_token()
 
+    def require_gateway_url(self) -> str:
+        gateway_url = str(self.get_gateway_url() or "").strip()
+        if gateway_url:
+            return gateway_url
+
+        raise EditionConfigurationError(
+            "Enterprise execution requires a gateway URL "
+            "(CARACAL_ENTERPRISE_URL/CARACAL_GATEWAY_ENDPOINT/CARACAL_GATEWAY_URL)."
+        )
+
+    def resolve_revocation_publisher_mode(self, *, explicit_mode: Optional[str] = None) -> str:
+        normalized_mode = str(explicit_mode or "").strip().lower()
+        if normalized_mode:
+            if normalized_mode in {"redis", "enterprise_webhook"}:
+                return normalized_mode
+            raise EditionConfigurationError(
+                "CARACAL_REVOCATION_PUBLISHER_MODE must be one of: redis, enterprise_webhook"
+            )
+
+        return "enterprise_webhook" if self.is_enterprise() else "redis"
+
+    def resolve_enterprise_revocation_target(
+        self,
+        *,
+        webhook_url_override: Optional[str] = None,
+        sync_api_key_override: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        if not self.is_enterprise():
+            raise EditionConfigurationError(
+                "Enterprise revocation target resolution is only valid in enterprise mode."
+            )
+
+        from caracal.enterprise.license import resolve_revocation_webhook_target
+
+        normalized_webhook_override = str(webhook_url_override or "").strip() or None
+        normalized_sync_override = str(sync_api_key_override or "").strip() or None
+        webhook_url, sync_api_key = resolve_revocation_webhook_target(
+            webhook_url_override=normalized_webhook_override,
+        )
+
+        if not webhook_url:
+            gateway_url = self.require_gateway_url()
+            webhook_url = f"{gateway_url.rstrip('/')}/api/sync/revocation-events"
+
+        return webhook_url, normalized_sync_override or sync_api_key
+
     def get_provider_client(self) -> Union["Broker", "GatewayClient"]:
         from caracal.deployment.broker import Broker
         from caracal.deployment.gateway_client import GatewayClient
 
         if self.is_enterprise():
-            gateway_url = self.get_gateway_url()
-            if not gateway_url:
-                raise EditionConfigurationError(
-                    "Enterprise execution requires a gateway URL "
-                    "(CARACAL_ENTERPRISE_URL/CARACAL_GATEWAY_ENDPOINT/CARACAL_GATEWAY_URL)."
-                )
-            return GatewayClient(gateway_url=gateway_url)
+            return GatewayClient(gateway_url=self.require_gateway_url())
         return Broker()
 
     def clear_cache(self) -> None:

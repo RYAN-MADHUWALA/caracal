@@ -109,6 +109,22 @@ class EditionManager:
             )
             raise EditionDetectionError(f"Failed to detect edition: {e}") from e
     
+    def _gateway_url_from_config(self) -> Optional[str]:
+        """Return the configured gateway URL from persisted edition config only."""
+        if self.CONFIG_FILE.exists():
+            try:
+                config = toml.load(self.CONFIG_FILE)
+                gateway_url = config.get("edition", {}).get("gateway_url")
+                if gateway_url:
+                    return str(gateway_url).strip()
+            except (toml.TomlDecodeError, OSError) as e:
+                logger.warning(
+                    "failed_to_read_gateway_url",
+                    config_file=str(self.CONFIG_FILE),
+                    error=str(e)
+                )
+        return None
+
     def _auto_detect_edition(self) -> Edition:
         """
         Auto-detects edition based on available components.
@@ -120,25 +136,11 @@ class EditionManager:
         Returns:
             Detected edition
         """
-        # Check for gateway URL in configuration
-        if self.CONFIG_FILE.exists():
-            try:
-                config = toml.load(self.CONFIG_FILE)
-                gateway_url = config.get("edition", {}).get("gateway_url")
-                if gateway_url:
-                    logger.debug(
-                        "edition_detected_gateway_url",
-                        gateway_url=gateway_url
-                    )
-                    return Edition.ENTERPRISE
-            except (toml.TomlDecodeError, OSError):
-                pass
-
-        # Check for enterprise connectivity environment variables.
-        if os.environ.get("CARACAL_ENTERPRISE_URL") or os.environ.get("CARACAL_GATEWAY_URL"):
+        gateway_url = self.get_gateway_url()
+        if gateway_url:
             logger.debug(
-                "edition_detected_env_var",
-                env_var="CARACAL_ENTERPRISE_URL"
+                "edition_detected_gateway_url",
+                gateway_url=gateway_url
             )
             return Edition.ENTERPRISE
         
@@ -152,12 +154,7 @@ class EditionManager:
 
     def _resolve_gateway_url(self) -> Optional[str]:
         """Resolve effective gateway URL from config or environment."""
-        return (
-            self.get_gateway_url()
-            or os.environ.get("CARACAL_ENTERPRISE_URL")
-            or os.environ.get("CARACAL_GATEWAY_ENDPOINT")
-            or os.environ.get("CARACAL_GATEWAY_URL")
-        )
+        return self.get_gateway_url()
 
     def _has_local_provider_registry_entries(self) -> bool:
         """Return True when any workspace has local broker provider entries."""
@@ -368,16 +365,14 @@ class EditionManager:
         Returns:
             Gateway URL if configured, None otherwise
         """
-        if self.CONFIG_FILE.exists():
-            try:
-                config = toml.load(self.CONFIG_FILE)
-                return config.get("edition", {}).get("gateway_url")
-            except (toml.TomlDecodeError, OSError) as e:
-                logger.warning(
-                    "failed_to_read_gateway_url",
-                    config_file=str(self.CONFIG_FILE),
-                    error=str(e)
-                )
+        configured_gateway_url = self._gateway_url_from_config()
+        if configured_gateway_url:
+            return configured_gateway_url
+
+        for env_key in ("CARACAL_ENTERPRISE_URL", "CARACAL_GATEWAY_ENDPOINT", "CARACAL_GATEWAY_URL"):
+            value = (os.environ.get(env_key) or "").strip()
+            if value:
+                return value
         return None
     
     def get_gateway_token(self) -> Optional[str]:
