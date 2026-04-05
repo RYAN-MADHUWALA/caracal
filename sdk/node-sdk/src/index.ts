@@ -19,6 +19,11 @@ export { MandateOperations } from './mandates';
 export { DelegationOperations } from './delegation';
 export { LedgerOperations } from './ledger';
 
+// Grouped surfaces
+export * as management from './management';
+export * as migration from './migration';
+export * as ais from './ais';
+
 // Infrastructure
 export { HookRegistry, ScopeRef, StateSnapshot } from './hooks';
 export { CaracalExtension } from './extensions';
