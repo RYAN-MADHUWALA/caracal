@@ -357,3 +357,63 @@ def test_edition_detection_has_no_sync_or_license_backdoor_markers() -> None:
     assert "edition_detected_enterprise_license" not in payload
     assert "edition_license_detection_failed" not in payload
     assert "sync_api_key" not in payload
+
+
+@pytest.mark.unit
+def test_connector_docs_use_enterprise_command_path_only() -> None:
+    docs_file = _REPO_ROOT / "docs" / "content" / "open-source" / "developers" / "enterprise-connector" / "index.mdx"
+    payload = docs_file.read_text(encoding="utf-8")
+
+    assert "caracal enterprise login <url> <token>" in payload
+    assert "caracal enterprise status" in payload
+    assert "caracal enterprise sync" in payload
+    assert "caracal enterprise disconnect" in payload
+    assert "caracal sync " not in payload
+
+
+@pytest.mark.unit
+def test_python_sdk_sync_uses_api_sync_path_only() -> None:
+    authority_client = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "authority_client.py"
+    async_authority_client = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "async_authority_client.py"
+
+    payload = "\n".join(
+        [
+            authority_client.read_text(encoding="utf-8"),
+            async_authority_client.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "/api/sync" in payload
+    assert "/api/connection/sync" not in payload
+
+
+@pytest.mark.unit
+def test_sdk_sync_extension_stubs_are_removed() -> None:
+    python_sync_stub = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "enterprise" / "sync.py"
+    node_sync_stub = _REPO_ROOT / "sdk" / "node-sdk" / "src" / "enterprise" / "sync.ts"
+    python_enterprise_init = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "enterprise" / "__init__.py"
+    node_enterprise_index = _REPO_ROOT / "sdk" / "node-sdk" / "src" / "enterprise" / "index.ts"
+    enterprise_facade = _REPO_ROOT / "caracal" / "enterprise" / "__init__.py"
+
+    assert not python_sync_stub.exists()
+    assert not node_sync_stub.exists()
+
+    python_payload = python_enterprise_init.read_text(encoding="utf-8")
+    node_payload = node_enterprise_index.read_text(encoding="utf-8")
+    facade_payload = enterprise_facade.read_text(encoding="utf-8")
+
+    assert "SyncExtension" not in python_payload
+    assert "SyncExtension" not in node_payload
+    assert "SyncExtension" not in facade_payload
+
+
+@pytest.mark.unit
+def test_python_sdk_secrets_have_no_aws_fallback_markers() -> None:
+    secrets_adapter = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "secrets.py"
+    payload = secrets_adapter.read_text(encoding="utf-8")
+
+    assert "boto3" not in payload
+    assert "AWSSecretsManagerBackend" not in payload
+    assert "_LocalAWSSecretsManagerBackend" not in payload
+    assert 'return f"aws:' not in payload
+    assert 'return f"caracal:' in payload
