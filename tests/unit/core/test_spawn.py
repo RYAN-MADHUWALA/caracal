@@ -22,11 +22,20 @@ class TestSpawnManager:
         self.mock_ledger_writer = Mock()
         self.mock_nonce_manager = Mock()
         self.mock_nonce_manager.issue_nonce.return_value = SimpleNamespace(nonce="nonce-123")
+        self.mock_nonce_manager.ttl_seconds = 300
+        self.mock_principal_ttl_manager = Mock()
+        self.mock_principal_ttl_manager.constrain_child_ttl.return_value = SimpleNamespace(
+            requested_ttl_seconds=300,
+            effective_ttl_seconds=300,
+            parent_remaining_ttl_seconds=None,
+            truncated=False,
+        )
         self.manager = SpawnManager(
             db_session=self.mock_session,
             mandate_manager=self.mock_mandate_manager,
             ledger_writer=self.mock_ledger_writer,
             attestation_nonce_manager=self.mock_nonce_manager,
+            principal_ttl_manager=self.mock_principal_ttl_manager,
         )
 
     def test_spawn_returns_existing_idempotent_result(self) -> None:
@@ -53,6 +62,7 @@ class TestSpawnManager:
         self.mock_session.query.assert_not_called()
         self.mock_mandate_manager.issue_mandate.assert_not_called()
         self.mock_nonce_manager.issue_nonce.assert_called_once_with(existing.principal_id)
+        self.mock_principal_ttl_manager.register_pending_principal.assert_called_once()
 
     def test_spawn_raises_when_issuer_missing(self) -> None:
         issuer_id = uuid4()
@@ -145,6 +155,60 @@ class TestSpawnManager:
         self.mock_mandate_manager.issue_mandate.assert_called_once()
         self.mock_ledger_writer.append_event.assert_called_once()
         self.mock_nonce_manager.issue_nonce.assert_called_once_with(str(principal_id))
+        self.mock_principal_ttl_manager.register_pending_principal.assert_called_once_with(
+            principal_id=str(principal_id),
+            pending_ttl_seconds=300,
+            active_ttl_seconds=300,
+            parent_principal_id=str(issuer_id),
+        )
+
+    def test_spawn_truncates_child_ttl_to_parent_remaining_lifetime(self) -> None:
+        issuer_id = uuid4()
+        principal_id = uuid4()
+        mandate_id = uuid4()
+
+        self.manager._find_existing_spawn = Mock(return_value=None)
+        self.mock_principal_ttl_manager.constrain_child_ttl.return_value = SimpleNamespace(
+            requested_ttl_seconds=600,
+            effective_ttl_seconds=120,
+            parent_remaining_ttl_seconds=120,
+            truncated=True,
+        )
+
+        issuer_row = SimpleNamespace(principal_id=issuer_id)
+        duplicate = None
+        principal_query = Mock()
+        principal_query.filter.return_value.first.side_effect = [issuer_row, duplicate]
+        self.mock_session.query.side_effect = lambda _model: principal_query
+
+        def _capture_add(obj):
+            if isinstance(obj, Principal):
+                obj.principal_id = principal_id
+
+        self.mock_session.add.side_effect = _capture_add
+        self.mock_mandate_manager.issue_mandate.return_value = SimpleNamespace(mandate_id=mandate_id)
+
+        from caracal.core import spawn as spawn_module
+
+        original_generate = spawn_module.generate_and_store_principal_keypair
+        spawn_module.generate_and_store_principal_keypair = Mock(
+            return_value=SimpleNamespace(public_key_pem="pub", storage=SimpleNamespace(metadata={}))
+        )
+        try:
+            self.manager.spawn_principal(
+                issuer_principal_id=str(issuer_id),
+                principal_name="worker-truncated",
+                principal_kind="worker",
+                owner="ops",
+                resource_scope=["provider:openai:models"],
+                action_scope=["infer"],
+                validity_seconds=600,
+                idempotency_key="spawn-ttl",
+            )
+        finally:
+            spawn_module.generate_and_store_principal_keypair = original_generate
+
+        assert self.mock_mandate_manager.issue_mandate.call_args.kwargs["validity_seconds"] == 120
 
     @staticmethod
     def _build_spawn_result(idempotent_replay: bool):

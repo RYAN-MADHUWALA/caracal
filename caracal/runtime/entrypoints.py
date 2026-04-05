@@ -15,6 +15,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -1355,14 +1356,19 @@ def _complete_ais_startup_attestation(
     principal_id: str,
     *,
     db_manager: object | None = None,
+    principal_ttl_manager: object | None = None,
 ) -> None:
     from datetime import datetime
     from uuid import UUID
 
     from caracal.core.identity import PrincipalRegistry
     from caracal.db.models import Principal, PrincipalAttestationStatus, PrincipalLifecycleStatus
+    from caracal.identity.principal_ttl import PrincipalTTLManager
 
     resolved_db_manager = db_manager or _create_ais_db_manager()
+    resolved_ttl_manager = principal_ttl_manager
+    if resolved_ttl_manager is None:
+        resolved_ttl_manager = PrincipalTTLManager(_create_runtime_redis_client())
     normalized_principal = str(principal_id or "").strip()
     if not normalized_principal:
         raise RuntimeError("AIS startup attestation cannot complete for an empty principal_id")
@@ -1391,6 +1397,10 @@ def _complete_ais_startup_attestation(
         principal_metadata["attested_at"] = datetime.utcnow().isoformat() + "Z"
         principal.principal_metadata = principal_metadata
         session.flush()
+
+        activate_principal = getattr(resolved_ttl_manager, "activate_principal", None)
+        if callable(activate_principal):
+            activate_principal(normalized_principal)
 
         PrincipalRegistry(session).transition_lifecycle_status(
             normalized_principal,
@@ -1572,6 +1582,7 @@ def _build_ais_handlers(
     from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
     from caracal.identity import AISHandlers
     from caracal.identity.attestation_nonce import AttestationNonceManager
+    from caracal.identity.principal_ttl import PrincipalTTLManager
     from caracal.identity.service import IdentityService
 
     resolved_db_manager = db_manager or _create_ais_db_manager()
@@ -1637,6 +1648,7 @@ def _build_ais_handlers(
                 spawn_manager = SpawnManager(
                     session,
                     attestation_nonce_manager=AttestationNonceManager(resolved_redis_client),
+                    principal_ttl_manager=PrincipalTTLManager(resolved_redis_client),
                 )
                 identity_service = IdentityService(
                     principal_registry=principal_registry,
@@ -1712,17 +1724,117 @@ def _build_ais_handlers(
     )
 
 
+def _reconcile_principal_ttl_expiries(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+) -> int:
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    resolved_manager = principal_ttl_manager or PrincipalTTLManager(_create_runtime_redis_client())
+    resolved_processor = expiry_processor or PrincipalTTLExpiryProcessor(db_manager=_create_ais_db_manager())
+
+    reconcile = getattr(resolved_manager, "reconcile_expired_principals", None)
+    process = getattr(resolved_processor, "process", None)
+    acknowledge = getattr(resolved_manager, "ack_expired_work_item", None)
+    if not callable(reconcile) or not callable(process) or not callable(acknowledge):
+        raise RuntimeError("Principal TTL reconciliation dependencies are incomplete")
+
+    processed = 0
+    for work_item in reconcile():
+        process(work_item)
+        acknowledge(work_item)
+        processed += 1
+    return processed
+
+
+def _run_principal_ttl_listener(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+    stop_event: threading.Event | None = None,
+    poll_timeout_seconds: float = 1.0,
+) -> None:
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    resolved_manager = principal_ttl_manager or PrincipalTTLManager(_create_runtime_redis_client())
+    resolved_processor = expiry_processor or PrincipalTTLExpiryProcessor(db_manager=_create_ais_db_manager())
+
+    iter_messages = getattr(resolved_manager, "iter_expiry_messages", None)
+    claim_message = getattr(resolved_manager, "claim_expiry_message", None)
+    process = getattr(resolved_processor, "process", None)
+    acknowledge = getattr(resolved_manager, "ack_expired_work_item", None)
+    if not callable(iter_messages) or not callable(claim_message) or not callable(process) or not callable(acknowledge):
+        raise RuntimeError("Principal TTL listener dependencies are incomplete")
+
+    for message in iter_messages(poll_timeout_seconds=poll_timeout_seconds):
+        if stop_event is not None and stop_event.is_set():
+            return
+        work_item = claim_message(message)
+        if work_item is None:
+            continue
+        process(work_item)
+        acknowledge(work_item)
+
+
+def _start_principal_ttl_listener(
+    *,
+    principal_ttl_manager: object | None = None,
+    expiry_processor: object | None = None,
+    poll_timeout_seconds: float = 1.0,
+) -> tuple[threading.Thread, threading.Event]:
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_run_principal_ttl_listener,
+        kwargs={
+            "principal_ttl_manager": principal_ttl_manager,
+            "expiry_processor": expiry_processor,
+            "stop_event": stop_event,
+            "poll_timeout_seconds": poll_timeout_seconds,
+        },
+        daemon=True,
+        name="caracal-principal-ttl-listener",
+    )
+    thread.start()
+    return thread, stop_event
+
+
 def _run_ais_server() -> int:
     import asyncio
 
     from caracal.identity import create_ais_app, resolve_ais_listen_target
+    from caracal.identity.principal_ttl import PrincipalTTLExpiryProcessor, PrincipalTTLManager
+
+    ttl_listener_stop: threading.Event | None = None
 
     try:
         startup_principal = _consume_ais_startup_attestation()
-        _complete_ais_startup_attestation(startup_principal)
+        resolved_db_manager = _create_ais_db_manager()
+        resolved_redis_client = _create_runtime_redis_client()
+        principal_ttl_manager = PrincipalTTLManager(resolved_redis_client)
+        expiry_processor = PrincipalTTLExpiryProcessor(db_manager=resolved_db_manager)
+        _complete_ais_startup_attestation(
+            startup_principal,
+            db_manager=resolved_db_manager,
+            principal_ttl_manager=principal_ttl_manager,
+        )
+        _reconcile_principal_ttl_expiries(
+            principal_ttl_manager=principal_ttl_manager,
+            expiry_processor=expiry_processor,
+        )
+        _, ttl_listener_stop = _start_principal_ttl_listener(
+            principal_ttl_manager=principal_ttl_manager,
+            expiry_processor=expiry_processor,
+        )
         ais_config = _create_ais_server_config()
         listen_target = resolve_ais_listen_target(ais_config)
-        app = create_ais_app(_build_ais_handlers(), ais_config)
+        app = create_ais_app(
+            _build_ais_handlers(
+                db_manager=resolved_db_manager,
+                redis_client=resolved_redis_client,
+            ),
+            ais_config,
+        )
     except Exception as exc:
         print(f"Error: AIS startup failed: {exc}", file=sys.stderr)
         return 1
@@ -1760,6 +1872,9 @@ def _run_ais_server() -> int:
     except Exception as exc:
         print(f"Error: AIS runtime server crashed: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if ttl_listener_stop is not None:
+            ttl_listener_stop.set()
 
 
 def _start_ais_subprocess() -> subprocess.Popen[bytes]:
