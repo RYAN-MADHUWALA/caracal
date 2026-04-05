@@ -4,6 +4,8 @@ import os
 from unittest.mock import Mock, patch
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from caracal.core.vault import (
     CaracalVault,
@@ -281,6 +283,101 @@ def test_list_secrets_success(vault):
         with gateway_context():
             names = vault.list_secrets("org-1", "env-1")
     assert names == ["one", "two"]
+
+
+@pytest.mark.unit
+def test_sign_jwt_uses_vault_managed_private_key(vault):
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    with patch.object(vault, "_get_secret_value", return_value=private_key_pem):
+        with gateway_context():
+            token = vault.sign_jwt(
+                "org-1",
+                "env-1",
+                "signing-key",
+                payload={"sub": "principal-1"},
+                headers={"kid": "principal-1"},
+                algorithm="ES256",
+            )
+
+    assert isinstance(token, str)
+    assert token.count(".") == 2
+
+
+@pytest.mark.unit
+def test_sign_canonical_payload_uses_vault_managed_private_key(vault):
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    with patch.object(vault, "_get_secret_value", return_value=private_key_pem):
+        with gateway_context():
+            signature = vault.sign_canonical_payload(
+                "org-1",
+                "env-1",
+                "signing-key",
+                payload={"hello": "world"},
+            )
+
+    assert isinstance(signature, str)
+    assert len(signature) > 0
+
+
+@pytest.mark.unit
+def test_ensure_asymmetric_keypair_bootstraps_missing_refs(vault):
+    with patch.object(vault, "_secret_exists", side_effect=[False, False]):
+        with patch.object(vault, "_upsert_secret") as upsert_secret:
+            with gateway_context():
+                vault.ensure_asymmetric_keypair(
+                    "org-1",
+                    "env-1",
+                    private_key_name="keys/session-private",
+                    public_key_name="keys/session-public",
+                    algorithm="RS256",
+                )
+
+    assert upsert_secret.call_count == 2
+    stored_private = upsert_secret.call_args_list[0].args[-1]
+    stored_public = upsert_secret.call_args_list[1].args[-1]
+    private_key = serialization.load_pem_private_key(
+        stored_private.encode("utf-8"),
+        password=None,
+    )
+    assert isinstance(private_key, rsa.RSAPrivateKey)
+    assert "BEGIN PUBLIC KEY" in stored_public
+
+
+@pytest.mark.unit
+def test_ensure_asymmetric_keypair_derives_missing_public_ref_from_private_key(vault):
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    with patch.object(vault, "_secret_exists", side_effect=[True, False]):
+        with patch.object(vault, "_get_secret_value", return_value=private_key_pem):
+            with patch.object(vault, "_upsert_secret") as upsert_secret:
+                with gateway_context():
+                    vault.ensure_asymmetric_keypair(
+                        "org-1",
+                        "env-1",
+                        private_key_name="keys/session-private",
+                        public_key_name="keys/session-public",
+                        algorithm="ES256",
+                    )
+
+    assert upsert_secret.call_count == 1
+    assert "BEGIN PUBLIC KEY" in upsert_secret.call_args.args[-1]
 
 
 @pytest.mark.unit

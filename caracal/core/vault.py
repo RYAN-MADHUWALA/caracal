@@ -10,6 +10,8 @@ Hard-cut requirements:
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +21,10 @@ from typing import Any, Optional, Tuple
 from uuid import uuid4
 
 import httpx
+import jwt
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from caracal.logging_config import get_logger
 
@@ -718,6 +724,73 @@ class CaracalVault:
                 raise
             raise VaultError(f"Failed to retrieve secret '{name}': {exc}") from exc
 
+    def sign_jwt(
+        self,
+        org_id: str,
+        env_id: str,
+        name: str,
+        *,
+        payload: dict[str, Any],
+        headers: dict[str, Any],
+        algorithm: str,
+        actor: str = "gateway",
+    ) -> str:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
+
+        try:
+            private_key = self._load_private_key(org_id, env_id, name)
+            token = jwt.encode(payload, private_key, algorithm=algorithm, headers=headers)
+            self._audit_event(org_id, env_id, name, "sign_jwt", 1, actor, True)
+            return token
+        except Exception as exc:
+            self._audit_event(org_id, env_id, name, "sign_jwt", 0, actor, False, type(exc).__name__)
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to sign JWT with vault-backed key '{name}': {exc}") from exc
+
+    def sign_canonical_payload(
+        self,
+        org_id: str,
+        env_id: str,
+        name: str,
+        *,
+        payload: dict[str, Any],
+        actor: str = "gateway",
+    ) -> str:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
+
+        try:
+            private_key = self._load_private_key(org_id, env_id, name)
+            if not isinstance(private_key, ec.EllipticCurvePrivateKey):
+                raise VaultError(f"Vault-backed key '{name}' is not ECDSA")
+            if not isinstance(private_key.curve, ec.SECP256R1):
+                raise VaultError(f"Vault-backed key '{name}' is not P-256")
+            canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            message_hash = hashlib.sha256(canonical_json.encode("utf-8")).digest()
+            signature = private_key.sign(message_hash, ec.ECDSA(hashes.SHA256()))
+            self._audit_event(org_id, env_id, name, "sign_canonical_payload", 1, actor, True)
+            return signature.hex()
+        except Exception as exc:
+            self._audit_event(
+                org_id,
+                env_id,
+                name,
+                "sign_canonical_payload",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(
+                f"Failed to sign canonical payload with vault-backed key '{name}': {exc}"
+            ) from exc
+
     def delete(self, org_id: str, env_id: str, name: str, actor: str = "gateway") -> None:
         _assert_gateway_context()
         self._rl.check(org_id)
@@ -746,6 +819,115 @@ class CaracalVault:
             if isinstance(exc, VaultError):
                 raise
             raise VaultError(f"Failed to list secrets: {exc}") from exc
+
+    def ensure_asymmetric_keypair(
+        self,
+        org_id: str,
+        env_id: str,
+        *,
+        private_key_name: str,
+        public_key_name: str,
+        algorithm: str = "RS256",
+        actor: str = "gateway",
+    ) -> None:
+        _assert_gateway_context()
+        self._rl.check(org_id)
+        self._ensure_service_health()
+
+        normalized_algorithm = str(algorithm or "RS256").strip().upper()
+        if normalized_algorithm not in {"RS256", "ES256"}:
+            raise VaultConfigurationError(
+                f"Unsupported asymmetric key bootstrap algorithm: {normalized_algorithm!r}."
+            )
+
+        if private_key_name == public_key_name:
+            raise VaultConfigurationError(
+                "Vault bootstrap requires distinct private/public key references."
+            )
+
+        project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        private_exists = self._secret_exists(project_id, environment, secret_path, private_key_name)
+        public_exists = self._secret_exists(project_id, environment, secret_path, public_key_name)
+
+        try:
+            if private_exists:
+                if public_exists:
+                    return
+
+                private_key = self._load_private_key(org_id, env_id, private_key_name)
+                public_key_pem = private_key.public_key().public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                ).decode("utf-8")
+                self._upsert_secret(project_id, environment, secret_path, public_key_name, public_key_pem)
+                self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
+                return
+
+            if public_exists:
+                raise VaultError(
+                    "Vault bootstrap found a public verification key but no matching private signing key."
+                )
+
+            if normalized_algorithm == "ES256":
+                private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
+            else:
+                private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+            private_key_pem = private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ).decode("utf-8")
+            public_key_pem = private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode("utf-8")
+
+            self._upsert_secret(project_id, environment, secret_path, private_key_name, private_key_pem)
+            self._upsert_secret(project_id, environment, secret_path, public_key_name, public_key_pem)
+            self._audit_event(org_id, env_id, private_key_name, "create", 1, actor, True)
+            self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
+        except Exception as exc:
+            self._audit_event(
+                org_id,
+                env_id,
+                private_key_name,
+                "bootstrap_keypair",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            self._audit_event(
+                org_id,
+                env_id,
+                public_key_name,
+                "bootstrap_keypair",
+                0,
+                actor,
+                False,
+                type(exc).__name__,
+            )
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(
+                "Failed to bootstrap asymmetric vault key material "
+                f"({private_key_name}, {public_key_name}): {exc}"
+            ) from exc
+
+    def _load_private_key(self, org_id: str, env_id: str, name: str):
+        try:
+            project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+            private_key_pem = self._get_secret_value(project_id, environment, secret_path, name)
+            return serialization.load_pem_private_key(
+                private_key_pem.encode("utf-8") if isinstance(private_key_pem, str) else private_key_pem,
+                password=None,
+                backend=default_backend(),
+            )
+        except Exception as exc:
+            if isinstance(exc, VaultError):
+                raise
+            raise VaultError(f"Failed to load vault-backed private key '{name}': {exc}") from exc
 
     def rotate_master_key(self, org_id: str, env_id: str, actor: str = "admin") -> RotationResult:
         _assert_gateway_context()
