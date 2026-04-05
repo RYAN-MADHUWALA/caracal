@@ -10,11 +10,13 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from caracal.identity.principal_ttl import PrincipalTTLManager, serialize_ttl_decision
 from caracal.identity.attestation_nonce import AttestationNonceManager
 from caracal.core.ledger import LedgerWriter
 from caracal.core.mandate import MandateManager
 from caracal.core.principal_keys import generate_and_store_principal_keypair
 from caracal.db.models import (
+    AuthorityLedgerEvent,
     ExecutionMandate,
     MandateContextTag,
     Principal,
@@ -24,11 +26,14 @@ from caracal.db.models import (
     PrincipalWorkloadBinding,
 )
 from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
+from caracal.logging_config import get_logger
 
 
 _IDEMPOTENCY_BINDING_TYPE = "spawn_idempotency"
 _BOOTSTRAP_BINDING_TYPE = "attestation_bootstrap"
 _LEDGER_RESOURCE_TYPE = "principal_spawn"
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -53,11 +58,13 @@ class SpawnManager:
         mandate_manager: Optional[MandateManager] = None,
         ledger_writer: Optional[LedgerWriter] = None,
         attestation_nonce_manager: Optional[AttestationNonceManager] = None,
+        principal_ttl_manager: Optional[PrincipalTTLManager] = None,
     ) -> None:
         self.db_session = db_session
         self.mandate_manager = mandate_manager or MandateManager(db_session=db_session)
         self.ledger_writer = ledger_writer
         self.attestation_nonce_manager = attestation_nonce_manager
+        self.principal_ttl_manager = principal_ttl_manager
 
     def spawn_principal(
         self,
@@ -84,6 +91,15 @@ class SpawnManager:
 
         issuer_uuid = UUID(str(issuer_principal_id))
         source_mandate_uuid = UUID(str(source_mandate_id)) if source_mandate_id else None
+
+        effective_validity_seconds = int(validity_seconds)
+        ttl_decision = None
+        if self.principal_ttl_manager is not None:
+            ttl_decision = self.principal_ttl_manager.constrain_child_ttl(
+                requested_ttl_seconds=effective_validity_seconds,
+                parent_principal_id=str(issuer_uuid),
+            )
+            effective_validity_seconds = ttl_decision.effective_ttl_seconds
 
         with self.db_session.begin_nested():
             existing = self._find_existing_spawn(issuer_uuid, idempotency_key)
@@ -157,11 +173,38 @@ class SpawnManager:
                     subject_id=principal.principal_id,
                     resource_scope=resource_scope,
                     action_scope=action_scope,
-                    validity_seconds=validity_seconds,
+                    validity_seconds=effective_validity_seconds,
                     source_mandate_id=source_mandate_uuid,
                     network_distance=network_distance,
                     context_tags=context_tags,
                 )
+
+                if ttl_decision is not None and ttl_decision.truncated:
+                    self.db_session.add(
+                        AuthorityLedgerEvent(
+                            event_type="principal_ttl_truncated",
+                            timestamp=datetime.utcnow(),
+                            principal_id=principal.principal_id,
+                            mandate_id=mandate.mandate_id,
+                            decision="allowed",
+                            denial_reason=None,
+                            requested_action="principal_spawn",
+                            requested_resource=f"principal:{principal.principal_id}",
+                            correlation_id=None,
+                            event_metadata={
+                                "issuer_principal_id": str(issuer_uuid),
+                                "ttl_decision": serialize_ttl_decision(ttl_decision),
+                            },
+                        )
+                    )
+                    logger.info(
+                        "Spawn principal TTL truncated to parent lifetime",
+                        principal_id=str(principal.principal_id),
+                        issuer_principal_id=str(issuer_uuid),
+                        requested_ttl_seconds=ttl_decision.requested_ttl_seconds,
+                        effective_ttl_seconds=ttl_decision.effective_ttl_seconds,
+                        parent_remaining_ttl_seconds=ttl_decision.parent_remaining_ttl_seconds,
+                    )
 
                 if self.ledger_writer is not None:
                     self.ledger_writer.append_event(
@@ -193,6 +236,16 @@ class SpawnManager:
             )
 
         issued_nonce = self.attestation_nonce_manager.issue_nonce(spawn_result.principal_id)
+        if self.principal_ttl_manager is not None:
+            self.principal_ttl_manager.register_pending_principal(
+                principal_id=spawn_result.principal_id,
+                pending_ttl_seconds=min(
+                    effective_validity_seconds,
+                    int(self.attestation_nonce_manager.ttl_seconds),
+                ),
+                active_ttl_seconds=effective_validity_seconds,
+                parent_principal_id=str(issuer_uuid),
+            )
         return SpawnResult(
             principal_id=spawn_result.principal_id,
             principal_name=spawn_result.principal_name,

@@ -93,15 +93,17 @@ async def test_revoke_principal_enqueues_large_cascade_jobs() -> None:
     session = Mock()
     dispatcher = _RecordingDispatcher()
 
-    leaf_1 = uuid4()
-    leaf_2 = uuid4()
+    child_1 = uuid4()
+    child_2 = uuid4()
+    grandchild = uuid4()
     root_id = uuid4()
 
     orchestrator = PrincipalRevocationOrchestrator(
         db_session=session,
         cascade_job_dispatcher=dispatcher,
     )
-    orchestrator._resolve_leaves_first_order = Mock(return_value=[leaf_1, leaf_2, root_id])
+    orchestrator._resolve_leaves_first_order = Mock(return_value=[grandchild, child_1, child_2, root_id])
+    orchestrator._resolve_breadth_first_descendants = Mock(return_value=[child_1, child_2, grandchild])
     orchestrator._revoke_single_principal = Mock(
         return_value=SimpleNamespace(principal_id=root_id, mandate_ids=[])
     )
@@ -113,9 +115,13 @@ async def test_revoke_principal_enqueues_large_cascade_jobs() -> None:
         cascade_async_threshold=2,
     )
 
-    assert result.cascade_jobs_enqueued == 2
-    assert len(dispatcher.jobs) == 2
-    assert {job["principal_id"] for job in dispatcher.jobs} == {str(leaf_1), str(leaf_2)}
+    assert result.cascade_jobs_enqueued == 3
+    assert len(dispatcher.jobs) == 3
+    assert [job["principal_id"] for job in dispatcher.jobs] == [
+        str(child_1),
+        str(child_2),
+        str(grandchild),
+    ]
     orchestrator._revoke_single_principal.assert_called_once()
 
 
