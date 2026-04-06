@@ -911,6 +911,36 @@ def test_enterprise_frontend_settings_copy_uses_hardcut_enterprise_commands_only
 
 
 @pytest.mark.unit
+def test_enterprise_frontend_principal_taxonomy_uses_final_role_terms_only() -> None:
+    dashboard_page = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "page.tsx"
+    principals_page = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "principals" / "page.tsx"
+    setup_page = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "setup" / "page.tsx"
+    team_step = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "components" / "onboarding" / "TeamStep.tsx"
+    complete_step = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "components" / "onboarding" / "CompleteStep.tsx"
+    frontend_api = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "lib" / "api.ts"
+
+    combined = "\n".join(
+        [
+            dashboard_page.read_text(encoding="utf-8"),
+            principals_page.read_text(encoding="utf-8"),
+            setup_page.read_text(encoding="utf-8"),
+            team_step.read_text(encoding="utf-8"),
+            complete_step.read_text(encoding="utf-8"),
+            frontend_api.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert '"human" | "orchestrator" | "worker" | "service"' in combined
+    assert "Worker and orchestrator principals are agent identities." in combined
+    assert "Service principals represent long-lived integrations." in combined
+    assert "human operators in the workspace" in combined
+    assert "Manage agents, users, and services" not in combined
+    assert "AI agents, users, or services" not in combined
+    assert "Register an AI agent principal" not in combined
+    assert "Agent and service principals use their own runtime taxonomy" not in combined
+
+
+@pytest.mark.unit
 def test_enterprise_registration_rebind_surface_uses_final_route_names_only() -> None:
     license_route = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "src" / "caracal_enterprise" / "routes" / "license.py"
     frontend_api = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "lib" / "api.ts"
@@ -928,6 +958,35 @@ def test_enterprise_registration_rebind_surface_uses_final_route_names_only() ->
     assert "SwitchContainerResponse" not in combined
     assert "automatic sync" not in combined.lower()
     assert "cli auto-sync" not in combined.lower()
+
+
+@pytest.mark.unit
+def test_oss_packages_have_no_enterprise_backend_import_leakage() -> None:
+    source_roots = (
+        _REPO_ROOT / "caracal" / "core",
+        _REPO_ROOT / "caracal" / "runtime",
+        _REPO_ROOT / "caracal" / "identity",
+        _REPO_ROOT / "caracal" / "cli",
+        _REPO_ROOT / "caracal" / "flow",
+        _REPO_ROOT / "caracal" / "deployment",
+        _REPO_ROOT / "sdk",
+    )
+    offenders: list[str] = []
+    forbidden_markers = (
+        "from caracal_enterprise",
+        "import caracal_enterprise",
+        "caracal_enterprise.",
+    )
+
+    for source_root in source_roots:
+        for path in source_root.rglob("*"):
+            if not path.is_file() or path.suffix not in {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
+                continue
+            payload = path.read_text(encoding="utf-8")
+            if any(marker in payload for marker in forbidden_markers):
+                offenders.append(str(path.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
 
 
 @pytest.mark.unit
