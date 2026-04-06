@@ -47,6 +47,9 @@ _FORBIDDEN_COMPAT_ENV_VARS = (
     "CARACAL_COMPAT_MODE",
     "CARACAL_ENABLE_DUAL_WRITE",
     "CARACAL_DUAL_WRITE_WINDOW",
+    "CARACAL_ENTERPRISE_DEFAULT_URL",
+    "CARACAL_GATEWAY_ENDPOINT",
+    "CARACAL_GATEWAY_URL",
     "CARACAL_SESSION_JWT_ALGORITHM",
 )
 _REQUIRED_SECRET_BACKEND_ENV = "CARACAL_PRINCIPAL_KEY_BACKEND"
@@ -62,7 +65,6 @@ _SESSION_SIGNING_ALGORITHM_ENV_VARS = (
 )
 _ALLOWED_SESSION_SIGNING_ALGORITHMS = ("RS256", "ES256")
 _VAULT_MODE_ENV = "CARACAL_VAULT_MODE"
-_HARDCUT_MODE_ENV = "CARACAL_HARDCUT_MODE"
 _LOCAL_VAULT_MODE_VALUES = ("local", "dev", "development")
 _FORBIDDEN_CONFIG_MARKERS = (
     "enterprise.json",
@@ -85,8 +87,6 @@ _FORBIDDEN_CONFIG_MARKERS = (
 )
 _GATEWAY_URL_ENV_KEYS = (
     "CARACAL_ENTERPRISE_URL",
-    "CARACAL_GATEWAY_ENDPOINT",
-    "CARACAL_GATEWAY_URL",
 )
 _GATEWAY_ENABLED_ENV_KEY = "CARACAL_GATEWAY_ENABLED"
 
@@ -204,10 +204,9 @@ def _secret_backend_violations(env_vars: Mapping[str, str | None] | None) -> lis
         )
 
     vault_mode = (env_vars.get(_VAULT_MODE_ENV) or "").strip().lower()
-    hardcut_mode = (env_vars.get(_HARDCUT_MODE_ENV) or "").strip().lower()
-    if hardcut_mode in {"1", "true", "yes", "on"} and vault_mode in _LOCAL_VAULT_MODE_VALUES:
+    if vault_mode in _LOCAL_VAULT_MODE_VALUES:
         violations.append(
-            f"{_VAULT_MODE_ENV}={vault_mode!r} is forbidden when {_HARDCUT_MODE_ENV} is enabled. "
+            f"{_VAULT_MODE_ENV}={vault_mode!r} is forbidden in hard-cut runtime paths. "
             "Local vault mode is development-only."
         )
 
@@ -271,7 +270,7 @@ def _execution_exclusivity_violations(env_vars: Mapping[str, str | None] | None)
     if gateway_enabled_truthy and not has_gateway_endpoint:
         violations.append(
             f"{_GATEWAY_ENABLED_ENV_KEY} enables gateway execution but no gateway endpoint is configured "
-            f"({_GATEWAY_URL_ENV_KEYS[0]}/{_GATEWAY_URL_ENV_KEYS[1]}/{_GATEWAY_URL_ENV_KEYS[2]})."
+            f"({_GATEWAY_URL_ENV_KEYS[0]})."
         )
 
     if has_gateway_endpoint and gateway_enabled_falsy:
