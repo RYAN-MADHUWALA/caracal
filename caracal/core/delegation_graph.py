@@ -23,6 +23,7 @@ Delegation direction rules:
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from fnmatch import fnmatchcase
 from typing import Dict, List, Optional, Set, Tuple
 from uuid import UUID, uuid4
 
@@ -169,6 +170,78 @@ class DelegationGraph:
             ExecutionMandate.mandate_id == mandate_id
         ).first()
 
+    @staticmethod
+    def _scope_is_covered_by_union(
+        requested_scope: Optional[List[str]],
+        source_scopes: List[List[str]],
+    ) -> bool:
+        """Return True when every requested entry is matched by at least one source entry."""
+        flattened_patterns = [
+            pattern
+            for scope in source_scopes
+            for pattern in (scope or [])
+        ]
+        for requested_entry in requested_scope or []:
+            if not any(fnmatchcase(requested_entry, pattern) for pattern in flattened_patterns):
+                return False
+        return True
+
+    @staticmethod
+    def _resolve_edge_expiration(
+        *,
+        source_mandate: ExecutionMandate,
+        target_mandate: ExecutionMandate,
+        requested_expires_at: Optional[datetime],
+    ) -> Optional[datetime]:
+        """Cap edge lifetime so it never outlives either connected mandate."""
+        candidate_expirations = [
+            expiry
+            for expiry in (
+                requested_expires_at,
+                getattr(source_mandate, "valid_until", None),
+                getattr(target_mandate, "valid_until", None),
+            )
+            if expiry is not None
+        ]
+        if not candidate_expirations:
+            return None
+        return min(candidate_expirations)
+
+    def _validate_non_amplifying_target_scope(
+        self,
+        *,
+        source_mandate: ExecutionMandate,
+        target_mandate: ExecutionMandate,
+    ) -> None:
+        """Ensure target scope does not exceed the union of active authority sources."""
+        inbound_source_mandates: list[ExecutionMandate] = [source_mandate]
+
+        for edge in self.get_authority_sources(target_mandate.mandate_id, active_only=True):
+            if edge.source_mandate_id == source_mandate.mandate_id:
+                continue
+            existing_source = self._get_mandate(edge.source_mandate_id)
+            if existing_source is None or not self._is_mandate_active(existing_source):
+                continue
+            inbound_source_mandates.append(existing_source)
+
+        resource_sources = [
+            list(mandate.resource_scope or [])
+            for mandate in inbound_source_mandates
+        ]
+        action_sources = [
+            list(mandate.action_scope or [])
+            for mandate in inbound_source_mandates
+        ]
+
+        if not self._scope_is_covered_by_union(target_mandate.resource_scope, resource_sources):
+            raise ValueError(
+                "Delegation edge would amplify target resource scope beyond the active source union"
+            )
+        if not self._scope_is_covered_by_union(target_mandate.action_scope, action_sources):
+            raise ValueError(
+                "Delegation edge would amplify target action scope beyond the active source union"
+            )
+
     # ----------------------------------------------------------------
     # Direction Validation
     # ----------------------------------------------------------------
@@ -237,9 +310,9 @@ class DelegationGraph:
 
         Validates:
         - Both mandates exist and are active
-        - Target mandate lineage matches source_mandate_id parity
         - Delegation direction is allowed based on principal types
         - No duplicate active edge exists
+        - Graph expansion does not introduce cycles or scope amplification
 
         Args:
             source_mandate_id: The delegating mandate ID
@@ -279,11 +352,10 @@ class DelegationGraph:
             raise ValueError(f"Target mandate {target_mandate_id} has invalid negative network_distance")
         if source_depth == 0:
             raise ValueError(f"Source mandate {source_mandate_id} has no remaining delegation depth")
-        expected_target_depth = source_depth - 1
-        if target_depth != expected_target_depth:
+        if target_depth >= source_depth:
             raise ValueError(
                 "Target mandate network_distance mismatch: "
-                f"expected {expected_target_depth} from source depth {source_depth}, got {target_depth}"
+                f"target depth {target_depth} must be strictly less than source depth {source_depth}"
             )
 
         if source_mandate_id == target_mandate_id:
@@ -299,16 +371,6 @@ class DelegationGraph:
             raise ValueError(
                 "Delegation cycle detected: "
                 f"adding {source_mandate_id} -> {target_mandate_id} creates a cycle"
-            )
-
-        # Enforce parity between denormalized mandate lineage and graph edges.
-        if target_mandate.source_mandate_id is None:
-            target_mandate.source_mandate_id = source_mandate_id
-        elif target_mandate.source_mandate_id != source_mandate_id:
-            raise ValueError(
-                "Target mandate lineage mismatch: "
-                f"target.source_mandate_id={target_mandate.source_mandate_id} "
-                f"does not match edge source={source_mandate_id}"
             )
 
         # Get principal kinds
@@ -329,6 +391,10 @@ class DelegationGraph:
 
         # Validate delegation direction
         self.validate_delegation_direction(source_type, target_type)
+        self._validate_non_amplifying_target_scope(
+            source_mandate=source_mandate,
+            target_mandate=target_mandate,
+        )
 
         # Check for duplicate active edge
         existing_edge = self.db_session.query(DelegationEdgeModel).filter(
@@ -340,15 +406,6 @@ class DelegationGraph:
             raise ValueError(
                 f"Active delegation edge already exists between "
                 f"{source_mandate_id} and {target_mandate_id}"
-            )
-
-        existing_inbound = self.db_session.query(DelegationEdgeModel).filter(
-            DelegationEdgeModel.target_mandate_id == target_mandate_id,
-            DelegationEdgeModel.revoked == False,
-        ).first()
-        if existing_inbound and existing_inbound.source_mandate_id != source_mandate_id:
-            raise ValueError(
-                "Active inbound-edge conflict: target mandate already has an active inbound delegation edge"
             )
 
         # Determine delegation type
@@ -365,7 +422,11 @@ class DelegationGraph:
             delegation_type=delegation_type,
             context_tags=context_tags or [],
             granted_at=datetime.utcnow(),
-            expires_at=expires_at,
+            expires_at=self._resolve_edge_expiration(
+                source_mandate=source_mandate,
+                target_mandate=target_mandate,
+                requested_expires_at=expires_at,
+            ),
             revoked=False,
             edge_metadata=metadata,
         )
@@ -417,7 +478,12 @@ class DelegationGraph:
             self.db_session.rollback()
             raise RuntimeError(f"Failed to revoke delegation edge: {e}")
 
-    def revoke_cascade(self, mandate_id: UUID, reason: Optional[str] = None) -> int:
+    def revoke_cascade(
+        self,
+        mandate_id: UUID,
+        reason: Optional[str] = None,
+        visited: Optional[Set[UUID]] = None,
+    ) -> int:
         """
         Revoke all edges originating from a mandate, recursively.
 
@@ -429,6 +495,11 @@ class DelegationGraph:
             Total number of edges revoked
         """
         logger.info(f"Cascade revoking edges from mandate {mandate_id}")
+        if visited is None:
+            visited = set()
+        if mandate_id in visited:
+            return 0
+        visited.add(mandate_id)
         revoked_count = 0
 
         # Get all active outgoing edges
@@ -445,7 +516,7 @@ class DelegationGraph:
             revoked_count += 1
 
             # Recursively revoke from target
-            revoked_count += self.revoke_cascade(edge.target_mandate_id, reason)
+            revoked_count += self.revoke_cascade(edge.target_mandate_id, reason, visited)
 
         if revoked_count > 0:
             try:
@@ -600,7 +671,7 @@ class DelegationGraph:
         Compute effective scope for a mandate considering all authority sources.
 
         If a mandate has multiple authority sources, the effective scope is the
-        intersection of all sources' scopes (most restrictive).
+        subset of the mandate's own scope that is covered by the active source union.
 
         Args:
             mandate_id: The mandate to compute scope for
@@ -625,32 +696,33 @@ class DelegationGraph:
                 "action_scope": mandate.action_scope or [],
             }
 
-        # Intersect scopes from all sources
-        resource_sets = []
-        action_sets = []
+        source_resource_scopes: list[list[str]] = []
+        source_action_scopes: list[list[str]] = []
 
         for src_edge in sources:
             src_mandate = self.db_session.query(ExecutionMandate).filter(
                 ExecutionMandate.mandate_id == src_edge.source_mandate_id
             ).first()
             if src_mandate and not src_mandate.revoked:
-                resource_sets.append(set(src_mandate.resource_scope or []))
-                action_sets.append(set(src_mandate.action_scope or []))
+                source_resource_scopes.append(list(src_mandate.resource_scope or []))
+                source_action_scopes.append(list(src_mandate.action_scope or []))
 
-        if not resource_sets:
+        if not source_resource_scopes and not source_action_scopes:
             return {
                 "resource_scope": mandate.resource_scope or [],
                 "action_scope": mandate.action_scope or [],
             }
 
-        # Intersect all sources and also the mandate's own scope
-        effective_resources = set(mandate.resource_scope or [])
-        effective_actions = set(mandate.action_scope or [])
-
-        for rs in resource_sets:
-            effective_resources &= rs
-        for as_ in action_sets:
-            effective_actions &= as_
+        effective_resources = [
+            scope_entry
+            for scope_entry in (mandate.resource_scope or [])
+            if self._scope_is_covered_by_union([scope_entry], source_resource_scopes)
+        ]
+        effective_actions = [
+            scope_entry
+            for scope_entry in (mandate.action_scope or [])
+            if self._scope_is_covered_by_union([scope_entry], source_action_scopes)
+        ]
 
         return {
             "resource_scope": sorted(effective_resources),
