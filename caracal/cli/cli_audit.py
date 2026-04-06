@@ -71,8 +71,8 @@ def _required_workflow_commands() -> List[Tuple[str, str]]:
     return [
         ("workspace", "create"),
         ("system", "db"),
-        ("agent", "register"),
-        ("agent", "list"),
+        ("principal", "register"),
+        ("principal", "list"),
         ("policy", "create"),
         ("policy", "list"),
         ("delegation", "generate"),
@@ -143,10 +143,10 @@ def _run_help_smoke(root_command: click.Group) -> Dict[str, object]:
 
 
 def _extract_principal_id(output: str) -> str:
-    """Extract agent ID line from `agent register` output."""
+    """Extract principal ID line from `principal register` output."""
     for line in output.splitlines():
-        if "Agent ID:" in line:
-            return line.split("Agent ID:", 1)[1].strip()
+        if "Principal ID:" in line:
+            return line.split("Principal ID:", 1)[1].strip()
     return ""
 
 
@@ -166,13 +166,13 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
             },
             {
                 "name": "db-init",
-                "args": ["db", "init-db"],
+                "args": ["system", "db", "init"],
                 "expected_success": True,
             },
             {
-                "name": "agent-register",
+                "name": "principal-register",
                 "args": [
-                    "agent",
+                    "principal",
                     "register",
                     "--name",
                     "workflow-agent",
@@ -182,8 +182,8 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
                 "expected_success": True,
             },
             {
-                "name": "agent-list",
-                "args": ["agent", "list"],
+                "name": "principal-list",
+                "args": ["principal", "list"],
                 "expected_success": True,
             },
         ]
@@ -193,7 +193,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
         for step in command_steps:
             result = runner.invoke(root_command, step["args"])
             ok = result.exit_code == 0
-            if step["name"] == "agent-register" and ok:
+            if step["name"] == "principal-register" and ok:
                 principal_id = _extract_principal_id(result.output)
 
             steps.append(
@@ -211,7 +211,7 @@ def _run_workflow_execution_probe(root_command: click.Group) -> Dict[str, object
             return {
                 "all_passed": False,
                 "steps": steps,
-                "summary": "Workflow probe stopped early because agent registration did not yield an agent ID.",
+                "summary": "Workflow probe stopped early because principal registration did not yield a principal ID.",
             }
 
         followup_steps = [
@@ -410,12 +410,12 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
 
     workflow_steps = [
         "caracal workspace create <name>",
-        "caracal system db init-db",
-        "caracal agent register --name ops-agent --email ops@example.com",
+        "caracal system db init",
+        "caracal principal register --name ops-agent --email ops@example.com",
         "caracal policy create --principal-id <principal-uuid> --max-validity-seconds 3600 --resource-pattern 'api:*' --action 'api_call'",
-        "caracal delegation generate --source-id <source-uuid> --target-id <target-uuid> --authority-scope 100",
-        "caracal authority issue --issuer-id <issuer-uuid> --subject-id <subject-uuid> --resource-scope 'api:*' --action-scope 'api_call' --validity-seconds 3600",
-        "caracal authority validate --mandate-id <mandate-uuid> --action api_call --resource api:openai:gpt-4",
+        "caracal delegation generate --source-id <source-uuid> --target-id <target-uuid> --expiration 3600",
+        "caracal authority mandate --issuer-id <issuer-uuid> --subject-id <subject-uuid> --resource-scope 'api:*' --action-scope 'api_call' --validity-seconds 3600",
+        "caracal authority enforce --mandate-id <mandate-uuid> --action api_call --resource api:openai:gpt-4",
         "caracal audit export",
     ]
 
@@ -434,7 +434,7 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
     else:
         click.echo("CLI Workflow Validation")
         click.echo("=" * 70)
-        click.echo("Required flow: setup -> org -> auth -> agent -> policy -> delegation -> run -> audit")
+        click.echo("Required flow: setup -> org -> auth -> principal -> policy -> delegation -> run -> audit")
         click.echo()
 
         if gaps:
