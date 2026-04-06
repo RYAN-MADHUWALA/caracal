@@ -138,7 +138,7 @@ class WorkspaceAwareGroup(SuggestingGroup):
         commands = self.list_commands(ctx)
         if commands:
             # Group commands by category
-            core_commands = ['workspace', 'principal', 'policy', 'authority', 'flow']
+            core_commands = ['workspace', 'principal', 'policy', 'authority']
             enterprise_commands = ['enterprise', 'delegation', 'audit']
             system_commands = ['config', 'provider', 'doctor', 'version', 'completion']
             
@@ -521,11 +521,6 @@ authority.add_command(list_mandates, name='list')
 authority.add_command(delegate)
 authority.add_command(graph)
 authority.add_command(attach_source)
-
-
-# Flow (interactive TUI)
-from caracal.flow.main import main as flow_main
-cli.add_command(flow_main, name='flow')
 
 
 # =============================================================================
