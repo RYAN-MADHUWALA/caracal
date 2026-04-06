@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 from pathlib import Path
 import re
 
@@ -491,6 +493,9 @@ def test_forbidden_marker_scanner_covers_phase_13_hardcut_expansion() -> None:
     assert "single_lineage_residuals" in payload
     assert "transitional_architecture_markers" in payload
     assert "CARACAL_SESSION_JWT_ALGORITHM" in payload
+    assert "temporary blocker" in payload
+    assert "guard file" in payload
+    assert "non-hardcut" in payload
     assert "owner_phase" in payload
     assert "_gate_missing_repo_violations" in payload
 
@@ -927,32 +932,87 @@ def test_enterprise_registration_rebind_surface_uses_final_route_names_only() ->
 
 @pytest.mark.unit
 def test_phase20_minimal_sdk_contract_artifact_is_present_and_complete() -> None:
-    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase20-minimal-sdk-contract-checklist.md"
-    payload = artifact.read_text(encoding="utf-8")
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase20-minimal-sdk-contract-checklist.json"
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
 
     assert artifact.exists()
-    assert "Status: COMPLETE" in payload
-    assert "## Public Surface Inventory" in payload
-    assert "Python SDK" in payload
-    assert "Node SDK" in payload
-    assert "Generated Node outputs must match the surviving source modules exactly." in payload
-    assert "enterprise/sync.py" in payload
-    assert "enterprise/sync.ts" in payload
+    assert payload["status"] == "complete"
+    assert "public_surface_inventory" in payload
+    assert "python_sdk" in payload["public_surface_inventory"]
+    assert "node_sdk" in payload["public_surface_inventory"]
+    assert "enterprise/sync.py" in payload["public_surface_inventory"]["python_sdk"]["deleted"]
+    assert "enterprise/sync.ts" in payload["public_surface_inventory"]["node_sdk"]["deleted"]
+    assert "Generated Node outputs must match the surviving source modules exactly." in payload["requirements"]
 
 
 @pytest.mark.unit
 def test_phase21_user_surface_conformance_artifact_is_present_and_complete() -> None:
-    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase21-user-surface-conformance.md"
-    payload = artifact.read_text(encoding="utf-8")
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase21-user-surface-conformance.json"
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
 
     assert artifact.exists()
-    assert "Status: COMPLETE" in payload
-    assert "## Final-Surface Matrix" in payload
-    assert "OSS CLI / TUI" in payload
-    assert "Enterprise UI" in payload
-    assert "Enterprise Backend" in payload
-    assert "/api/license/request-rebind" in payload
-    assert "switch-container naming" in payload
+    assert payload["status"] == "complete"
+    assert "final_surface_matrix" in payload
+    assert "oss_cli_tui" in payload["final_surface_matrix"]
+    assert "enterprise_ui" in payload["final_surface_matrix"]
+    assert "enterprise_backend" in payload["final_surface_matrix"]
+    assert any("/api/license/request-rebind" in entry for entry in payload["final_surface_matrix"]["enterprise_backend"])
+    assert any("switch-container" in entry for entry in payload["final_surface_matrix"]["enterprise_backend"])
+
+
+@pytest.mark.unit
+def test_phase22_production_readiness_artifact_is_present_and_complete() -> None:
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase22-production-readiness-report.json"
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+
+    assert artifact.exists()
+    assert payload["status"] == "complete"
+    assert "summary" in payload
+    assert "readiness_areas" in payload
+    assert "evidence_snapshot" in payload
+    assert "remaining_blockers_before_release" in payload
+    assert "sdk_thinness" in payload["readiness_areas"]
+    assert "user_surface_conformance" in payload["readiness_areas"]
+
+
+@pytest.mark.unit
+def test_phase22_rollback_forward_fix_playbook_is_present_and_complete() -> None:
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase22-rollback-forward-fix-playbook.json"
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+
+    assert artifact.exists()
+    assert payload["status"] == "complete"
+    assert "operating_rule" in payload
+    assert "allowed_rollback_shapes" in payload
+    assert "forbidden_rollback_shapes" in payload
+    assert "forward_fix_procedures" in payload
+    assert "release_blocking_criteria" in payload
+    assert any("/api/connection" in entry for entry in payload["forbidden_rollback_shapes"])
+    assert any("switch-container" in entry for entry in payload["forbidden_rollback_shapes"])
+
+
+@pytest.mark.unit
+def test_phase22_closure_artifact_manifest_is_frozen_and_matches_current_artifacts() -> None:
+    manifest_path = _REPO_ROOT / ".github" / "hardcut" / "phase22-closure-artifact-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest_path.exists()
+    assert manifest["status"] == "frozen"
+
+    artifact_paths = [
+        "Caracal/.github/hardcut/phase19-release-signoff.md",
+        "Caracal/.github/hardcut/phase20-minimal-sdk-contract-checklist.json",
+        "Caracal/.github/hardcut/phase21-user-surface-conformance.json",
+        "Caracal/.github/hardcut/phase22-production-readiness-report.json",
+        "Caracal/.github/hardcut/phase22-rollback-forward-fix-playbook.json",
+    ]
+    assert [entry["path"] for entry in manifest["artifacts"]] == artifact_paths
+
+    workspace_root = _REPO_ROOT.parent
+    for entry in manifest["artifacts"]:
+        artifact = workspace_root / entry["path"]
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        assert entry["sha256"] == digest
 
 
 @pytest.mark.unit
