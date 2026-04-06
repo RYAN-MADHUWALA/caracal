@@ -56,6 +56,9 @@ def test_oss_to_enterprise_migration_updates_custody_metadata_additively(
     assert custody["additive"] is True
     assert "provider_api_key" in cfg._load_vault("alpha")
     assert result["credentials_selected"] == 1
+    assert result["migration_contracts"]["alpha"]["registration_state"]["migration_mode"] == "explicit_only"
+    assert result["migration_contracts"]["alpha"]["authority_graph_state"]["graph_model"] == "delegation_edges"
+    assert result["migration_contracts"]["alpha"]["vault_references"]["gateway_url"] == "https://enterprise.example.com"
 
 
 @pytest.mark.unit
@@ -88,6 +91,48 @@ def test_enterprise_to_oss_import_stores_local_secret_and_updates_custody(
     custody = updated.metadata[MigrationManager.CREDENTIAL_CUSTODY_METADATA_KEY]["provider_api_key"]
     assert custody["location"] == "local"
     assert result["credentials_imported"] == 1
+
+
+@pytest.mark.unit
+def test_enterprise_to_oss_import_can_apply_explicit_migration_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _configure_paths(monkeypatch, tmp_path)
+    _configure_crypto(monkeypatch)
+
+    cfg = ConfigManager()
+    cfg.create_workspace("alpha")
+
+    ws_cfg = cfg.get_workspace_config("alpha")
+    ws_cfg.metadata[MigrationManager.CREDENTIAL_CUSTODY_METADATA_KEY] = {
+        "provider_api_key": {"location": "enterprise"}
+    }
+    cfg.set_workspace_config("alpha", ws_cfg)
+
+    contract = {
+        "version": MigrationManager.MIGRATION_CONTRACT_VERSION,
+        "direction": "oss_to_enterprise",
+        "source_model": "broker",
+        "target_model": "gateway",
+        "registration_state": {"registration_state": "configured", "migration_mode": "explicit_only"},
+        "authority_graph_state": {"graph_model": "delegation_edges", "root_authority_ready": True},
+        "runtime_session_state": {"lifecycle_model": "explicit_session_bootstrap"},
+        "vault_references": {"secret_refs": {"runtime_signing_key": "vault://enterprise/provider"}},
+    }
+
+    manager = MigrationManager()
+    manager.migrate_credentials_enterprise_to_oss(
+        workspace="alpha",
+        include_credentials=["provider_api_key"],
+        exported_credentials={"provider_api_key": "recovered-secret"},
+        migration_contract=contract,
+    )
+
+    updated = cfg.get_workspace_config("alpha")
+    assert updated.metadata[MigrationManager.REGISTRATION_STATE_METADATA_KEY]["registration_state"] == "configured"
+    assert updated.metadata[MigrationManager.AUTHORITY_GRAPH_STATE_METADATA_KEY]["root_authority_ready"] is True
+    assert updated.metadata["secret_refs"]["runtime_signing_key"] == "vault://enterprise/provider"
 
 
 @pytest.mark.unit

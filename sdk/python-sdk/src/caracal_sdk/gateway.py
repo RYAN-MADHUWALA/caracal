@@ -12,11 +12,11 @@ OSS: behaves identically to the standard HTTP adapter (broker mode).
 Enterprise: wraps every request with the gateway's auth headers and routes
             through CARACAL_ENTERPRISE_URL, gaining network-level enforcement.
 
-Usage (automatic — gateway flags from environment / config):
+Usage (explicit gateway execution signals from environment / config):
 
     from caracal_sdk.client import CaracalClient
 
-    # Feature flags auto-detected; GatewayAdapter used when gateway_enabled=True
+    # GatewayAdapter uses explicit gateway execution signals when enabled
     client = CaracalClient(api_key="…")
     mandate = await client.scope(...).mandates.create(...)
 
@@ -71,8 +71,6 @@ except Exception:
             "yes",
             "on",
         }
-        if not enabled and endpoint:
-            enabled = True
         fail_closed = os.getenv("CARACAL_GATEWAY_FAIL_CLOSED", "").strip().lower() in {
             "1",
             "true",
@@ -102,8 +100,8 @@ class GatewayAdapter(BaseAdapter):
     Transport adapter that proxies SDK requests through the Caracal
     enterprise gateway.
 
-    In OSS / broker mode this adapter calls the Caracal API directly
-    (identical to HttpAdapter) unless *gateway_endpoint* is set.
+    In OSS / broker mode this adapter can call the Caracal API directly only
+    when an explicit broker base URL is configured.
 
     In enterprise mode (gateway_endpoint + api_key configured) every
     request is forwarded to the gateway, which performs:
@@ -125,7 +123,7 @@ class GatewayAdapter(BaseAdapter):
         gateway_api_key: Optional[str] = None,
         org_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
-        fallback_base_url: Optional[str] = None,
+        broker_base_url: Optional[str] = None,
         timeout_seconds: int = _GW_REQUEST_TIMEOUT,
         feature_flags: Optional[GatewayFeatureFlags] = None,
     ) -> None:
@@ -137,7 +135,7 @@ class GatewayAdapter(BaseAdapter):
                              Defaults to CARACAL_GATEWAY_API_KEY env var.
             org_id: Organization identifier injected into every request.
             workspace_id: Workspace identifier injected into every request.
-            fallback_base_url: Caracal API URL used when gateway is disabled.
+            broker_base_url: Caracal API URL used for explicit broker-mode calls.
             timeout_seconds: HTTP request timeout.
             feature_flags: Pre-loaded feature flags (loaded from env if None).
         """
@@ -148,7 +146,7 @@ class GatewayAdapter(BaseAdapter):
         self._api_key = gateway_api_key or self._flags.gateway_api_key or ""
         self._org_id = org_id or ""
         self._workspace_id = workspace_id or ""
-        self._fallback_base = (fallback_base_url or "").rstrip("/")
+        self._broker_base = (broker_base_url or "").rstrip("/")
         self._timeout = timeout_seconds
 
         self._client: Optional[httpx.AsyncClient] = None
@@ -184,7 +182,14 @@ class GatewayAdapter(BaseAdapter):
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _should_use_gateway(self) -> bool:
-        return bool(self._flags.gateway_enabled and self._endpoint and self._flags.is_enterprise)
+        if self._flags.is_enterprise:
+            if self._flags.gateway_enabled and not self._endpoint:
+                raise GatewayAdapterError(
+                    "Enterprise gateway execution requires an explicit gateway endpoint."
+                )
+            return bool(self._flags.gateway_enabled and self._endpoint)
+
+        return False
 
     def _get_client(self) -> httpx.AsyncClient:
         if not self._client:
@@ -232,19 +237,13 @@ class GatewayAdapter(BaseAdapter):
                     json=request.body,
                 )
         except httpx.TimeoutException as exc:
-            if self._flags.fail_closed:
-                raise GatewayAdapterError(
-                    f"Gateway request timed out (fail-closed): {exc}"
-                ) from exc
-            logger.warning("Gateway timeout; falling back to direct API: %s", exc)
-            return await self._send_direct(client, request)
+            raise GatewayAdapterError(
+                f"Gateway request timed out (fail-closed): {exc}"
+            ) from exc
         except httpx.HTTPError as exc:
-            if self._flags.fail_closed:
-                raise GatewayAdapterError(
-                    f"Gateway unreachable (fail-closed): {exc}"
-                ) from exc
-            logger.warning("Gateway unreachable; falling back to direct API: %s", exc)
-            return await self._send_direct(client, request)
+            raise GatewayAdapterError(
+                f"Gateway unreachable (fail-closed): {exc}"
+            ) from exc
 
         elapsed = (time.monotonic() - start) * 1000
         self._raise_if_gateway_error(resp)
@@ -260,10 +259,10 @@ class GatewayAdapter(BaseAdapter):
         self, client: httpx.AsyncClient, request: SDKRequest
     ) -> SDKResponse:
         """Direct call to the Caracal API (OSS broker path)."""
-        base = self._fallback_base
+        base = self._broker_base
         if not base:
             raise GatewayAdapterError(
-                "No gateway endpoint and no fallback_base_url configured."
+                "No gateway endpoint and no explicit broker_base_url configured."
             )
         url = f"{base}{request.path}"
         start = time.monotonic()
@@ -328,13 +327,14 @@ class GatewayAdapter(BaseAdapter):
 def build_gateway_adapter(
     org_id: Optional[str] = None,
     workspace_id: Optional[str] = None,
-    fallback_base_url: Optional[str] = None,
+    broker_base_url: Optional[str] = None,
 ) -> GatewayAdapter:
     """
     Convenience factory: build a GatewayAdapter from environment feature flags.
 
     Returns a GatewayAdapter configured from CARACAL_GATEWAY_* env vars.
-    OSS users without gateway flags configured will get a simple direct adapter.
+    OSS users without gateway flags configured must provide an explicit
+    broker base URL if they want direct broker transport.
     """
     flags = get_gateway_features()
     return GatewayAdapter(
@@ -342,6 +342,6 @@ def build_gateway_adapter(
         gateway_api_key=flags.gateway_api_key,
         org_id=org_id,
         workspace_id=workspace_id,
-        fallback_base_url=fallback_base_url,
+        broker_base_url=broker_base_url,
         feature_flags=flags,
     )
