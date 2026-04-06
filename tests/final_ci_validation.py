@@ -32,8 +32,8 @@ def main():
     print()
     
     tests = [
-        ("Syntax: main_backup.py", 
-         ["python", "-m", "py_compile", "caracal/cli/main_backup.py"]),
+        ("Syntax: main.py", 
+         ["python", "-m", "py_compile", "caracal/cli/main.py"]),
         
         ("Syntax: test_simple.py", 
          ["python", "-m", "py_compile", "tests/test_simple.py"]),

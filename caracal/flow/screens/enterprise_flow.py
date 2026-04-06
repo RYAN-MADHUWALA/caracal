@@ -12,7 +12,6 @@ Displays:
 - Connection status & API key display
 """
 
-import os
 from typing import Optional
 
 from rich.console import Console
@@ -21,10 +20,8 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
-from caracal.enterprise import EnterpriseLicenseValidator
-from caracal.enterprise.license import (
-    _normalize_enterprise_url,
-    _read_env,
+from caracal.deployment.enterprise_license import EnterpriseLicenseValidator
+from caracal.deployment.enterprise_runtime import (
     _resolve_api_url,
     load_enterprise_config,
 )
@@ -418,10 +415,6 @@ class EnterpriseFlow:
                     "  • If running `caracal flow` in container mode, localhost points to the container. "
                     "Start Enterprise API with `--host 0.0.0.0` so it is reachable from the runtime container"
                 )
-            elif "password" in result.message.lower():
-                error_lines.append(f"[bold]Troubleshooting:[/]")
-                error_lines.append(f"  • This license requires a password")
-                error_lines.append(f"  • Set the password in Enterprise dashboard → Settings → Plan & Billing")
             elif "not found" in result.message.lower():
                 error_lines.append(f"[bold]Troubleshooting:[/]")
                 error_lines.append(f"  • Verify the license token in Enterprise dashboard → Settings")
@@ -500,7 +493,7 @@ class EnterpriseFlow:
         
         # Try to get remote sync status
         try:
-            from caracal.enterprise.sync import EnterpriseSyncClient
+            from caracal.deployment.enterprise_sync import EnterpriseSyncClient
             client = EnterpriseSyncClient()
             if client.test_connection():
                 self.console.print(f"[{Colors.SUCCESS}]✓ Enterprise API reachable[/]")
@@ -545,7 +538,7 @@ class EnterpriseFlow:
         
         try:
             from caracal.deployment.enterprise_sync_payload import build_enterprise_sync_payload
-            from caracal.enterprise.sync import EnterpriseSyncClient
+            from caracal.deployment.enterprise_sync import EnterpriseSyncClient
             client = EnterpriseSyncClient()
             payload = build_enterprise_sync_payload(
                 client_instance_id=client._client_instance_id,
@@ -684,8 +677,8 @@ class EnterpriseFlow:
                 # Derive tier/org from enterprise config if available
                 try:
                     cfg = load_enterprise_config()
-                    tier = getattr(cfg, "tier", "starter")
-                    org_id = getattr(cfg, "org_id", "")
+                    tier = str(cfg.get("tier") or "starter")
+                    org_id = str(cfg.get("org_id") or "")
                 except Exception:
                     tier, org_id = "starter", ""
                 SecretsFlow(tier=tier, org_id=org_id, console=self.console).show()
