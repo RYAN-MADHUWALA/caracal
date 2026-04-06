@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 import pytest
 
-import caracal.enterprise.license as enterprise_license
+import caracal.deployment.enterprise_runtime as enterprise_runtime
 from caracal.db.models import EnterpriseRuntimeConfig
 
 
@@ -75,7 +75,7 @@ def test_load_enterprise_config_reads_enterprise_runtime_table(monkeypatch: pyte
     session = _FakeSession(stored)
     manager = _patch_runtime_db(monkeypatch, session)
 
-    result = enterprise_license.load_enterprise_config()
+    result = enterprise_runtime.load_enterprise_config()
 
     assert result == {"license_key": "ent-token", "valid": True}
     assert session.queried_model is EnterpriseRuntimeConfig
@@ -88,7 +88,7 @@ def test_save_enterprise_config_creates_runtime_row_when_missing(monkeypatch: py
     session = _FakeSession(None)
     manager = _patch_runtime_db(monkeypatch, session)
 
-    enterprise_license.save_enterprise_config({"enterprise_api_url": "https://enterprise.example", "valid": True})
+    enterprise_runtime.save_enterprise_config({"enterprise_api_url": "https://enterprise.example", "valid": True})
 
     assert len(session.added) == 1
     inserted = session.added[0]
@@ -108,7 +108,7 @@ def test_save_enterprise_config_updates_existing_runtime_row(monkeypatch: pytest
     session = _FakeSession(existing)
     manager = _patch_runtime_db(monkeypatch, session)
 
-    enterprise_license.save_enterprise_config({"license_key": "new-token", "valid": True})
+    enterprise_runtime.save_enterprise_config({"license_key": "new-token", "valid": True})
 
     assert existing.config_data == {"license_key": "new-token", "valid": True}
     assert session.queried_model is EnterpriseRuntimeConfig
@@ -124,7 +124,7 @@ def test_clear_enterprise_config_deletes_runtime_row(monkeypatch: pytest.MonkeyP
     session = _FakeSession(existing)
     manager = _patch_runtime_db(monkeypatch, session)
 
-    enterprise_license.clear_enterprise_config()
+    enterprise_runtime.clear_enterprise_config()
 
     assert session.deleted is existing
     assert session.queried_model is EnterpriseRuntimeConfig
