@@ -16,9 +16,13 @@ from caracal.db.models import PrincipalLifecycleStatus
 class _InMemoryDenylist:
     def __init__(self) -> None:
         self.entries: list[tuple[str, datetime]] = []
+        self.principal_revocations: list[tuple[str, datetime]] = []
 
     async def add(self, token_jti: str, expires_at: datetime) -> None:
         self.entries.append((token_jti, expires_at))
+
+    async def mark_principal_revoked(self, principal_id: str, revoked_at: datetime) -> None:
+        self.principal_revocations.append((principal_id, revoked_at))
 
 
 class _RecordingDispatcher:
@@ -56,6 +60,7 @@ class _RecordingPublisher:
         actor_principal_id: str | None,
         root_principal_id: str | None,
         revoked_mandate_ids: list[str] | None = None,
+        revoked_edge_ids: list[str] | None = None,
         metadata: dict | None = None,
     ) -> None:
         self.events.append(
@@ -66,6 +71,7 @@ class _RecordingPublisher:
                 "actor_principal_id": actor_principal_id,
                 "root_principal_id": root_principal_id,
                 "revoked_mandate_ids": revoked_mandate_ids or [],
+                "revoked_edge_ids": revoked_edge_ids or [],
                 "metadata": metadata or {},
                 "commit_seen": self._commit_probe() if self._commit_probe is not None else None,
             }
@@ -116,11 +122,12 @@ async def test_revoke_principal_processes_leaves_first_and_flushes_cache() -> No
     )
 
     assert call_order == [str(leaf_id), str(root_id)]
-    assert result.denylisted_session_jtis == 2
+    assert result.denylisted_session_jtis == 3
     assert result.cache_invalidations == 4
     assert result.leaves_first_order is True
     assert len(result.revoked_principal_ids) == 2
     assert result.revoked_edge_ids == []
+    assert denylist.principal_revocations[0][0] == str(root_id)
 
     assert cache.invalidate_mandate.call_count == 2
     assert cache.invalidate_mandates_by_subject.call_count == 2
@@ -236,6 +243,10 @@ async def test_revoke_principal_orders_denylist_cache_revoke_commit_publish() ->
     order: list[str] = []
 
     class _OrderedDenylist:
+        async def mark_principal_revoked(self, principal_id: str, revoked_at: datetime) -> None:
+            del principal_id, revoked_at
+            order.append("principal_cutoff")
+
         async def add(self, token_jti: str, expires_at: datetime) -> None:
             del token_jti, expires_at
             order.append("denylist")
@@ -282,9 +293,10 @@ async def test_revoke_principal_orders_denylist_cache_revoke_commit_publish() ->
         session_token_jtis=["jti-1"],
     )
 
-    assert order[0] == "denylist"
+    assert order[0] == "principal_cutoff"
     assert "durable_revoke" in order
     assert "cache" in order
+    assert order.index("principal_cutoff") < order.index("denylist")
     assert order.index("denylist") < order.index("cache")
     assert order.index("cache") < order.index("durable_revoke")
     assert publisher.events[0]["commit_seen"] is True

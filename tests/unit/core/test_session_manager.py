@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import jwt
@@ -60,6 +60,7 @@ class _InMemoryDenylist:
 
     def __init__(self) -> None:
         self._blocked: set[str] = set()
+        self._principal_revoked_after: dict[str, int] = {}
 
     async def add(self, token_jti: str, expires_at: datetime) -> None:
         del expires_at
@@ -67,6 +68,33 @@ class _InMemoryDenylist:
 
     async def contains(self, token_jti: str) -> bool:
         return token_jti in self._blocked
+
+    async def mark_principal_revoked(self, principal_id: str, revoked_at: datetime) -> None:
+        revoked_value = revoked_at if revoked_at.tzinfo else revoked_at.replace(tzinfo=timezone.utc)
+        self._principal_revoked_after[principal_id] = int(revoked_value.timestamp())
+
+    async def is_principal_revoked(
+        self,
+        principal_id: str,
+        token_auth_time: datetime | int | float | str | None,
+    ) -> bool:
+        if principal_id not in self._principal_revoked_after:
+            return False
+        if token_auth_time is None:
+            return False
+        if isinstance(token_auth_time, datetime):
+            token_auth_ts = int(
+                (
+                    token_auth_time
+                    if token_auth_time.tzinfo
+                    else token_auth_time.replace(tzinfo=timezone.utc)
+                ).timestamp()
+            )
+        elif isinstance(token_auth_time, str):
+            token_auth_ts = int(float(token_auth_time))
+        else:
+            token_auth_ts = int(token_auth_time)
+        return token_auth_ts <= self._principal_revoked_after[principal_id]
 
 
 class _RecordingAuditSink:
@@ -176,6 +204,51 @@ async def test_revoke_access_token_blocks_future_validation() -> None:
     )
 
     await manager.revoke_token(issued.access_token)
+
+    with pytest.raises(SessionRevokedError):
+        await manager.validate_access_token(issued.access_token)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_access_token_rejects_principal_revoked_session() -> None:
+    denylist = _InMemoryDenylist()
+    manager = _create_manager(
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=denylist,
+    )
+
+    issued = manager.issue_session(
+        subject_id="user-principal-1",
+        organization_id="org-principal-1",
+        tenant_id="tenant-principal-1",
+        session_kind=SessionKind.INTERACTIVE,
+        extra_claims={"principal_id": "principal-1"},
+    )
+
+    await denylist.mark_principal_revoked("principal-1", datetime.now(timezone.utc))
+
+    with pytest.raises(SessionRevokedError):
+        await manager.validate_access_token(issued.access_token)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_access_token_uses_subject_when_principal_id_claim_missing() -> None:
+    denylist = _InMemoryDenylist()
+    manager = _create_manager(
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=denylist,
+    )
+
+    issued = manager.issue_session(
+        subject_id="user-subject-fallback",
+        organization_id="org-subject-fallback",
+        tenant_id="tenant-subject-fallback",
+        session_kind=SessionKind.INTERACTIVE,
+    )
+
+    await denylist.mark_principal_revoked("user-subject-fallback", datetime.now(timezone.utc))
 
     with pytest.raises(SessionRevokedError):
         await manager.validate_access_token(issued.access_token)
