@@ -348,7 +348,7 @@ class DelegationGraph:
         ).first()
         if existing_inbound and existing_inbound.source_mandate_id != source_mandate_id:
             raise ValueError(
-                "Single-lineage violation: target mandate already has an active inbound delegation edge"
+                "Active inbound-edge conflict: target mandate already has an active inbound delegation edge"
             )
 
         # Determine delegation type

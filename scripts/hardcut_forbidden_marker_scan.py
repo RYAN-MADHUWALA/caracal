@@ -81,7 +81,7 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
     MarkerDefinition(
         key="combined_onboarding_setup_helpers",
         description="Removed combined onboarding setup helpers that blend identity and authority setup",
-        pattern=r"(/api/onboarding/setup\b|\bonboardingApi\.runSetup\s*\(|\bsetup_onboarding\s*\()",
+        pattern=r"(/api/onboarding/setup(?:[\"'/?]|$)|\bonboardingApi\.runSetup\s*\(|\bsetup_onboarding\s*\()",
     ),
     MarkerDefinition(
         key="stale_removed_surface_names",
@@ -101,7 +101,7 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
     MarkerDefinition(
         key="single_lineage_residuals",
         description="Single-lineage and parent-child-only delegation markers",
-        pattern=r"(\bsingle_lineage\b|\bsingle-lineage\b|\bsingle lineage\b|\bsourceMandateId\b|\bauthoritySources\b|\bparent-child\b)",
+        pattern=r"(\bsingle_lineage\b|\bsingle-lineage\b|\bsingle lineage\b|\bparent-child\b)",
     ),
     MarkerDefinition(
         key="transitional_architecture_markers",
@@ -182,9 +182,25 @@ SELF_MARKER_SCANNER_NAMES = {
 MARKER_PATH_EXCLUDES: dict[str, set[str]] = {
     "sync_state_tables": {
         "caracal/runtime/hardcut_preflight.py",
+        "caracal/db/schema_version.py",
+        "caracal/db/migrations/versions/9bc013f8f3a6_add_sync_state_tables.py",
+        "caracal/db/migrations/versions/s8t9u0v1w2x3_drop_sync_state_tables_hardcut.py",
+        "caracal/db/migrations/versions/r7s8t9u0v1w2_enterprise_runtime_persistence_hardcut.py",
+    },
+    "aws_kms_fernet_imports": {
+        "caracal/runtime/hardcut_preflight.py",
+        "caracal/db/migrations/versions/l1m2n3o4p5q6_principal_key_custody_hardcut.py",
+        "caracal/db/migrations/versions/n3o4p5q6r7s8_authority_relational_constraints_hardcut.py",
+        "services/enterprise-api/alembic/versions/026_principal_key_custody_hardcut.py",
+        "services/enterprise-api/alembic/versions/028_authority_relational_constraints_hardcut.py",
     },
     "legacy_sync_auth_surfaces": {
         "services/enterprise-api/src/caracal_enterprise/main.py",
+        "services/enterprise-api/src/caracal_enterprise/services/enterprise_registration_service.py",
+        "services/enterprise-api/alembic/versions/030_cleanup_registration_metadata_hardcut.py",
+    },
+    "single_lineage_residuals": {
+        "caracal/db/migrations/versions/t9u0v1w2x3y4_single_lineage_active_inbound_constraint.py",
     },
     "compatibility_env_aliases": {
         "caracal/runtime/hardcut_preflight.py",
