@@ -1,9 +1,8 @@
-"""
-Unit tests for DelegationGraph lineage parity rules.
-"""
+"""Unit tests for DelegationGraph graph-safe authority rules."""
 
 import pytest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -13,13 +12,13 @@ from caracal.db.models import DelegationEdgeModel, ExecutionMandate, Principal
 
 @pytest.mark.unit
 class TestDelegationGraphLineageParity:
-    """Test strict parity between mandate.source_mandate_id and graph edges."""
+    """Test graph-safe delegation semantics after single-lineage removal."""
 
     def setup_method(self):
         self.mock_db_session = Mock()
         self.graph = DelegationGraph(self.mock_db_session)
 
-    def test_add_edge_backfills_target_source_mandate_id_when_missing(self):
+    def test_add_edge_allows_target_without_denormalized_lineage(self):
         source_mandate_id = uuid4()
         target_mandate_id = uuid4()
 
@@ -29,6 +28,8 @@ class TestDelegationGraphLineageParity:
             revoked=False,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:*"],
+            action_scope=["infer"],
             network_distance=2,
         )
         target_mandate = Mock(
@@ -38,6 +39,8 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=None,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:openai:models"],
+            action_scope=["infer"],
             network_distance=1,
         )
 
@@ -66,6 +69,7 @@ class TestDelegationGraphLineageParity:
             return query
 
         self.mock_db_session.query.side_effect = query_side_effect
+        self.graph.get_authority_sources = Mock(return_value=[])
 
         edge = self.graph.add_edge(
             source_mandate_id=source_mandate_id,
@@ -73,12 +77,12 @@ class TestDelegationGraphLineageParity:
             context_tags=["test"],
         )
 
-        assert target_mandate.source_mandate_id == source_mandate_id
+        assert target_mandate.source_mandate_id is None
         assert edge.source_mandate_id == source_mandate_id
         assert edge.target_mandate_id == target_mandate_id
         self.mock_db_session.add.assert_called_once()
 
-    def test_add_edge_rejects_mismatched_target_lineage(self):
+    def test_add_edge_ignores_stale_denormalized_target_lineage(self):
         source_mandate_id = uuid4()
         target_mandate_id = uuid4()
 
@@ -88,6 +92,8 @@ class TestDelegationGraphLineageParity:
             revoked=False,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:*"],
+            action_scope=["infer"],
             network_distance=2,
         )
         target_mandate = Mock(
@@ -97,6 +103,8 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=uuid4(),
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:openai:models"],
+            action_scope=["infer"],
             network_distance=1,
         )
 
@@ -125,12 +133,15 @@ class TestDelegationGraphLineageParity:
             return query
 
         self.mock_db_session.query.side_effect = query_side_effect
+        self.graph.get_authority_sources = Mock(return_value=[])
 
-        with pytest.raises(ValueError, match="lineage mismatch"):
-            self.graph.add_edge(
-                source_mandate_id=source_mandate_id,
-                target_mandate_id=target_mandate_id,
-            )
+        edge = self.graph.add_edge(
+            source_mandate_id=source_mandate_id,
+            target_mandate_id=target_mandate_id,
+        )
+
+        assert edge.source_mandate_id == source_mandate_id
+        assert edge.target_mandate_id == target_mandate_id
 
     def test_add_edge_rejects_expired_source_mandate(self):
         source_mandate_id = uuid4()
@@ -261,6 +272,8 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=None,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:*"],
+            action_scope=["infer"],
             network_distance=2,
         )
         target_mandate = Mock(
@@ -270,6 +283,8 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=source_mandate_id,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:openai:models"],
+            action_scope=["infer"],
             network_distance=1,
         )
 
@@ -296,7 +311,7 @@ class TestDelegationGraphLineageParity:
             source_mandate_id,
         )
 
-    def test_add_edge_rejects_multiple_active_inbound_edges(self):
+    def test_add_edge_allows_multiple_active_inbound_edges(self):
         source_mandate_id = uuid4()
         target_mandate_id = uuid4()
 
@@ -307,6 +322,8 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=None,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:*"],
+            action_scope=["infer"],
             network_distance=2,
         )
         target_mandate = Mock(
@@ -316,12 +333,23 @@ class TestDelegationGraphLineageParity:
             source_mandate_id=source_mandate_id,
             valid_from=datetime.utcnow() - timedelta(minutes=5),
             valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:openai:models"],
+            action_scope=["infer"],
             network_distance=1,
         )
 
         source_principal = Mock(principal_kind="human")
         target_principal = Mock(principal_kind="worker")
         existing_inbound = Mock(source_mandate_id=uuid4(), revoked=False)
+        existing_source_mandate = Mock(
+            mandate_id=existing_inbound.source_mandate_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:*"],
+            action_scope=["infer"],
+            network_distance=3,
+        )
 
         mandate_query_count = {"count": 0}
         principal_query_count = {"count": 0}
@@ -351,9 +379,275 @@ class TestDelegationGraphLineageParity:
             return query
 
         self.mock_db_session.query.side_effect = query_side_effect
+        self.graph.get_authority_sources = Mock(
+            return_value=[SimpleNamespace(source_mandate_id=existing_inbound.source_mandate_id)]
+        )
+        self.graph._get_mandate = Mock(
+            side_effect=lambda mandate_id: (
+                source_mandate
+                if mandate_id == source_mandate_id
+                else target_mandate
+                if mandate_id == target_mandate_id
+                else existing_source_mandate
+            )
+        )
 
-        with pytest.raises(ValueError, match="Active inbound-edge conflict"):
+        edge = self.graph.add_edge(
+            source_mandate_id=source_mandate_id,
+            target_mandate_id=target_mandate_id,
+        )
+
+        assert edge.source_mandate_id == source_mandate_id
+        assert edge.target_mandate_id == target_mandate_id
+
+    def test_add_edge_rejects_scope_amplification_beyond_source_union(self):
+        source_mandate_id = uuid4()
+        other_source_mandate_id = uuid4()
+        target_mandate_id = uuid4()
+
+        source_mandate = Mock(
+            mandate_id=source_mandate_id,
+            subject_id=uuid4(),
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:openai:*"],
+            action_scope=["infer"],
+            network_distance=2,
+        )
+        other_source_mandate = Mock(
+            mandate_id=other_source_mandate_id,
+            subject_id=uuid4(),
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["provider:anthropic:*"],
+            action_scope=["infer"],
+            network_distance=2,
+        )
+        target_mandate = Mock(
+            mandate_id=target_mandate_id,
+            subject_id=uuid4(),
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=[
+                "provider:openai:models",
+                "provider:anthropic:models",
+                "provider:google:models",
+            ],
+            action_scope=["infer"],
+            network_distance=1,
+        )
+
+        source_principal = Mock(principal_kind="human")
+        target_principal = Mock(principal_kind="worker")
+
+        mandate_lookup = {
+            source_mandate_id: source_mandate,
+            other_source_mandate_id: other_source_mandate,
+            target_mandate_id: target_mandate,
+        }
+
+        mandate_query_count = {"count": 0}
+        principal_query_count = {"count": 0}
+        edge_query_count = {"count": 0}
+
+        def query_side_effect(model):
+            query = Mock()
+            if model == ExecutionMandate:
+                mandate_query_count["count"] += 1
+                if mandate_query_count["count"] == 1:
+                    query.filter.return_value.first.return_value = source_mandate
+                elif mandate_query_count["count"] == 2:
+                    query.filter.return_value.first.return_value = target_mandate
+                else:
+                    predicate = query.filter.call_args
+                    query.filter.return_value.first.side_effect = lambda: None
+            elif model == Principal:
+                principal_query_count["count"] += 1
+                if principal_query_count["count"] == 1:
+                    query.filter.return_value.first.return_value = source_principal
+                else:
+                    query.filter.return_value.first.return_value = target_principal
+            elif model == DelegationEdgeModel:
+                edge_query_count["count"] += 1
+                query.filter.return_value.first.return_value = None
+                query.filter.return_value.all.return_value = []
+            return query
+
+        self.mock_db_session.query.side_effect = query_side_effect
+        self.graph.get_authority_sources = Mock(
+            return_value=[SimpleNamespace(source_mandate_id=other_source_mandate_id)]
+        )
+        self.graph._get_mandate = Mock(side_effect=lambda mandate_id: mandate_lookup.get(mandate_id))
+
+        with pytest.raises(ValueError, match="source union"):
             self.graph.add_edge(
                 source_mandate_id=source_mandate_id,
                 target_mandate_id=target_mandate_id,
             )
+
+    def test_get_effective_scope_uses_union_of_active_sources(self):
+        target_mandate_id = uuid4()
+        source_one_id = uuid4()
+        source_two_id = uuid4()
+
+        target_mandate = SimpleNamespace(
+            mandate_id=target_mandate_id,
+            revoked=False,
+            resource_scope=["provider:openai:models", "provider:anthropic:models"],
+            action_scope=["infer", "embed"],
+        )
+        source_one = SimpleNamespace(
+            mandate_id=source_one_id,
+            revoked=False,
+            resource_scope=["provider:openai:*"],
+            action_scope=["infer"],
+        )
+        source_two = SimpleNamespace(
+            mandate_id=source_two_id,
+            revoked=False,
+            resource_scope=["provider:anthropic:*"],
+            action_scope=["embed"],
+        )
+
+        mandate_lookup = {
+            target_mandate_id: target_mandate,
+            source_one_id: source_one,
+            source_two_id: source_two,
+        }
+        self.graph.get_authority_sources = Mock(
+            return_value=[
+                SimpleNamespace(source_mandate_id=source_one_id),
+                SimpleNamespace(source_mandate_id=source_two_id),
+            ]
+        )
+
+        def query_side_effect(model):
+            query = Mock()
+            if model == ExecutionMandate:
+                query.filter.return_value.first.side_effect = lambda: mandate_lookup.popitem()[1]
+            return query
+
+        self.mock_db_session.query.side_effect = query_side_effect
+        self.graph._get_mandate = Mock(side_effect=lambda mandate_id: {
+            target_mandate_id: target_mandate,
+            source_one_id: source_one,
+            source_two_id: source_two,
+        }.get(mandate_id))
+
+        mandate_sequence = iter([target_mandate, source_one, source_two])
+
+        def _execution_query(_model):
+            query = Mock()
+            query.filter.return_value.first.side_effect = lambda: next(mandate_sequence)
+            return query
+
+        self.mock_db_session.query.side_effect = _execution_query
+
+        effective_scope = self.graph.get_effective_scope(target_mandate_id)
+
+        assert effective_scope == {
+            "resource_scope": ["provider:anthropic:models", "provider:openai:models"],
+            "action_scope": ["embed", "infer"],
+        }
+
+    def test_validate_authority_path_supports_one_to_many_graphs(self):
+        source_mandate_id = uuid4()
+        target_one_id = uuid4()
+        target_two_id = uuid4()
+
+        source_mandate = SimpleNamespace(
+            mandate_id=source_mandate_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+        )
+        target_one = SimpleNamespace(
+            mandate_id=target_one_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+        )
+        target_two = SimpleNamespace(
+            mandate_id=target_two_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+        )
+
+        self.graph._get_mandate = Mock(
+            side_effect=lambda mandate_id: {
+                source_mandate_id: source_mandate,
+                target_one_id: target_one,
+                target_two_id: target_two,
+            }.get(mandate_id)
+        )
+        self.graph.get_delegated_targets = Mock(
+            side_effect=lambda mandate_id, active_only=True: (
+                [
+                    SimpleNamespace(target_mandate_id=target_one_id),
+                    SimpleNamespace(target_mandate_id=target_two_id),
+                ]
+                if mandate_id == source_mandate_id and active_only
+                else []
+            )
+        )
+
+        assert self.graph.validate_authority_path(source_mandate_id, target_one_id) is True
+        assert self.graph.validate_authority_path(source_mandate_id, target_two_id) is True
+
+    def test_validate_authority_path_supports_many_to_many_graphs(self):
+        source_a_id = uuid4()
+        source_b_id = uuid4()
+        target_a_id = uuid4()
+        target_b_id = uuid4()
+
+        active_mandates = {
+            source_a_id: SimpleNamespace(
+                mandate_id=source_a_id,
+                revoked=False,
+                valid_from=datetime.utcnow() - timedelta(minutes=5),
+                valid_until=datetime.utcnow() + timedelta(minutes=30),
+            ),
+            source_b_id: SimpleNamespace(
+                mandate_id=source_b_id,
+                revoked=False,
+                valid_from=datetime.utcnow() - timedelta(minutes=5),
+                valid_until=datetime.utcnow() + timedelta(minutes=30),
+            ),
+            target_a_id: SimpleNamespace(
+                mandate_id=target_a_id,
+                revoked=False,
+                valid_from=datetime.utcnow() - timedelta(minutes=5),
+                valid_until=datetime.utcnow() + timedelta(minutes=30),
+            ),
+            target_b_id: SimpleNamespace(
+                mandate_id=target_b_id,
+                revoked=False,
+                valid_from=datetime.utcnow() - timedelta(minutes=5),
+                valid_until=datetime.utcnow() + timedelta(minutes=30),
+            ),
+        }
+
+        edges_by_source = {
+            source_a_id: [
+                SimpleNamespace(target_mandate_id=target_a_id),
+                SimpleNamespace(target_mandate_id=target_b_id),
+            ],
+            source_b_id: [
+                SimpleNamespace(target_mandate_id=target_a_id),
+                SimpleNamespace(target_mandate_id=target_b_id),
+            ],
+        }
+
+        self.graph._get_mandate = Mock(side_effect=lambda mandate_id: active_mandates.get(mandate_id))
+        self.graph.get_delegated_targets = Mock(
+            side_effect=lambda mandate_id, active_only=True: edges_by_source.get(mandate_id, [])
+            if active_only
+            else []
+        )
+
+        assert self.graph.validate_authority_path(source_a_id, target_b_id) is True
+        assert self.graph.validate_authority_path(source_b_id, target_a_id) is True

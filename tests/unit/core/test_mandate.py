@@ -238,6 +238,126 @@ class TestMandateManager:
         self.manager.delegation_graph.add_edge.assert_called_once()
         assert self.manager.delegation_graph.add_edge.call_args.kwargs["source_mandate_id"] == source_mandate_id
         assert self.manager.delegation_graph.add_edge.call_args.kwargs["target_mandate_id"] == delegated_mandate.mandate_id
+
+    def test_attach_delegation_source_adds_graph_edge_for_existing_target(self):
+        source_mandate_id = uuid4()
+        target_mandate_id = uuid4()
+        source_subject_id = uuid4()
+        target_subject_id = uuid4()
+
+        source_mandate = Mock(
+            mandate_id=source_mandate_id,
+            subject_id=source_subject_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(hours=1),
+            resource_scope=["secret/*"],
+            action_scope=["read:secrets"],
+            network_distance=4,
+        )
+        target_mandate = Mock(
+            mandate_id=target_mandate_id,
+            subject_id=target_subject_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=1),
+            valid_until=datetime.utcnow() + timedelta(minutes=30),
+            resource_scope=["secret/project"],
+            action_scope=["read:secrets"],
+            network_distance=2,
+        )
+        source_principal = Mock(principal_kind="human")
+        target_principal = Mock(principal_kind="worker")
+
+        mandate_query_count = {"count": 0}
+        principal_query_count = {"count": 0}
+
+        def mock_query_side_effect(model):
+            mock_query = Mock()
+            if model == ExecutionMandate:
+                mandate_query_count["count"] += 1
+                mock_query.filter.return_value.first.return_value = (
+                    source_mandate if mandate_query_count["count"] == 1 else target_mandate
+                )
+            elif model == Principal:
+                principal_query_count["count"] += 1
+                mock_query.filter.return_value.first.return_value = (
+                    source_principal if principal_query_count["count"] == 1 else target_principal
+                )
+            return mock_query
+
+        self.mock_db_session.query.side_effect = mock_query_side_effect
+        self.manager.delegation_graph = Mock()
+
+        result = self.manager.attach_delegation_source(
+            source_mandate_id=source_mandate_id,
+            target_mandate_id=target_mandate_id,
+            context_tags=["merged-source"],
+        )
+
+        assert result is target_mandate
+        self.manager.delegation_graph.add_edge.assert_called_once()
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["source_mandate_id"] == source_mandate_id
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["target_mandate_id"] == target_mandate_id
+
+    def test_attach_delegation_source_allows_many_to_one_union_sources(self):
+        source_mandate_id = uuid4()
+        target_mandate_id = uuid4()
+        source_subject_id = uuid4()
+        target_subject_id = uuid4()
+
+        source_mandate = Mock(
+            mandate_id=source_mandate_id,
+            subject_id=source_subject_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=5),
+            valid_until=datetime.utcnow() + timedelta(minutes=20),
+            resource_scope=["provider:anthropic:*"],
+            action_scope=["embed"],
+            network_distance=4,
+        )
+        target_mandate = Mock(
+            mandate_id=target_mandate_id,
+            subject_id=target_subject_id,
+            revoked=False,
+            valid_from=datetime.utcnow() - timedelta(minutes=1),
+            valid_until=datetime.utcnow() + timedelta(minutes=10),
+            resource_scope=["provider:openai:models", "provider:anthropic:models"],
+            action_scope=["infer", "embed"],
+            network_distance=2,
+        )
+        source_principal = Mock(principal_kind="human")
+        target_principal = Mock(principal_kind="worker")
+
+        mandate_query_count = {"count": 0}
+        principal_query_count = {"count": 0}
+
+        def mock_query_side_effect(model):
+            mock_query = Mock()
+            if model == ExecutionMandate:
+                mandate_query_count["count"] += 1
+                mock_query.filter.return_value.first.return_value = (
+                    source_mandate if mandate_query_count["count"] == 1 else target_mandate
+                )
+            elif model == Principal:
+                principal_query_count["count"] += 1
+                mock_query.filter.return_value.first.return_value = (
+                    source_principal if principal_query_count["count"] == 1 else target_principal
+                )
+            return mock_query
+
+        self.mock_db_session.query.side_effect = mock_query_side_effect
+        self.manager.delegation_graph = Mock()
+
+        result = self.manager.attach_delegation_source(
+            source_mandate_id=source_mandate_id,
+            target_mandate_id=target_mandate_id,
+            context_tags=["union-join"],
+        )
+
+        assert result is target_mandate
+        self.manager.delegation_graph.add_edge.assert_called_once()
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["source_mandate_id"] == source_mandate_id
+        assert self.manager.delegation_graph.add_edge.call_args.kwargs["target_mandate_id"] == target_mandate_id
     
     def test_revoke_mandate_success(self):
         """Test successful mandate revocation."""
