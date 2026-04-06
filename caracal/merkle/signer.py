@@ -7,7 +7,6 @@ Merkle root signing with pluggable backend support.
 This module provides cryptographic signing of Merkle roots using ECDSA P-256.
 It supports pluggable signing backends:
 - SoftwareSigner: Default implementation using local key files (OSS)
-- HSMSigner: Enterprise implementation using PKCS#11 HSM (Enterprise module)
 
 The signing backend is configured via merkle.signing_backend setting.
 """
@@ -62,7 +61,6 @@ class MerkleSigner(ABC):
     
     Implementations:
     - SoftwareSigner: Default implementation using local key files (OSS)
-    - HSMSigner: Enterprise implementation using PKCS#11 HSM (Enterprise module)
     
     The signing backend is configured via merkle.signing_backend setting.
     """
@@ -344,7 +342,7 @@ def create_merkle_signer(config, db_session=None) -> MerkleSigner:
         db_session: Optional database session for storing signatures
     
     Returns:
-        MerkleSigner implementation (SoftwareSigner or HSMSigner)
+        MerkleSigner implementation (SoftwareSigner)
     
     Raises:
         ValueError: If signing_backend is invalid
@@ -357,20 +355,7 @@ def create_merkle_signer(config, db_session=None) -> MerkleSigner:
             raise ValueError("private_key_path is required for software signing backend")
         return SoftwareSigner(private_key_path, db_session)
     
-    elif signing_backend == "hsm":
-        # HSMSigner is provided by Enterprise module
-        # Import will fail if Enterprise not installed
-        try:
-            from caracal_enterprise.hsm import HSMSigner
-            hsm_config = getattr(config, 'hsm_config', None)
-            if not hsm_config:
-                raise ValueError("hsm_config is required for HSM signing backend")
-            return HSMSigner(hsm_config, db_session)
-        except ImportError:
-            raise ValueError(
-                "HSM signing backend requires Enterprise Caracal. "
-                "Install caracal-enterprise or use signing_backend: software"
-            )
-    
-    else:
-        raise ValueError(f"Invalid signing_backend: {signing_backend}")
+    raise ValueError(
+        f"Invalid signing_backend: {signing_backend}. "
+        "Only signing_backend='software' is supported in this package."
+    )

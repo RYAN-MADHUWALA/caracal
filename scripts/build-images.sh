@@ -24,7 +24,7 @@ DOCKER_DIR="$ROOT_DIR/deploy/docker"
 echo "Building caracal-runtime:v$VERSION..."
 docker build -t caracal-runtime:v$VERSION -f "$DOCKER_DIR/Dockerfile.runtime" "$ROOT_DIR"
 
-# Backward-compatible tags for existing workflows.
+# Additional tags for existing workflows.
 docker tag caracal-runtime:v$VERSION caracal-mcp-adapter:v$VERSION
 docker tag caracal-runtime:v$VERSION caracal-cli:v$VERSION
 
