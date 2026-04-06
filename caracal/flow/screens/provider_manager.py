@@ -603,8 +603,8 @@ _PROVIDER_PATTERNS = {
 }
 
 # Shared provider contract source of truth. The local literals above remain for
-# backward-compatible tests/imports, but all runtime flows use the shared
-# catalog so CLI, TUI, and enterprise APIs stay aligned.
+# test/import stability, but all runtime flows use the shared catalog so CLI,
+# TUI, and enterprise APIs stay aligned.
 _SERVICE_TYPE_GUIDANCE = SHARED_SERVICE_TYPE_GUIDANCE
 _AUTH_SCHEME_GUIDANCE = SHARED_AUTH_SCHEME_GUIDANCE
 _PROVIDER_PATTERNS = SHARED_PROVIDER_PATTERNS

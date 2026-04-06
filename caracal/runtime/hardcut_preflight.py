@@ -36,6 +36,43 @@ _FORBIDDEN_RUNTIME_COMPOSE_MARKERS = (
     "caracal_state:",
     "/home/caracal/.caracal",
 )
+_REQUIRED_RUNTIME_COMPOSE_MARKERS = (
+    "  vault:",
+    "image: ${caracal_vault_sidecar_image:-infisical/infisical:latest}",
+    "caracal_principal_key_backend: ${caracal_principal_key_backend:-vault}",
+    "caracal_vault_url: ${caracal_vault_url:-http://vault:8080}",
+    "caracal_vault_token:",
+    "caracal_vault_environment: ${caracal_vault_environment:-dev}",
+    "caracal_vault_secret_path: ${caracal_vault_secret_path:-/}",
+    "caracal_vault_signing_key_ref:",
+    "caracal_vault_session_public_key_ref:",
+    "caracal_session_signing_algorithm: ${caracal_session_signing_algorithm:-rs256}",
+)
+_FORBIDDEN_ENTERPRISE_COMPOSE_MARKERS = (
+    "caracal_secret_backend",
+    ":-null",
+    "vault_addr",
+    "vault_role_id",
+    "vault_secret_id",
+    "aws_region",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+)
+_REQUIRED_ENTERPRISE_COMPOSE_MARKERS = (
+    "  vault:",
+    "image: ${caracal_vault_sidecar_image:-infisical/infisical:latest}",
+    "${caracal_enterprise_vault_port:-8180}:8080",
+    "caracal_principal_key_backend=${caracal_principal_key_backend:-vault}",
+    "caracal_vault_url=${caracal_vault_url:-http://vault:8080}",
+    "caracal_vault_token=${caracal_vault_token:-enterprise-local-token}",
+    "caracal_vault_project_id=${caracal_vault_project_id:-caracal-enterprise-local}",
+    "caracal_vault_environment=${caracal_vault_environment:-enterprise-dev}",
+    "caracal_vault_secret_path=${caracal_vault_secret_path:-/enterprise}",
+    "caracal_vault_signing_key_ref=${caracal_vault_signing_key_ref:-keys/mandate-signing}",
+    "caracal_vault_session_public_key_ref=${caracal_vault_session_public_key_ref:-keys/session-public}",
+    "caracal_session_signing_algorithm=${caracal_session_signing_algorithm:-rs256}",
+    "vault:\n        condition: service_healthy",
+)
 _FORBIDDEN_STATE_RELATIVE_PATHS = (
     "enterprise.json",
     "workspaces.json",
@@ -131,6 +168,45 @@ def _runtime_compose_violations(compose_file: Path | None) -> list[str]:
     return [
         f"Runtime compose file {compose_file} contains forbidden file-backed state markers: {marker_list}."
     ]
+
+
+def _compose_contract_violations(
+    *,
+    compose_file: Path | None,
+    required_markers: Sequence[str],
+    forbidden_markers: Sequence[str],
+    scope_name: str,
+) -> list[str]:
+    if compose_file is None:
+        return []
+
+    try:
+        payload = compose_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"Could not read {scope_name} compose file {compose_file}: {exc}"]
+
+    lowered = payload.lower()
+    violations: list[str] = []
+
+    matched_forbidden = [
+        marker for marker in forbidden_markers if marker.lower() in lowered
+    ]
+    if matched_forbidden:
+        violations.append(
+            f"{scope_name} compose file {compose_file} contains forbidden markers: "
+            f"{', '.join(sorted(set(matched_forbidden)))}."
+        )
+
+    missing_required = [
+        marker for marker in required_markers if marker.lower() not in lowered
+    ]
+    if missing_required:
+        violations.append(
+            f"{scope_name} compose file {compose_file} is missing required hard-cut markers: "
+            f"{', '.join(missing_required)}."
+        )
+
+    return violations
 
 
 def _state_root_violations(state_roots: Sequence[Path] | None) -> list[str]:
@@ -350,6 +426,14 @@ def assert_runtime_hardcut(
     violations: list[str] = []
     violations.extend(_sqlite_violations(database_urls))
     violations.extend(_runtime_compose_violations(compose_file))
+    violations.extend(
+        _compose_contract_violations(
+            compose_file=compose_file,
+            required_markers=_REQUIRED_RUNTIME_COMPOSE_MARKERS,
+            forbidden_markers=(),
+            scope_name="runtime",
+        )
+    )
     violations.extend(_state_root_violations(state_roots))
     violations.extend(_compatibility_violations(env_vars))
     violations.extend(_execution_exclusivity_violations(env_vars))
@@ -362,6 +446,7 @@ def assert_runtime_hardcut(
 
 def assert_enterprise_hardcut(
     *,
+    compose_file: Path | None = None,
     database_urls: Mapping[str, str | None] | None,
     models_file: Path | None = None,
     check_jsonb: bool = True,
@@ -372,6 +457,14 @@ def assert_enterprise_hardcut(
     """Fail-fast preflight for enterprise API startup."""
     violations: list[str] = []
     violations.extend(_sqlite_violations(database_urls))
+    violations.extend(
+        _compose_contract_violations(
+            compose_file=compose_file,
+            required_markers=_REQUIRED_ENTERPRISE_COMPOSE_MARKERS,
+            forbidden_markers=_FORBIDDEN_ENTERPRISE_COMPOSE_MARKERS,
+            scope_name="enterprise",
+        )
+    )
     violations.extend(_state_root_violations(state_roots))
     violations.extend(_compatibility_violations(env_vars))
     violations.extend(_execution_exclusivity_violations(env_vars))
@@ -384,6 +477,7 @@ def assert_enterprise_hardcut(
 
 def assert_migration_hardcut(
     *,
+    compose_file: Path | None = None,
     database_urls: Mapping[str, str | None] | None,
     models_file: Path | None = None,
     check_jsonb: bool = True,
@@ -394,6 +488,14 @@ def assert_migration_hardcut(
     """Fail-fast preflight for migration startup paths."""
     violations: list[str] = []
     violations.extend(_sqlite_violations(database_urls))
+    violations.extend(
+        _compose_contract_violations(
+            compose_file=compose_file,
+            required_markers=_REQUIRED_ENTERPRISE_COMPOSE_MARKERS,
+            forbidden_markers=_FORBIDDEN_ENTERPRISE_COMPOSE_MARKERS,
+            scope_name="enterprise",
+        )
+    )
     violations.extend(_state_root_violations(state_roots))
     violations.extend(_compatibility_violations(env_vars))
     violations.extend(_execution_exclusivity_violations(env_vars))
