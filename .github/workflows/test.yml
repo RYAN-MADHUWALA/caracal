@@ -60,7 +60,7 @@ jobs:
         run: |
           uv pip install --system -e ".[dev]"
 
-      - name: Run hard-cut forbidden marker gate
+      - name: Run hard-cut forbidden marker gate (strict-zero)
         run: |
           python scripts/hardcut_forbidden_marker_scan.py --mode gate
       

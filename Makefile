@@ -118,6 +118,7 @@ hardcut-marker-baseline:
 	python3 scripts/hardcut_forbidden_marker_scan.py --mode baseline
 
 hardcut-marker-gate:
+	# strict-zero gate: any forbidden marker hit fails
 	python3 scripts/hardcut_forbidden_marker_scan.py --mode gate
 
 hardcut-migration-baseline:
