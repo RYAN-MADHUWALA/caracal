@@ -590,7 +590,7 @@ def enterprise_login(
 ):
     """Connect workspace to enterprise backend."""
     try:
-        from caracal.enterprise.license import EnterpriseLicenseValidator
+        from caracal.deployment.enterprise_license import EnterpriseLicenseValidator
         
         validator = EnterpriseLicenseValidator(enterprise_api_url=url)
         result = validator.validate_license(token)
@@ -623,7 +623,7 @@ def enterprise_disconnect(
 ):
     """Disconnect workspace from enterprise backend."""
     try:
-        from caracal.enterprise.license import EnterpriseLicenseValidator
+        from caracal.deployment.enterprise_license import EnterpriseLicenseValidator
         
         config_manager = ConfigManager()
         
@@ -665,7 +665,7 @@ def enterprise_sync(workspace: Optional[str], direction: str, format: str):
     """Perform immediate synchronization."""
     try:
         from caracal.deployment.enterprise_sync_payload import build_enterprise_sync_payload
-        from caracal.enterprise.sync import EnterpriseSyncClient
+        from caracal.deployment.enterprise_sync import EnterpriseSyncClient
         
         config_manager = ConfigManager()
         
@@ -723,8 +723,8 @@ def enterprise_sync(workspace: Optional[str], direction: str, format: str):
 def enterprise_status(workspace: Optional[str], format: str):
     """Show sync status."""
     try:
-        from caracal.enterprise.sync import EnterpriseSyncClient
-        from caracal.enterprise.license import EnterpriseLicenseValidator
+        from caracal.deployment.enterprise_license import EnterpriseLicenseValidator
+        from caracal.deployment.enterprise_sync import EnterpriseSyncClient
         
         config_manager = ConfigManager()
         
