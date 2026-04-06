@@ -1763,9 +1763,6 @@ def _remove_provider(console: Console, state: FlowState) -> None:
     vault = config_manager._load_vault(workspace)
     if credential_ref and credential_ref in vault:
         del vault[credential_ref]
-    for legacy_key in (f"provider_{selected}_api_key", f"provider_{selected}_credential"):
-        if legacy_key in vault:
-            del vault[legacy_key]
     config_manager._save_vault(workspace, vault)
 
     console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' removed.[/]")
