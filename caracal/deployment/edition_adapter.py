@@ -58,7 +58,7 @@ class DeploymentEditionAdapter:
 
         raise EditionConfigurationError(
             "Enterprise execution requires a gateway URL "
-            "(CARACAL_ENTERPRISE_URL/CARACAL_GATEWAY_ENDPOINT/CARACAL_GATEWAY_URL)."
+            "(CARACAL_ENTERPRISE_URL)."
         )
 
     def resolve_revocation_publisher_mode(self, *, explicit_mode: Optional[str] = None) -> str:

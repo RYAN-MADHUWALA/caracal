@@ -271,70 +271,9 @@ class GatewayClient:
         if await self._authenticate_via_ais():
             return
 
-        if self._runtime_session_kind != "human":
-            raise GatewayAuthenticationError(
-                "AIS token endpoint is required for non-human runtime sessions"
-            )
-
-        try:
-            # Get gateway credentials from config
-            gateway_token_ref = f"gateway_token_{self.workspace}"
-            
-            try:
-                auth_token = self.config_manager.get_secret(
-                    gateway_token_ref,
-                    self.workspace
-                )
-            except Exception as e:
-                raise GatewayAuthenticationError(
-                    f"Gateway authentication token not found: {gateway_token_ref}"
-                ) from e
-            
-            # Authenticate with gateway
-            client = await self._get_client()
-            
-            response = await client.post(
-                f"{self.gateway_url}/auth/token",
-                json={"token": auth_token, "workspace": self.workspace},
-                timeout=10.0
-            )
-            
-            if response.status_code == 401:
-                raise GatewayAuthenticationError(
-                    "Gateway authentication failed: Invalid credentials"
-                )
-            
-            if response.status_code != 200:
-                raise GatewayAuthenticationError(
-                    f"Gateway authentication failed: {response.status_code}"
-                )
-            
-            data = response.json()
-            
-            # Parse token and expiration
-            self._token = JWTToken(
-                token=data["access_token"],
-                expires_at=datetime.fromisoformat(data["expires_at"]),
-                refresh_token=data.get("refresh_token")
-            )
-            
-            logger.info(
-                "gateway_authenticated",
-                workspace=self.workspace,
-                expires_at=self._token.expires_at
-            )
-            
-        except GatewayAuthenticationError:
-            raise
-        except Exception as e:
-            logger.error(
-                "gateway_authentication_error",
-                error=str(e),
-                workspace=self.workspace
-            )
-            raise GatewayAuthenticationError(
-                f"Gateway authentication failed: {e}"
-            ) from e
+        raise GatewayAuthenticationError(
+            "AIS token endpoint is required for gateway runtime authentication"
+        )
 
     async def _authenticate_via_ais(self) -> bool:
         """Attempt to source runtime tokens from AIS endpoint.
@@ -348,8 +287,6 @@ class GatewayClient:
 
         payload = self._build_ais_token_payload()
         if payload is None:
-            if self._runtime_session_kind == "human":
-                return False
             raise GatewayAuthenticationError(
                 "AIS token sourcing requires principal, organization, and tenant identifiers"
             )
@@ -372,8 +309,6 @@ class GatewayClient:
                     )
 
             if response.status_code != 200:
-                if self._runtime_session_kind == "human":
-                    return False
                 raise GatewayAuthenticationError(
                     f"AIS token endpoint rejected request: {response.status_code}"
                 )
@@ -382,19 +317,10 @@ class GatewayClient:
         except GatewayAuthenticationError:
             raise
         except Exception as exc:
-            if self._runtime_session_kind == "human":
-                logger.warning(
-                    "ais_token_sourcing_failed_fallback",
-                    workspace=self.workspace,
-                    error=str(exc),
-                )
-                return False
             raise GatewayAuthenticationError(f"AIS token sourcing failed: {exc}") from exc
 
         access_token = str(response_data.get("access_token") or "").strip()
         if not access_token:
-            if self._runtime_session_kind == "human":
-                return False
             raise GatewayAuthenticationError("AIS token response did not include access_token")
 
         expires_at = self._parse_ais_expiration(response_data)
