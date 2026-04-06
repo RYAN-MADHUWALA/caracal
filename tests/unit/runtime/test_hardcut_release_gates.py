@@ -341,6 +341,16 @@ def test_enterprise_code_has_no_direct_registry_or_spawn_manager_usage() -> None
 
 
 @pytest.mark.unit
+def test_forbidden_marker_scanner_covers_phase_13_hardcut_expansion() -> None:
+    scanner_file = _REPO_ROOT / "scripts" / "hardcut_forbidden_marker_scan.py"
+    payload = scanner_file.read_text(encoding="utf-8")
+
+    assert "legacy_sync_auth_surfaces" in payload
+    assert "compatibility_env_aliases" in payload
+    assert "enterprise_logic_leakage" in payload
+
+
+@pytest.mark.unit
 def test_runtime_ais_handlers_are_not_stubbed() -> None:
     runtime_entrypoints = _REPO_ROOT / "caracal" / "runtime" / "entrypoints.py"
     payload = runtime_entrypoints.read_text(encoding="utf-8")

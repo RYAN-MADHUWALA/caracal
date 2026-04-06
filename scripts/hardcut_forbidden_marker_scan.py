@@ -24,6 +24,10 @@ class MarkerDefinition:
     key: str
     description: str
     pattern: str
+    repos: tuple[str, ...] = SCAN_REPO_KEYS if "SCAN_REPO_KEYS" in globals() else ("opensource", "enterprise")
+
+
+SCAN_REPO_KEYS: tuple[str, ...] = ("opensource", "enterprise")
 
 
 MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
@@ -57,9 +61,23 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
         description="Legacy AWS/KMS/Fernet/keyring imports and markers",
         pattern=r"(\bboto3\b|\baws_kms\b|\bAWS_KMS\b|\bCARACAL_AWS_\b|cryptography\.fernet|\bFernet\b|\bkeyring\b)",
     ),
+    MarkerDefinition(
+        key="legacy_sync_auth_surfaces",
+        description="Removed password-era sync auth fields and onboarding route markers",
+        pattern=r"(\bsync_password\b|/api/onboarding/connection-status\b|cleanup-license-password\b|/api/license/update-password\b)",
+    ),
+    MarkerDefinition(
+        key="compatibility_env_aliases",
+        description="Legacy compatibility env aliases and dual-write markers",
+        pattern=r"(\bCARACAL_ENABLE_COMPAT_ALIASES\b|\bCARACAL_COMPAT_ALIASES\b|\bCARACAL_COMPAT_MODE\b|\bCARACAL_ENABLE_DUAL_WRITE\b|\bCARACAL_DUAL_WRITE_WINDOW\b)",
+    ),
+    MarkerDefinition(
+        key="enterprise_logic_leakage",
+        description="Enterprise package imports from OSS code paths",
+        pattern=r"(\bfrom\s+caracal_enterprise\b|\bimport\s+caracal_enterprise\b|caracal_enterprise\.)",
+        repos=("opensource",),
+    ),
 )
-
-SCAN_REPO_KEYS: tuple[str, ...] = ("opensource", "enterprise")
 
 TEXT_SUFFIXES = {
     ".py",
@@ -134,6 +152,12 @@ MARKER_PATH_EXCLUDES: dict[str, set[str]] = {
     "sync_state_tables": {
         "caracal/runtime/hardcut_preflight.py",
     },
+    "legacy_sync_auth_surfaces": {
+        "services/enterprise-api/src/caracal_enterprise/main.py",
+    },
+    "compatibility_env_aliases": {
+        "caracal/runtime/hardcut_preflight.py",
+    },
 }
 
 
@@ -187,7 +211,12 @@ def _new_marker_hit() -> dict[str, Any]:
     }
 
 
-def _scan_root(root: Path, definitions: tuple[MarkerDefinition, ...]) -> dict[str, dict[str, Any]]:
+def _scan_root(
+    root: Path,
+    definitions: tuple[MarkerDefinition, ...],
+    *,
+    repo_key: str,
+) -> dict[str, dict[str, Any]]:
     compiled = {item.key: re.compile(item.pattern, flags=re.IGNORECASE) for item in definitions}
     marker_hits = {item.key: _new_marker_hit() for item in definitions}
 
@@ -199,6 +228,8 @@ def _scan_root(root: Path, definitions: tuple[MarkerDefinition, ...]) -> dict[st
 
         relative_path = str(path.relative_to(root))
         for item in definitions:
+            if repo_key not in item.repos:
+                continue
             excluded_paths = MARKER_PATH_EXCLUDES.get(item.key, set())
             if relative_path in excluded_paths:
                 continue
@@ -236,7 +267,7 @@ def _build_report(
         if repo_root is None:
             scan_results[repo_key] = {item.key: _new_marker_hit() for item in definitions}
             continue
-        scan_results[repo_key] = _scan_root(repo_root, definitions)
+        scan_results[repo_key] = _scan_root(repo_root, definitions, repo_key=repo_key)
 
     marker_items: list[dict[str, Any]] = []
     repo_totals = {repo_key: 0 for repo_key in roots}

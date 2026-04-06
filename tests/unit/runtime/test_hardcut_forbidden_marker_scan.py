@@ -129,3 +129,12 @@ def test_gate_mode_fails_when_any_marker_count_is_non_zero(
 
     assert exit_code == 1
     assert "strict-zero mode" in captured.err
+
+
+def test_marker_catalog_covers_phase_13_expansion_categories() -> None:
+    module = _load_scanner_module()
+    marker_keys = {marker.key for marker in module.MARKER_DEFINITIONS}
+
+    assert "legacy_sync_auth_surfaces" in marker_keys
+    assert "compatibility_env_aliases" in marker_keys
+    assert "enterprise_logic_leakage" in marker_keys
