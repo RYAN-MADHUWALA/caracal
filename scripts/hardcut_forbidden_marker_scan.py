@@ -13,10 +13,12 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+SCAN_REPO_KEYS: tuple[str, ...] = ("opensource", "enterprise")
 
 
 @dataclass(frozen=True)
@@ -24,10 +26,7 @@ class MarkerDefinition:
     key: str
     description: str
     pattern: str
-    repos: tuple[str, ...] = SCAN_REPO_KEYS if "SCAN_REPO_KEYS" in globals() else ("opensource", "enterprise")
-
-
-SCAN_REPO_KEYS: tuple[str, ...] = ("opensource", "enterprise")
+    repos: tuple[str, ...] = field(default_factory=lambda: SCAN_REPO_KEYS)
 
 
 MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
