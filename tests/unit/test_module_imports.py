@@ -164,17 +164,6 @@ class TestModuleImports:
             # Some modules may fail to import due to configuration
             pytest.skip(f"Module caracal.cli.main failed to import: {e}")
 
-    def test_import_caracal_cli_main_backup(self):
-        """Test importing caracal.cli.main_backup."""
-        try:
-            importlib.import_module("caracal.cli.main_backup")
-        except ImportError as e:
-            # Some modules may have optional dependencies
-            pytest.skip(f"Module caracal.cli.main_backup has missing dependencies: {e}")
-        except Exception as e:
-            # Some modules may fail to import due to configuration
-            pytest.skip(f"Module caracal.cli.main_backup failed to import: {e}")
-
     def test_import_caracal_cli_mcp_service(self):
         """Test importing caracal.cli.mcp_service."""
         try:
@@ -735,27 +724,38 @@ class TestModuleImports:
             # Some modules may fail to import due to configuration
             pytest.skip(f"Module caracal.enterprise.exceptions failed to import: {e}")
 
-    def test_import_caracal_enterprise_license(self):
-        """Test importing caracal.enterprise.license."""
+    def test_import_caracal_deployment_enterprise_license(self):
+        """Test importing caracal.deployment.enterprise_license."""
         try:
-            importlib.import_module("caracal.enterprise.license")
+            importlib.import_module("caracal.deployment.enterprise_license")
         except ImportError as e:
             # Some modules may have optional dependencies
-            pytest.skip(f"Module caracal.enterprise.license has missing dependencies: {e}")
+            pytest.skip(f"Module caracal.deployment.enterprise_license has missing dependencies: {e}")
         except Exception as e:
             # Some modules may fail to import due to configuration
-            pytest.skip(f"Module caracal.enterprise.license failed to import: {e}")
+            pytest.skip(f"Module caracal.deployment.enterprise_license failed to import: {e}")
 
-    def test_import_caracal_enterprise_sync(self):
-        """Test importing caracal.enterprise.sync."""
+    def test_import_caracal_deployment_enterprise_runtime(self):
+        """Test importing caracal.deployment.enterprise_runtime."""
         try:
-            importlib.import_module("caracal.enterprise.sync")
+            importlib.import_module("caracal.deployment.enterprise_runtime")
         except ImportError as e:
             # Some modules may have optional dependencies
-            pytest.skip(f"Module caracal.enterprise.sync has missing dependencies: {e}")
+            pytest.skip(f"Module caracal.deployment.enterprise_runtime has missing dependencies: {e}")
         except Exception as e:
             # Some modules may fail to import due to configuration
-            pytest.skip(f"Module caracal.enterprise.sync failed to import: {e}")
+            pytest.skip(f"Module caracal.deployment.enterprise_runtime failed to import: {e}")
+
+    def test_import_caracal_deployment_enterprise_sync(self):
+        """Test importing caracal.deployment.enterprise_sync."""
+        try:
+            importlib.import_module("caracal.deployment.enterprise_sync")
+        except ImportError as e:
+            # Some modules may have optional dependencies
+            pytest.skip(f"Module caracal.deployment.enterprise_sync has missing dependencies: {e}")
+        except Exception as e:
+            # Some modules may fail to import due to configuration
+            pytest.skip(f"Module caracal.deployment.enterprise_sync failed to import: {e}")
 
     def test_import_caracal_exceptions(self):
         """Test importing caracal.exceptions."""

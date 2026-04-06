@@ -6,8 +6,9 @@ import json
 
 import pytest
 
-import caracal.enterprise.license as enterprise_license
-import caracal.enterprise.sync as enterprise_sync
+import caracal.deployment.enterprise_license as enterprise_license
+import caracal.deployment.enterprise_runtime as enterprise_runtime
+import caracal.deployment.enterprise_sync as enterprise_sync
 
 
 @pytest.fixture
@@ -158,12 +159,12 @@ def test_resolve_revocation_webhook_target_uses_override_and_cached_sync_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        enterprise_license,
+        enterprise_runtime,
         "load_enterprise_config",
         lambda: {"sync_api_key": "sync-key-1"},
     )
 
-    webhook_url, sync_api_key = enterprise_license.resolve_revocation_webhook_target(
+    webhook_url, sync_api_key = enterprise_runtime.resolve_revocation_webhook_target(
         webhook_url_override="https://enterprise.example/custom-revocations",
     )
 
@@ -176,7 +177,7 @@ def test_resolve_revocation_webhook_target_builds_default_sync_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        enterprise_license,
+        enterprise_runtime,
         "load_enterprise_config",
         lambda: {
             "enterprise_api_url": "https://enterprise.example",
@@ -184,12 +185,12 @@ def test_resolve_revocation_webhook_target_builds_default_sync_path(
         },
     )
     monkeypatch.setattr(
-        enterprise_license,
+        enterprise_runtime,
         "_resolve_api_url",
         lambda override=None: (override or "https://enterprise.example").rstrip("/"),
     )
 
-    webhook_url, sync_api_key = enterprise_license.resolve_revocation_webhook_target()
+    webhook_url, sync_api_key = enterprise_runtime.resolve_revocation_webhook_target()
 
     assert webhook_url == "https://enterprise.example/api/sync/revocation-events"
     assert sync_api_key == "sync-key-2"
@@ -264,14 +265,14 @@ def test_sync_modules_have_no_loopback_candidate_fallback_helper() -> None:
 
 @pytest.mark.unit
 def test_resolve_api_url_ignores_removed_legacy_gateway_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(enterprise_license, "load_enterprise_config", lambda: {})
-    monkeypatch.setattr(enterprise_license, "_load_workspace_dotenv", lambda: {})
+    monkeypatch.setattr(enterprise_runtime, "load_enterprise_config", lambda: {})
+    monkeypatch.setattr(enterprise_runtime, "_load_workspace_dotenv", lambda: {})
     monkeypatch.delenv("CARACAL_ENTERPRISE_URL", raising=False)
     monkeypatch.delenv("CARACAL_ENTERPRISE_DEV_URL", raising=False)
     monkeypatch.delenv("CARACAL_ENTERPRISE_DEFAULT_URL", raising=False)
     monkeypatch.setenv("CARACAL_ENTERPRISE_API_URL", "https://legacy-enterprise.example")
     monkeypatch.setenv("CARACAL_GATEWAY_URL", "https://legacy-gateway.example")
 
-    resolved = enterprise_license._resolve_api_url()
+    resolved = enterprise_runtime._resolve_api_url()
 
     assert resolved == "https://www.garudexlabs.com"
