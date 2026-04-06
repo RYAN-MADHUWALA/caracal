@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from typing import Any, Optional, Protocol
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from caracal.core.lifecycle import PrincipalLifecycleStateMachine
 from caracal.db.models import (
     AuthorityLedgerEvent,
+    DelegationEdgeModel,
     ExecutionMandate,
     Principal,
     PrincipalLifecycleStatus,
@@ -56,6 +57,7 @@ class RevocationEventPublisher(Protocol):
         actor_principal_id: Optional[str],
         root_principal_id: Optional[str],
         revoked_mandate_ids: Optional[list[str]] = None,
+        revoked_edge_ids: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> None:
         """Publish a principal revocation event."""
@@ -68,6 +70,7 @@ class PrincipalRevocationResult:
     principal_id: str
     revoked_principal_ids: list[str]
     revoked_mandate_ids: list[str]
+    revoked_edge_ids: list[str]
     denylisted_session_jtis: int
     cache_invalidations: int
     cascade_jobs_enqueued: int
@@ -78,6 +81,7 @@ class PrincipalRevocationResult:
 class _PrincipalRevocationUnit:
     principal_id: UUID
     mandate_ids: list[UUID]
+    edge_ids: list[UUID] = field(default_factory=list)
 
 
 class PrincipalRevocationOrchestrator:
@@ -117,6 +121,7 @@ class PrincipalRevocationOrchestrator:
         ordered_ids = self._resolve_leaves_first_order(principal_uuid)
 
         denylisted_count = await self._denylist_sessions(
+            principal_id=principal_uuid,
             session_token_jtis=session_token_jtis,
             session_expires_at=session_expires_at,
         )
@@ -149,13 +154,14 @@ class PrincipalRevocationOrchestrator:
                     event_type="revocation_enqueued",
                     principal_id=descendant_id,
                     reason=reason,
-                    actor_principal_id=actor_principal_id,
-                    root_principal_id=principal_uuid,
-                    revoked_mandate_ids=None,
-                    metadata={
-                        "execution_mode": "async_cascade",
-                    },
-                )
+                actor_principal_id=actor_principal_id,
+                root_principal_id=principal_uuid,
+                revoked_mandate_ids=None,
+                revoked_edge_ids=None,
+                metadata={
+                    "execution_mode": "async_cascade",
+                },
+            )
             cascade_jobs_enqueued = len(descendants)
             sync_targets = [ordered_ids[-1]]
 
@@ -187,6 +193,7 @@ class PrincipalRevocationOrchestrator:
                 actor_principal_id=actor_principal_id,
                 root_principal_id=principal_uuid,
                 revoked_mandate_ids=[str(mandate_id) for mandate_id in unit.mandate_ids],
+                revoked_edge_ids=[str(edge_id) for edge_id in unit.edge_ids],
                 metadata={
                     "leaves_first_order": True,
                     "cascade_async_threshold": cascade_async_threshold,
@@ -195,10 +202,16 @@ class PrincipalRevocationOrchestrator:
 
         revoked_principal_ids = [str(unit.principal_id) for unit in revoked_units]
         revoked_mandate_ids = [str(mid) for unit in revoked_units for mid in unit.mandate_ids]
+        revoked_edge_ids = [
+            str(edge_id)
+            for unit in revoked_units
+            for edge_id in getattr(unit, "edge_ids", [])
+        ]
         return PrincipalRevocationResult(
             principal_id=str(principal_uuid),
             revoked_principal_ids=revoked_principal_ids,
             revoked_mandate_ids=revoked_mandate_ids,
+            revoked_edge_ids=revoked_edge_ids,
             denylisted_session_jtis=denylisted_count,
             cache_invalidations=cache_invalidations,
             cascade_jobs_enqueued=cascade_jobs_enqueued,
@@ -208,6 +221,7 @@ class PrincipalRevocationOrchestrator:
     async def _denylist_sessions(
         self,
         *,
+        principal_id: UUID,
         session_token_jtis: Optional[list[str]],
         session_expires_at: Optional[datetime],
     ) -> int:
@@ -219,6 +233,12 @@ class PrincipalRevocationOrchestrator:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         count = 0
+        if hasattr(self.denylist_backend, "mark_principal_revoked"):
+            await self.denylist_backend.mark_principal_revoked(
+                str(principal_id),
+                datetime.now(timezone.utc),
+            )
+            count += 1
         for token_jti in session_token_jtis or []:
             value = (token_jti or "").strip()
             if not value:
@@ -248,6 +268,7 @@ class PrincipalRevocationOrchestrator:
         actor_principal_id: Optional[str],
         root_principal_id: Optional[UUID],
         revoked_mandate_ids: Optional[list[str]],
+        revoked_edge_ids: Optional[list[str]],
         metadata: Optional[dict[str, Any]],
     ) -> None:
         if self.revocation_event_publisher is None:
@@ -261,6 +282,7 @@ class PrincipalRevocationOrchestrator:
                 actor_principal_id=actor_principal_id,
                 root_principal_id=str(root_principal_id) if root_principal_id is not None else None,
                 revoked_mandate_ids=revoked_mandate_ids,
+                revoked_edge_ids=revoked_edge_ids,
                 metadata=metadata or {},
             )
         except Exception as exc:
@@ -314,12 +336,29 @@ class PrincipalRevocationOrchestrator:
         return ordered
 
     def _build_child_map(self) -> dict[UUID, list[UUID]]:
-        rows = self.db_session.query(Principal).all()
+        active_mandates = (
+            self.db_session.query(ExecutionMandate)
+            .filter(ExecutionMandate.revoked.is_(False))
+            .all()
+        )
+        mandate_subjects = {
+            row.mandate_id: row.subject_id
+            for row in active_mandates
+        }
         children: dict[UUID, list[UUID]] = {}
-        for row in rows:
-            if row.source_principal_id is None:
+        edges = (
+            self.db_session.query(DelegationEdgeModel)
+            .filter(DelegationEdgeModel.revoked.is_(False))
+            .all()
+        )
+        for edge in edges:
+            source_principal_id = mandate_subjects.get(edge.source_mandate_id)
+            target_principal_id = mandate_subjects.get(edge.target_mandate_id)
+            if source_principal_id is None or target_principal_id is None:
                 continue
-            children.setdefault(row.source_principal_id, []).append(row.principal_id)
+            children.setdefault(source_principal_id, [])
+            if target_principal_id not in children[source_principal_id]:
+                children[source_principal_id].append(target_principal_id)
         return children
 
     def _get_principal_row(self, principal_id: UUID) -> Optional[Principal]:
@@ -328,6 +367,32 @@ class PrincipalRevocationOrchestrator:
             .filter(Principal.principal_id == principal_id)
             .first()
         )
+
+    def _revoke_edges_for_mandates(self, mandate_ids: list[UUID], *, reason: str) -> list[UUID]:
+        if not mandate_ids:
+            return []
+
+        edges = (
+            self.db_session.query(DelegationEdgeModel)
+            .filter(DelegationEdgeModel.revoked.is_(False))
+            .filter(
+                or_(
+                    DelegationEdgeModel.source_mandate_id.in_(mandate_ids),
+                    DelegationEdgeModel.target_mandate_id.in_(mandate_ids),
+                )
+            )
+            .all()
+        )
+
+        revoked_edge_ids: list[UUID] = []
+        now = datetime.utcnow()
+        for edge in edges:
+            edge.revoked = True
+            edge.revoked_at = now
+            edge.edge_metadata = dict(edge.edge_metadata or {})
+            edge.edge_metadata["revocation_reason"] = reason
+            revoked_edge_ids.append(edge.edge_id)
+        return revoked_edge_ids
 
     def _list_active_mandates_for_principal(self, principal_id: UUID) -> list[ExecutionMandate]:
         return (
@@ -399,9 +464,12 @@ class PrincipalRevocationOrchestrator:
                 },
             )
 
+        edge_ids = self._revoke_edges_for_mandates(mandate_ids, reason=reason)
+
         return _PrincipalRevocationUnit(
             principal_id=principal.principal_id,
             mandate_ids=mandate_ids,
+            edge_ids=edge_ids,
         )
 
     def _record_authority_event(
