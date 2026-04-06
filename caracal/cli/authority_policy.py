@@ -99,37 +99,23 @@ def create(
 ):
     """
     Create a new authority policy for a principal.
-    
+
     Defines rules for how mandates can be issued to a principal,
     including scope limits and validity period constraints.
 
     If the principal UUID does not exist yet, this command will auto-provision
     a principal record (preferring agent registry metadata when available).
-    
+
     Examples:
-    
-        # Create a provider-scoped policy
-        caracal policy create \\
-            --principal-id 550e8400-e29b-41d4-a716-446655440000 \\
-            --max-validity-seconds 3600 \\
-            --provider openai-main \\
-            --resource-pattern "provider:openai-main:resource:chat.completions" \\
-            --action "provider:openai-main:action:invoke"
-        
-        # Create a policy with delegation
-        caracal policy create \\
-            -p 550e8400-e29b-41d4-a716-446655440000 \\
-            -v 7200 \\
-            --provider openai-main \\
-            -r "provider:openai-main:resource:chat.completions" \\
-            -a "provider:openai-main:action:invoke" \\
-            --allow-delegation \\
-            --max-delegation-network-distance 2
-        
+
+        # Create a provider-scoped policy for a worker principal (for example Fiona)
+        caracal policy create --principal-id <fiona-principal-id> --max-validity-seconds 3600 --provider endframe --resource-pattern "provider:endframe:resource:deployments" --action "provider:endframe:action:invoke"
+
+        # Create a policy with delegation for an orchestrator principal (for example Jared Dunn ai)
+        caracal policy create -p <jared-dunn-ai-principal-id> -v 7200 --provider endframe -r "provider:endframe:resource:deployments" -a "provider:endframe:action:invoke" --allow-delegation --max-delegation-network-distance 2
+
         # JSON output
-        caracal policy create -p <principal-id> -v 3600 \\
-          -r "provider:<provider>:resource:<resource>" \\
-          -a "provider:<provider>:action:<action>" --format json
+        caracal policy create -p <seefood-principal-id> -v 3600 -r "provider:seefood:resource:classifications" -a "provider:seefood:action:invoke" --format json
     """
     try:
         # Get CLI context
@@ -304,20 +290,20 @@ def list_policies(
 ):
     """
     List authority policies.
-    
+
     Lists all policies in the system, or filters by principal ID if specified.
-    
+
     Examples:
-    
+
         # List all policies
         caracal policy list
-        
-        # List policies for a specific principal
-        caracal policy list --principal-id 550e8400-e29b-41d4-a716-446655440000
-        
+
+        # List policies for a specific principal (for example Richard Hendricks)
+        caracal policy list --principal-id <richard-hendricks-principal-id>
+
         # List only active policies
         caracal policy list --active-only
-        
+
         # JSON output
         caracal policy list --format json
     """

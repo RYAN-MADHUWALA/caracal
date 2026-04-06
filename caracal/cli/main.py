@@ -320,9 +320,9 @@ def workspace():
         \b
         Examples:
             caracal workspace list                        # List all workspaces
-            caracal workspace create pied-piper          # Create new workspace
+            caracal workspace create "pied piper"       # Create new workspace
             caracal workspace use hooli                   # Switch to workspace
-            caracal workspace delete raviga-capital       # Delete workspace
+            caracal workspace delete "raviga capital"   # Delete workspace
     """
     pass
 
@@ -451,15 +451,18 @@ def workspace_delete(ctx, name, force):
 @click.pass_context
 def principal(ctx):
     """
-    Manage AI agent identities.
+    Manage principal identities.
     
-    Principals represent AI agents that can receive mandates.
+    Principals represent human, orchestrator, worker, and service identities.
     
     \b
     Examples:
-        caracal principal register --type user --name alice --email alice@example.com
-        caracal principal list                 # List all principals
-        caracal principal get -a <principal-id>  # Get principal details
+        caracal principal register --type human --name "Richard Hendricks" --email richard.hendricks@piedpiper.com
+        caracal principal register --type orchestrator --name "Jared Dunn ai" --email jared.dunn.ai@hooli.com
+        caracal principal register --type worker --name Fiona --email fiona@ravigacapital.com
+        caracal principal register --type service --name Endframe --email endframe@hooli.com
+        caracal principal list --type orchestrator
+        caracal principal get --principal-id <principal-id>
     """
     pass
 
@@ -484,9 +487,9 @@ def policy(ctx):
     
     \b
     Examples:
-        caracal policy create -p <principal-id> -v 3600 -r "api:*" -a "api_call"  # Create policy
-        caracal policy list                    # List all policies
-        caracal policy list -p <principal-id>  # Filter by principal
+        caracal policy create -p <principal-id> -v 3600 -r "provider:endframe:resource:deployments" -a "provider:endframe:action:invoke"
+        caracal policy list
+        caracal policy list -p <principal-id>
     """
     pass
 
@@ -510,10 +513,10 @@ def authority(ctx):
     
     \b
     Examples:
-      caracal authority mandate           # Issue new mandate
-      caracal authority enforce           # Enforce/validate mandate
-      caracal authority revoke            # Revoke mandate
-      caracal authority list              # List all mandates
+        caracal authority mandate --issuer-id <principal-id> --subject-id <principal-id> --resource-scope "provider:endframe:resource:deployments" --action-scope "provider:endframe:action:invoke" --validity-seconds 3600
+        caracal authority enforce --mandate-id <mandate-id> --action "provider:endframe:action:invoke" --resource "provider:endframe:resource:deployments"
+        caracal authority revoke --mandate-id <mandate-id> --revoker-id <principal-id> --reason "Operator offboarding"
+        caracal authority list --active-only
     """
     pass
 
@@ -542,9 +545,9 @@ def delegation(ctx):
     
     \b
     Examples:
-      caracal delegation generate         # Create delegation
-      caracal delegation list             # List delegations
-      caracal delegation validate         # Validate graph path
+        caracal delegation generate --source-id <principal-id> --target-id <principal-id> --source-type orchestrator --target-type worker --expiration 3600
+        caracal delegation list --principal-id <principal-id>
+        caracal delegation validate --token <delegation-token>
     """
     pass
 
@@ -571,10 +574,10 @@ def enterprise(ctx):
     
     \b
     Examples:
-      caracal enterprise login <url> <token>  # Connect to enterprise
-      caracal enterprise status               # Show sync status
-      caracal enterprise sync                 # Trigger sync
-      caracal enterprise disconnect           # Disconnect
+            caracal enterprise login https://enterprise.hooli.com <token>
+            caracal enterprise status
+            caracal enterprise sync
+            caracal enterprise disconnect
     """
     pass
 
@@ -649,10 +652,10 @@ def provider(ctx):
     
     \b
     Examples:
-    caracal provider list               # List providers
-    caracal provider add <name> --resource <id> --action <resource:action:method:path> --credential <secret>
-    caracal provider test <name>        # Test connection
-    caracal provider remove <name>      # Remove provider
+    caracal provider list
+    caracal provider add endframe --resource "provider:endframe:resource:deployments" --action "provider:endframe:action:invoke" --credential endframe-api-key
+    caracal provider test endframe
+    caracal provider remove endframe
     """
     pass
 
@@ -740,9 +743,9 @@ def audit(ctx):
     
     \b
     Examples:
-    caracal audit commands              # Audit CLI command surface
-    caracal audit export                # Export audit log
-    caracal audit workflow              # Validate workflow
+    caracal audit commands --strict
+    caracal audit export --format json
+    caracal audit workflow --execute
     """
     pass
 

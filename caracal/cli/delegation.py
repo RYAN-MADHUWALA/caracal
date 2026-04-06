@@ -178,13 +178,15 @@ def generate(ctx, source_id: str, target_id: str,
     Examples:
     
         caracal delegation generate \
-            --source-id 550e8400-e29b-41d4-a716-446655440000 \
-            --target-id 660e8400-e29b-41d4-a716-446655440001 \
-            --source-mandate-id 770e8400-e29b-41d4-a716-446655440002
+            --source-id <jared-dunn-ai-principal-id> \
+            --target-id <fiona-principal-id> \
+            --source-type orchestrator \
+            --target-type worker \
+            --source-mandate-id <source-mandate-id>
         
-        caracal delegation generate -p source-uuid -c target-uuid \
+        caracal delegation generate -p <monica-hall-ai-principal-id> -c <anton-principal-id> \
             --expiration 3600 \
-            --delegation-type directed --source-type human --target-type worker \
+            --delegation-type directed --source-type orchestrator --target-type worker \
             -o api_call -o mcp_tool
     """
     try:
@@ -278,7 +280,7 @@ def list_delegations(ctx, principal_id: str, format: str):
     
         caracal delegation list
         
-        caracal delegation list --principal-id 550e8400-e29b-41d4-a716-446655440000
+        caracal delegation list --principal-id <laurie-bream-ai-principal-id>
         
         caracal delegation list --format json
     """
@@ -459,9 +461,9 @@ def revoke(ctx, policy_id: str, confirm: bool):
     
     Examples:
     
-        caracal delegation revoke --policy-id 550e8400-e29b-41d4-a716-446655440000
+        caracal delegation revoke --policy-id <fiona-policy-id>
         
-        caracal delegation revoke -p 550e8400-e29b-41d4-a716-446655440000 --confirm
+        caracal delegation revoke -p <anton-policy-id> --confirm
     """
     try:
         # Get CLI context

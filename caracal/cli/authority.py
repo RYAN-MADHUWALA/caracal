@@ -186,7 +186,7 @@ def issue(
     Examples:
     
         # Issue a provider-scoped mandate
-        caracal authority issue \\
+        caracal authority mandate \\
             --issuer-id 550e8400-e29b-41d4-a716-446655440000 \\
             --subject-id 660e8400-e29b-41d4-a716-446655440001 \\
             --provider openai-main \\
@@ -195,7 +195,7 @@ def issue(
             --validity-seconds 3600
         
         # Issue a mandate with multiple scopes
-        caracal authority issue \\
+        caracal authority mandate \\
             -i 550e8400-e29b-41d4-a716-446655440000 \\
             -s 660e8400-e29b-41d4-a716-446655440001 \\
             -r "provider:openai-main:resource:chat.completions" \\
@@ -203,7 +203,7 @@ def issue(
             -v 7200
         
         # JSON output
-        caracal authority issue -i <issuer> -s <subject> \\
+        caracal authority mandate -i <issuer> -s <subject> \\
           -r "provider:<provider>:resource:<resource>" \\
           -a "provider:<provider>:action:<action>" -v 3600 --format json
     """
@@ -356,19 +356,19 @@ def validate(
     Examples:
     
         # Validate a mandate
-        caracal authority validate \\
+        caracal authority enforce \\
             --mandate-id 550e8400-e29b-41d4-a716-446655440000 \\
             --provider openai-main \\
             --action "provider:openai-main:action:invoke" \\
             --resource "provider:openai-main:resource:chat.completions"
         
         # Short form
-        caracal authority validate -m <mandate-id> \\
+        caracal authority enforce -m <mandate-id> \\
           -a "provider:<provider>:action:<action>" \\
           -r "provider:<provider>:resource:<resource>"
         
         # JSON output
-        caracal authority validate -m <mandate-id> \\
+        caracal authority enforce -m <mandate-id> \\
           -a "provider:<provider>:action:<action>" \\
           -r "provider:<provider>:resource:<resource>" --format json
     

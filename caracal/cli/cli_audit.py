@@ -409,9 +409,14 @@ def audit_workflow(ctx: click.Context, strict: bool, output_format: str, execute
     execution_probe = _run_workflow_execution_probe(root) if execute else None
 
     workflow_steps = [
-        "caracal workspace create <name>",
+        "caracal workspace create \"pied piper\"",
+        "caracal workspace use hooli",
+        "caracal workspace create \"raviga capital\"",
         "caracal system db init",
-        "caracal principal register --name ops-agent --email ops@example.com",
+        "caracal principal register --type human --name \"Richard Hendricks\" --email richard.hendricks@piedpiper.com",
+        "caracal principal register --type orchestrator --name \"Jared Dunn ai\" --email jared.dunn.ai@hooli.com",
+        "caracal principal register --type worker --name Fiona --email fiona@ravigacapital.com",
+        "caracal principal register --type service --name Endframe --email endframe@hooli.com",
         "caracal policy create --principal-id <principal-uuid> --max-validity-seconds 3600 --resource-pattern 'api:*' --action 'api_call'",
         "caracal delegation generate --source-id <source-uuid> --target-id <target-uuid> --expiration 3600",
         "caracal authority mandate --issuer-id <issuer-uuid> --subject-id <subject-uuid> --resource-scope 'api:*' --action-scope 'api_call' --validity-seconds 3600",

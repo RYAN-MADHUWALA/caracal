@@ -116,10 +116,13 @@ def register(ctx, name: str, principal_kind: str, email: str, metadata: tuple):
     
     Examples:
     
-        caracal principal register --name my-principal --email user@example.com
-        
-        caracal principal register -n research-bot -e researcher@university.edu \
-            -m department=AI -m project=LLM
+        caracal principal register --type human --name "Richard Hendricks" --email richard.hendricks@piedpiper.com
+
+        caracal principal register --type orchestrator --name "Monica Hall ai" --email monica.hall.ai@piedpiper.com
+
+        caracal principal register --type worker --name anton --email anton@hooli.com
+
+        caracal principal register --type service --name Endframe --email endframe@hooli.com
     """
     try:
         # Get CLI context
@@ -226,6 +229,10 @@ def list_principals(ctx, principal_kind: str, format: str):
     Examples:
     
         caracal principal list
+
+        caracal principal list --type human
+
+        caracal principal list --type orchestrator
         
         caracal principal list --format json
     """
@@ -314,6 +321,8 @@ def get(ctx, principal_id: str, principal_kind: str, format: str):
     Examples:
     
         caracal principal get --principal-id 550e8400-e29b-41d4-a716-446655440000
+
+        caracal principal get --principal-id <richard-hendricks-principal-id>
         
         caracal principal get -a 550e8400-e29b-41d4-a716-446655440000 --format json
     """
