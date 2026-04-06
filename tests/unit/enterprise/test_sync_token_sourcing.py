@@ -60,13 +60,13 @@ def test_sync_upload_payload_has_no_auth_fallback_fields(
     patched_client_factory,
 ) -> None:
     captured_payload: dict[str, object] = {}
+    captured_request: dict[str, object] = {}
 
     monkeypatch.setattr(enterprise_sync, "_load_local_principals", lambda: [{"principal_id": "p1"}])
     monkeypatch.setattr(enterprise_sync, "_load_local_policies", lambda: [])
     monkeypatch.setattr(enterprise_sync, "_load_local_mandates", lambda: [])
     monkeypatch.setattr(enterprise_sync, "_load_local_ledger", lambda: [])
     monkeypatch.setattr(enterprise_sync, "_load_local_delegation", lambda: [])
-    monkeypatch.setattr(enterprise_sync, "_candidate_api_urls", lambda base_url: [base_url])
     monkeypatch.setattr(enterprise_sync, "save_enterprise_config", lambda _cfg: None)
     monkeypatch.setattr(
         enterprise_sync.EnterpriseSyncClient,
@@ -87,6 +87,7 @@ def test_sync_upload_payload_has_no_auth_fallback_fields(
 
     def _capture_urlopen(req, timeout=30):
         del timeout
+        captured_request["url"] = req.full_url
         captured_payload.update(json.loads(req.data.decode()))
         return _FakeResponse()
 
@@ -96,6 +97,7 @@ def test_sync_upload_payload_has_no_auth_fallback_fields(
     result = client.sync()
 
     assert result.success is True
+    assert captured_request["url"] == "https://enterprise.example/api/sync/upload"
     assert "sync_api_key" not in captured_payload
     assert "license_key" not in captured_payload
 
@@ -121,6 +123,29 @@ def test_sync_status_uses_header_auth_without_license_query_fallback(
     assert captured["url"] == "https://enterprise.example/api/sync/status"
     assert captured["headers"]["X-Sync-Api-Key"] == "sync-local"
     assert "Authorization" not in captured["headers"]
+
+
+@pytest.mark.unit
+def test_sync_status_does_not_fallback_to_cached_status(
+    monkeypatch: pytest.MonkeyPatch,
+    patched_client_factory,
+) -> None:
+    monkeypatch.setattr(
+        enterprise_sync,
+        "_get_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("offline")),
+    )
+    monkeypatch.setattr(
+        enterprise_sync,
+        "load_enterprise_config",
+        lambda: {"last_sync": {"timestamp": "2026-04-06T12:00:00"}},
+    )
+
+    client = patched_client_factory(sync_api_key="sync-local")
+    status = client.get_sync_status()
+
+    assert "source" not in status
+    assert status["error"] == "Cannot fetch sync status: offline"
 
 
 @pytest.mark.unit
@@ -179,11 +204,6 @@ def test_license_validation_fails_closed_when_api_url_missing(monkeypatch: pytes
 @pytest.mark.unit
 def test_license_validation_fails_closed_when_api_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(enterprise_license, "_resolve_api_url", lambda override=None: "https://enterprise.example")
-    monkeypatch.setattr(
-        enterprise_license,
-        "_candidate_api_urls",
-        lambda base_url: [base_url],
-    )
     monkeypatch.setattr(enterprise_license, "_get_or_create_client_instance_id", lambda: "client-1")
     monkeypatch.setattr(
         enterprise_license,
@@ -201,12 +221,13 @@ def test_license_validation_fails_closed_when_api_is_unreachable(monkeypatch: py
 @pytest.mark.unit
 def test_license_validation_request_has_no_password_field(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_payload: dict[str, object] = {}
+    captured_url: dict[str, str] = {}
 
     monkeypatch.setattr(enterprise_license, "_resolve_api_url", lambda override=None: "https://enterprise.example")
-    monkeypatch.setattr(enterprise_license, "_candidate_api_urls", lambda base_url: [base_url])
     monkeypatch.setattr(enterprise_license, "_get_or_create_client_instance_id", lambda: "client-1")
 
     def _capture_post(_url: str, payload: dict, timeout: int = 15) -> dict:
+        captured_url["url"] = _url
         captured_payload.update(payload)
         return {
             "valid": True,
@@ -227,7 +248,13 @@ def test_license_validation_request_has_no_password_field(monkeypatch: pytest.Mo
     result = validator.validate_license("license-key-1")
 
     assert result.valid is True
+    assert captured_url["url"] == "https://enterprise.example/api/license/validate"
     assert "password" not in captured_payload
+
+
+@pytest.mark.unit
+def test_sync_modules_have_no_loopback_candidate_fallback_helper() -> None:
+    assert not hasattr(enterprise_license, "_candidate_api_urls")
 
 
 @pytest.mark.unit
