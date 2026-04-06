@@ -348,6 +348,8 @@ def test_forbidden_marker_scanner_covers_phase_13_hardcut_expansion() -> None:
     assert "legacy_sync_auth_surfaces" in payload
     assert "compatibility_env_aliases" in payload
     assert "enterprise_logic_leakage" in payload
+    assert "owner_phase" in payload
+    assert "_gate_missing_repo_violations" in payload
 
 
 @pytest.mark.unit

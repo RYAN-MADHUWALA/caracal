@@ -26,6 +26,7 @@ class MarkerDefinition:
     key: str
     description: str
     pattern: str
+    owner_phase: str = "Phase 13"
     repos: tuple[str, ...] = field(default_factory=lambda: SCAN_REPO_KEYS)
 
 
@@ -74,6 +75,7 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
         key="enterprise_logic_leakage",
         description="Enterprise package imports from OSS code paths",
         pattern=r"(\bfrom\s+caracal_enterprise\b|\bimport\s+caracal_enterprise\b|caracal_enterprise\.)",
+        owner_phase="Phase 13",
         repos=("opensource",),
     ),
 )
@@ -290,13 +292,14 @@ def _build_report(
                 "key": definition.key,
                 "description": definition.description,
                 "pattern": definition.pattern,
+                "owner_phase": definition.owner_phase,
                 "repos": repo_counts,
                 "total_count": total_count,
             }
         )
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "roots": {
             "opensource": str(caracal_root),
@@ -351,6 +354,23 @@ def _gate_strict_zero_violations(report: dict[str, Any]) -> list[str]:
     return violations
 
 
+def _gate_missing_repo_violations(report: dict[str, Any]) -> list[str]:
+    """Return violation messages when gate mode cannot evaluate both repos."""
+    violations: list[str] = []
+    roots = report.get("roots", {})
+
+    for repo_key in SCAN_REPO_KEYS:
+        repo_root = roots.get(repo_key)
+        if repo_root:
+            continue
+        violations.append(
+            f"{repo_key} repository root is unavailable. "
+            "Strict-zero gate mode requires both opensource and enterprise repositories."
+        )
+
+    return violations
+
+
 def _print_summary(report: dict[str, Any]) -> None:
     print("Hard-cut forbidden marker scan summary")
     print(f"Generated: {report.get('generated_at_utc')}")
@@ -366,8 +386,10 @@ def _print_summary(report: dict[str, Any]) -> None:
         os_count = repos.get("opensource", {}).get("count", 0)
         ent_count = repos.get("enterprise", {}).get("count", 0)
         total_count = marker.get("total_count", 0)
+        owner_phase = marker.get("owner_phase", "<unspecified>")
         print(
-            f"- {marker.get('key')}: opensource={os_count} enterprise={ent_count} total={total_count}"
+            f"- {marker.get('key')} [{owner_phase}]: "
+            f"opensource={os_count} enterprise={ent_count} total={total_count}"
         )
 
 
@@ -425,7 +447,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
-    regressions = _gate_strict_zero_violations(report)
+    regressions = _gate_missing_repo_violations(report) + _gate_strict_zero_violations(report)
     _print_summary(report)
     if regressions:
         print("Hard-cut marker gate failed (strict-zero mode):", file=sys.stderr)

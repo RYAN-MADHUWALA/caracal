@@ -31,6 +31,7 @@ def _build_report(module, *, opensource_count: int = 0, enterprise_count: int = 
                 "key": marker.key,
                 "description": marker.description,
                 "pattern": marker.pattern,
+                "owner_phase": marker.owner_phase,
                 "repos": {
                     "opensource": {
                         "count": opensource_count,
@@ -56,7 +57,7 @@ def _build_report(module, *, opensource_count: int = 0, enterprise_count: int = 
         )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at_utc": "2026-01-01T00:00:00+00:00",
         "roots": {
             "opensource": str(_REPO_ROOT),
@@ -96,7 +97,7 @@ def test_gate_mode_does_not_require_baseline_file(monkeypatch, tmp_path: Path) -
     module = _load_scanner_module()
     report = _build_report(module)
 
-    monkeypatch.setattr(module, "_discover_roots", lambda: (tmp_path, tmp_path, None))
+    monkeypatch.setattr(module, "_discover_roots", lambda: (tmp_path, tmp_path, tmp_path))
     monkeypatch.setattr(module, "_build_report", lambda **_: report)
     monkeypatch.setattr(module, "_print_summary", lambda _report: None)
 
@@ -120,7 +121,7 @@ def test_gate_mode_fails_when_any_marker_count_is_non_zero(
     module = _load_scanner_module()
     report = _build_report(module, enterprise_count=1)
 
-    monkeypatch.setattr(module, "_discover_roots", lambda: (tmp_path, tmp_path, None))
+    monkeypatch.setattr(module, "_discover_roots", lambda: (tmp_path, tmp_path, tmp_path))
     monkeypatch.setattr(module, "_build_report", lambda **_: report)
     monkeypatch.setattr(module, "_print_summary", lambda _report: None)
 
@@ -138,3 +139,32 @@ def test_marker_catalog_covers_phase_13_expansion_categories() -> None:
     assert "legacy_sync_auth_surfaces" in marker_keys
     assert "compatibility_env_aliases" in marker_keys
     assert "enterprise_logic_leakage" in marker_keys
+
+
+def test_gate_mode_requires_both_repositories_to_be_present(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    module = _load_scanner_module()
+    report = _build_report(module)
+    report["roots"]["enterprise"] = None
+
+    monkeypatch.setattr(module, "_discover_roots", lambda: (tmp_path, tmp_path, None))
+    monkeypatch.setattr(module, "_build_report", lambda **_: report)
+    monkeypatch.setattr(module, "_print_summary", lambda _report: None)
+
+    exit_code = module.main(["--mode", "gate"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "enterprise repository root is unavailable" in captured.err
+
+
+def test_report_includes_owner_phase_for_each_marker() -> None:
+    module = _load_scanner_module()
+    report = _build_report(module)
+
+    assert report["schema_version"] == 2
+    assert report["markers"]
+    assert all(marker["owner_phase"] == "Phase 13" for marker in report["markers"])
