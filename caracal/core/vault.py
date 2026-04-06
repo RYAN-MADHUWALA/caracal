@@ -168,10 +168,6 @@ class _VaultConfig:
     retry_backoff_seconds: float
 
 
-def _truthy(value: Optional[str]) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _load_vault_config() -> _VaultConfig:
     base_url = (_read_env_or_dotenv("CARACAL_VAULT_URL") or "").strip()
     token = (_read_env_or_dotenv("CARACAL_VAULT_TOKEN") or "").strip()
@@ -189,7 +185,7 @@ def _load_vault_config() -> _VaultConfig:
     ).strip()
     default_secret_path = (_read_env_or_dotenv("CARACAL_VAULT_SECRET_PATH") or "/").strip() or "/"
 
-    hardcut_enabled = _truthy(_read_env_or_dotenv("CARACAL_HARDCUT_MODE"))
+    hardcut_enabled = True
     retry_attempts_raw = (_read_env_or_dotenv("CARACAL_VAULT_RETRY_MAX_ATTEMPTS") or "3").strip()
     retry_backoff_raw = (_read_env_or_dotenv("CARACAL_VAULT_RETRY_BACKOFF_SECONDS") or "0.2").strip()
 
@@ -214,26 +210,15 @@ def _load_vault_config() -> _VaultConfig:
             "CARACAL_VAULT_MODE must be one of: managed, local, dev, development."
         )
 
-    if hardcut_enabled and is_local_mode:
+    if is_local_mode:
         raise VaultConfigurationError(
-            "CARACAL_VAULT_MODE local/dev is forbidden when CARACAL_HARDCUT_MODE is enabled."
+            "CARACAL_VAULT_MODE local/dev is forbidden in runtime paths."
         )
 
-    if is_local_mode:
-        if not base_url:
-            base_url = "http://127.0.0.1:8080"
-        if not token:
-            token = "dev-local-token"
-        logger.warning(
-            "Vault local mode is enabled; this is development-only. "
-            "Using local vault endpoint %s.",
-            base_url,
-        )
-    else:
-        if not base_url:
-            raise VaultConfigurationError("CARACAL_VAULT_URL is required for vault operations.")
-        if not token:
-            raise VaultConfigurationError("CARACAL_VAULT_TOKEN is required for vault operations.")
+    if not base_url:
+        raise VaultConfigurationError("CARACAL_VAULT_URL is required for vault operations.")
+    if not token:
+        raise VaultConfigurationError("CARACAL_VAULT_TOKEN is required for vault operations.")
 
     return _VaultConfig(
         base_url=base_url.rstrip("/"),

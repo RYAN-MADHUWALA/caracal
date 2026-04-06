@@ -9,7 +9,7 @@ import socket
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AISBindTargetError(RuntimeError):
@@ -55,6 +55,8 @@ class AISHandlers:
 
 
 class TokenIssueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     principal_id: str = Field(..., min_length=1)
     organization_id: str = Field(..., min_length=1)
     tenant_id: str = Field(..., min_length=1)
@@ -66,11 +68,15 @@ class TokenIssueRequest(BaseModel):
 
 
 class SignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     principal_id: str = Field(..., min_length=1)
     payload: dict[str, Any]
 
 
 class SpawnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     issuer_principal_id: str = Field(..., min_length=1)
     principal_name: str = Field(..., min_length=1)
     principal_kind: str = Field(..., min_length=1)
@@ -84,6 +90,8 @@ class SpawnRequest(BaseModel):
 
 
 class TaskTokenDeriveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     parent_access_token: str = Field(..., min_length=1)
     task_id: str = Field(..., min_length=1)
     caveats: list[str] = Field(default_factory=list)
@@ -91,6 +99,8 @@ class TaskTokenDeriveRequest(BaseModel):
 
 
 class HandoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     source_access_token: str = Field(..., min_length=1)
     target_subject_id: str = Field(..., min_length=1)
     caveats: Optional[list[str]] = None
@@ -98,6 +108,8 @@ class HandoffRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     refresh_token: str = Field(..., min_length=1)
 
 
