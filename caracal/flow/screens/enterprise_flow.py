@@ -345,23 +345,13 @@ class EnterpriseFlow:
             Prompt.ask("Press Enter to continue", default="")
             return
         
-        # Prompt for license password (optional)
-        license_password = Prompt.ask(
-            f"[{Colors.PRIMARY}]Enter license password [/]",
-            default="",
-            password=True,
-        )
-        
         # Validate license via Enterprise API
         self.console.print(f"\n[{Colors.DIM}]Connecting to Enterprise API at {enterprise_url}...[/]")
         
         # Update the validator's API URL
         self.validator = EnterpriseLicenseValidator(enterprise_api_url=enterprise_url)
         
-        result = self.validator.validate_license(
-            license_token,
-            password=license_password or None,
-        )
+        result = self.validator.validate_license(license_token)
         
         self.console.print()
         

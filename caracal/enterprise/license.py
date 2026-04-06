@@ -419,13 +419,6 @@ def _resolve_api_url(override: Optional[str] = None) -> str:
         if dev_url:
             return dev_url
 
-    # Backward-compat aliases.
-    legacy_url = _normalize_enterprise_url(
-        _read_env("CARACAL_ENTERPRISE_API_URL") or _read_env("CARACAL_GATEWAY_URL")
-    )
-    if legacy_url:
-        return legacy_url
-
     # Configurable default for first-time users.
     default_url = _normalize_enterprise_url(_read_env("CARACAL_ENTERPRISE_DEFAULT_URL"))
     if default_url:
@@ -523,14 +516,12 @@ class EnterpriseLicenseValidator:
     def validate_license(
         self,
         license_token: str,
-        password: Optional[str] = None,
     ) -> LicenseValidationResult:
         """
         Validate an enterprise license token via the Enterprise API.
         
         Args:
             license_token: The enterprise license token to validate.
-            password: Optional password for password-protected licenses.
         
         Returns:
             LicenseValidationResult with validation outcome and details.
@@ -559,8 +550,6 @@ class EnterpriseLicenseValidator:
                 "client_instance_id": _get_or_create_client_instance_id(),
                 "client_metadata": _build_client_metadata(),
             }
-            if password:
-                payload["password"] = password
 
             resp: Optional[Dict[str, Any]] = None
             resolved_api_url = self._api_url
@@ -612,7 +601,6 @@ class EnterpriseLicenseValidator:
                     expires_at=expires_at,
                     sync_api_key=sync_api_key,
                     enterprise_api_url=enterprise_api_url,
-                    password=password,
                 )
 
                 return LicenseValidationResult(
@@ -739,7 +727,6 @@ class EnterpriseLicenseValidator:
         expires_at: Optional[datetime],
         sync_api_key: Optional[str],
         enterprise_api_url: Optional[str],
-        password: Optional[str] = None,
     ) -> None:
         """Save license data to workspace config for offline use and auto-sync."""
         data: Dict[str, Any] = {
@@ -754,9 +741,5 @@ class EnterpriseLicenseValidator:
             "validated_at": datetime.utcnow().isoformat(),
             "client_instance_id": _get_or_create_client_instance_id(),
         }
-        # Never persist plaintext password — only a flag that one was used
-        if password:
-            data["password_protected"] = True
-        
         save_enterprise_config(data)
         self._cached_config = data
