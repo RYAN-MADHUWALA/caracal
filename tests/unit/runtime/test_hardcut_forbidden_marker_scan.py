@@ -139,6 +139,12 @@ def test_marker_catalog_covers_phase_13_expansion_categories() -> None:
     assert "legacy_sync_auth_surfaces" in marker_keys
     assert "compatibility_env_aliases" in marker_keys
     assert "enterprise_logic_leakage" in marker_keys
+    assert "combined_onboarding_setup_helpers" in marker_keys
+    assert "stale_removed_surface_names" in marker_keys
+    assert "fallback_gateway_env_aliases" in marker_keys
+    assert "split_mode_markers" in marker_keys
+    assert "single_lineage_residuals" in marker_keys
+    assert "transitional_architecture_markers" in marker_keys
 
 
 def test_gate_mode_requires_both_repositories_to_be_present(

@@ -348,6 +348,12 @@ def test_forbidden_marker_scanner_covers_phase_13_hardcut_expansion() -> None:
     assert "legacy_sync_auth_surfaces" in payload
     assert "compatibility_env_aliases" in payload
     assert "enterprise_logic_leakage" in payload
+    assert "combined_onboarding_setup_helpers" in payload
+    assert "stale_removed_surface_names" in payload
+    assert "fallback_gateway_env_aliases" in payload
+    assert "split_mode_markers" in payload
+    assert "single_lineage_residuals" in payload
+    assert "transitional_architecture_markers" in payload
     assert "owner_phase" in payload
     assert "_gate_missing_repo_violations" in payload
 

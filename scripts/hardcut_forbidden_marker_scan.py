@@ -78,6 +78,36 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
         owner_phase="Phase 13",
         repos=("opensource",),
     ),
+    MarkerDefinition(
+        key="combined_onboarding_setup_helpers",
+        description="Removed combined onboarding setup helpers that blend identity and authority setup",
+        pattern=r"(/api/onboarding/setup\b|\bonboardingApi\.runSetup\s*\(|\bsetup_onboarding\s*\()",
+    ),
+    MarkerDefinition(
+        key="stale_removed_surface_names",
+        description="Removed module or facade names that should stay unreachable after hard-cut cleanup",
+        pattern=r"(\bsync_monitor\b|\bconnectionApi\b|\bonboardingApi\.runSetup\b|\bsetup_onboarding\b)",
+    ),
+    MarkerDefinition(
+        key="fallback_gateway_env_aliases",
+        description="Hidden fallback gateway and enterprise URL alias chains",
+        pattern=r"(\bCARACAL_ENTERPRISE_API_URL\b|\bCARACAL_GATEWAY_ENDPOINT\b|\bCARACAL_GATEWAY_URL\b|\bCARACAL_ENTERPRISE_DEFAULT_URL\b)",
+    ),
+    MarkerDefinition(
+        key="split_mode_markers",
+        description="Hardcut-vs-non-hardcut split terminology and mode aliases",
+        pattern=r"(\bnon-hardcut\b|\bnon hardcut\b|\bhardcut vs non-hardcut\b|\bhard-cut vs non-hard-cut\b|\bsoft-cut\b|\bsoft cut\b|\bCARACAL_NON_HARDCUT\b|\bCARACAL_SOFTCUT\b)",
+    ),
+    MarkerDefinition(
+        key="single_lineage_residuals",
+        description="Single-lineage and parent-child-only delegation markers",
+        pattern=r"(\bsingle_lineage\b|\bsingle-lineage\b|\bsingle lineage\b|\bsourceMandateId\b|\bauthoritySources\b|\bparent-child\b)",
+    ),
+    MarkerDefinition(
+        key="transitional_architecture_markers",
+        description="Transition sentinel and compatibility cleanup markers on active paths",
+        pattern=r"(\bbackward-compat(?:ible)?\b|\bcompatibility layer\b|\btransition window\b|\btemporary blocker\b|\bguard file\b)",
+    ),
 )
 
 TEXT_SUFFIXES = {
@@ -157,6 +187,9 @@ MARKER_PATH_EXCLUDES: dict[str, set[str]] = {
         "services/enterprise-api/src/caracal_enterprise/main.py",
     },
     "compatibility_env_aliases": {
+        "caracal/runtime/hardcut_preflight.py",
+    },
+    "fallback_gateway_env_aliases": {
         "caracal/runtime/hardcut_preflight.py",
     },
 }
