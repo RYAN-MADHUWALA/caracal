@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Forbidden-marker scanner for hard-cut implementation gating.
 
-This scanner does two jobs:
-1. Capture a baseline count for known legacy markers.
-2. Fail gate checks only when a marker count increases above baseline.
+This scanner supports three operational modes:
+1. ``scan``: report current marker counts across repositories.
+2. ``baseline``: persist a snapshot report for historical audits.
+3. ``gate``: strict-zero enforcement; any forbidden marker hit fails.
 """
 
 from __future__ import annotations
@@ -286,40 +287,38 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _gate_strict_zero_violations(report: dict[str, Any]) -> list[str]:
+    """Return violation messages when any forbidden marker count is non-zero."""
+    violations: list[str] = []
 
-
-def _extract_counts(report: dict[str, Any]) -> dict[tuple[str, str], int]:
-    counts: dict[tuple[str, str], int] = {}
-    markers = report.get("markers", [])
-    for marker in markers:
-        key = marker.get("key")
+    for marker in report.get("markers", []):
+        marker_key = marker.get("key")
         repos = marker.get("repos", {})
-        if not isinstance(key, str):
+        if not isinstance(marker_key, str):
             continue
+
         for repo_key in SCAN_REPO_KEYS:
             repo_entry = repos.get(repo_key, {})
             count = int(repo_entry.get("count", 0))
-            counts[(key, repo_key)] = count
-    return counts
+            if count <= 0:
+                continue
 
-
-def _gate_regressions(current_report: dict[str, Any], baseline_report: dict[str, Any]) -> list[str]:
-    current_counts = _extract_counts(current_report)
-    baseline_counts = _extract_counts(baseline_report)
-    regressions: list[str] = []
-
-    for marker in MARKER_DEFINITIONS:
-        for repo_key in SCAN_REPO_KEYS:
-            current = current_counts.get((marker.key, repo_key), 0)
-            baseline = baseline_counts.get((marker.key, repo_key), 0)
-            if current > baseline:
-                regressions.append(
-                    f"{marker.key} ({repo_key}) increased from {baseline} to {current}."
+            top_hits = repo_entry.get("file_hits", [])[:3]
+            if top_hits:
+                rendered_hits = ", ".join(
+                    f"{hit.get('path', '<unknown>')} ({int(hit.get('count', 0))})"
+                    for hit in top_hits
+                )
+                violations.append(
+                    f"{marker_key} ({repo_key}) has {count} forbidden marker hit(s). "
+                    f"Top files: {rendered_hits}"
+                )
+            else:
+                violations.append(
+                    f"{marker_key} ({repo_key}) has {count} forbidden marker hit(s)."
                 )
 
-    return regressions
+    return violations
 
 
 def _print_summary(report: dict[str, Any]) -> None:
@@ -348,13 +347,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--mode",
         choices=("scan", "baseline", "gate"),
         default="scan",
-        help="scan: print report; baseline: write baseline file; gate: fail on baseline regression",
+        help=(
+            "scan: print report; baseline: write baseline file; "
+            "gate: fail when any forbidden marker count is non-zero"
+        ),
     )
     parser.add_argument(
         "--baseline-file",
         type=Path,
         default=None,
-        help="Path to baseline report JSON (default: Caracal/.github/hardcut/forbidden-marker-baseline.json)",
+        help=(
+            "Path to baseline report JSON used by baseline mode "
+            "(default: Caracal/.github/hardcut/forbidden-marker-baseline.json)"
+        ),
     )
     parser.add_argument(
         "--output",
@@ -390,20 +395,15 @@ def main(argv: list[str]) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
-    if not baseline_file.exists():
-        print(f"Baseline file not found: {baseline_file}", file=sys.stderr)
-        return 2
-
-    baseline_report = _load_json(baseline_file)
-    regressions = _gate_regressions(report, baseline_report)
+    regressions = _gate_strict_zero_violations(report)
     _print_summary(report)
     if regressions:
-        print("Hard-cut marker gate failed:", file=sys.stderr)
+        print("Hard-cut marker gate failed (strict-zero mode):", file=sys.stderr)
         for item in regressions:
             print(f"- {item}", file=sys.stderr)
         return 1
 
-    print(f"Hard-cut marker gate passed against baseline: {baseline_file}")
+    print("Hard-cut marker gate passed (strict-zero mode).")
     return 0
 
 
