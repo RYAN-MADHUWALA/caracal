@@ -33,8 +33,8 @@ def main():
     print("="*70)
     
     steps = [
-        ("Syntax Check - main_backup.py", 
-         ["python", "-m", "py_compile", "caracal/cli/main_backup.py"]),
+        ("Syntax Check - main.py", 
+         ["python", "-m", "py_compile", "caracal/cli/main.py"]),
         
         ("Syntax Check - test_simple.py",
          ["python", "-m", "py_compile", "tests/test_simple.py"]),

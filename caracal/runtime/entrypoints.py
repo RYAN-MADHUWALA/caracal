@@ -1160,12 +1160,31 @@ def _host_logs(namespace: argparse.Namespace) -> int:
 
 def _host_cli(namespace: argparse.Namespace) -> int:
     compose_file = _resolve_compose_file(namespace.compose_file)
-    start_code = _host_up(argparse.Namespace(compose_file=namespace.compose_file, no_pull=True))
+    assert_runtime_hardcut(
+        compose_file=compose_file,
+        database_urls=_runtime_database_url_candidates(),
+        state_roots=[_caracal_home_dir()],
+        env_vars=_runtime_hardcut_env(),
+    )
+    compose_cmd = _compose_cmd(compose_file)
+    uses_local_build = _service_uses_local_build(compose_file, "cli")
+
+    if uses_local_build:
+        build_result = subprocess.run(
+            compose_cmd + ["build", "cli"],
+            check=False,
+        )
+        if build_result.returncode != 0:
+            return build_result.returncode
+
+    start_code = subprocess.run(
+        compose_cmd + ["up", "-d", "postgres", "redis", "vault"],
+        check=False,
+    ).returncode
     if start_code != 0:
         return start_code
 
-    compose_cmd = _compose_cmd(compose_file)
-    cmd = compose_cmd + ["exec", "-u", "caracal", "mcp", "caracal"]
+    cmd = compose_cmd + ["--profile", "tools", "run", "--rm", "--build", "-u", "caracal", "cli"]
     result = subprocess.run(cmd, check=False)
     return result.returncode
 
