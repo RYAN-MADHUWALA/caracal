@@ -143,15 +143,15 @@ def _get_cli_config(ctx_obj):
 )
 @click.option(
     '--source-type',
-    default='agent',
-    type=click.Choice(['user', 'agent', 'service']),
-    help='Type of the source principal (default: agent)',
+    default='orchestrator',
+    type=click.Choice(['human', 'orchestrator', 'worker', 'service']),
+    help='Type of the source principal (default: orchestrator)',
 )
 @click.option(
     '--target-type',
-    default='agent',
-    type=click.Choice(['user', 'agent', 'service']),
-    help='Type of the target principal (default: agent)',
+    default='worker',
+    type=click.Choice(['human', 'orchestrator', 'worker', 'service']),
+    help='Type of the target principal (default: worker)',
 )
 @click.option(
     '--context-tags',
@@ -162,7 +162,7 @@ def _get_cli_config(ctx_obj):
 @click.option(
     '--source-mandate-id',
     multiple=True,
-    help='Canonical source mandate lineage ID (can be specified multiple times)',
+    help='Canonical source mandate lineage ID',
 )
 @click.pass_context
 def generate(ctx, source_id: str, target_id: str,
@@ -184,7 +184,7 @@ def generate(ctx, source_id: str, target_id: str,
         
         caracal delegation generate -p source-uuid -c target-uuid \
             --expiration 3600 \
-            --delegation-type directed --source-type user --target-type agent \
+            --delegation-type directed --source-type human --target-type worker \
             -o api_call -o mcp_tool
     """
     try:
@@ -203,15 +203,19 @@ def generate(ctx, source_id: str, target_id: str,
         # Parse context tags
         tags_list = list(context_tags) if context_tags else None
 
-        authority_sources = None
+        source_mandate_uuid = None
         if source_mandate_id:
-            authority_sources = []
-            for mandate_id in source_mandate_id:
-                try:
-                    authority_sources.append(str(UUID(mandate_id)))
-                except ValueError:
-                    click.echo(f"Error: Invalid source mandate ID format: {mandate_id}", err=True)
-                    sys.exit(1)
+            if len(source_mandate_id) != 1:
+                click.echo(
+                    "Error: --source-mandate-id may be specified at most once",
+                    err=True,
+                )
+                sys.exit(1)
+            try:
+                source_mandate_uuid = UUID(source_mandate_id[0])
+            except ValueError:
+                click.echo(f"Error: Invalid source mandate ID format: {source_mandate_id[0]}", err=True)
+                sys.exit(1)
         
         # Generate token
         token = delegation_manager.generate_token(
@@ -223,7 +227,7 @@ def generate(ctx, source_id: str, target_id: str,
             source_principal_type=source_type,
             target_principal_type=target_type,
             context_tags=tags_list,
-            authority_sources=authority_sources,
+            source_mandate_id=source_mandate_uuid,
         )
         
         # Display success message
@@ -233,8 +237,8 @@ def generate(ctx, source_id: str, target_id: str,
         click.echo(f"Target Principal: {target_id}")
         click.echo(f"Delegation Type:  {delegation_type}")
         click.echo(f"Expires In:      {expiration} seconds")
-        if authority_sources:
-            click.echo(f"Source Mandates: {', '.join(authority_sources)}")
+        if source_mandate_uuid:
+            click.echo(f"Source Mandate:  {source_mandate_uuid}")
         click.echo()
         click.echo("Token:")
         click.echo(token)
@@ -345,7 +349,12 @@ def list_delegations(ctx, principal_id: str, format: str):
                 click.echo()
                 
                 # Print header
-                type_icons = {'user': '👤', 'agent': '🤖', 'service': '⚙️'}
+                type_icons = {
+                    'human': '👤',
+                    'orchestrator': '🎛️',
+                    'worker': '🤖',
+                    'service': '⚙️',
+                }
                 click.echo(
                     f"{'Edge ID':<38}  {'Source Type':<12}  {'Target Type':<12}  {'Deleg. Type':<14}  Tags"
                 )
@@ -417,8 +426,8 @@ def validate(ctx, token: str):
         click.echo(f"Expires At:          {claims.expiration}")
         click.echo(f"Allowed Operations:  {', '.join(claims.allowed_operations)}")
         click.echo(f"Delegation Type:     {claims.delegation_type}")
-        if getattr(claims, "authority_sources", None):
-            click.echo(f"Source Mandates:     {', '.join(claims.authority_sources)}")
+        if getattr(claims, "source_mandate_id", None):
+            click.echo(f"Source Mandate:      {claims.source_mandate_id}")
         
     except CaracalError as e:
         click.echo(f"Error: {e}", err=True)

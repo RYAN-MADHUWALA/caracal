@@ -286,6 +286,21 @@ class DelegationGraph:
                 f"expected {expected_target_depth} from source depth {source_depth}, got {target_depth}"
             )
 
+        if source_mandate_id == target_mandate_id:
+            raise ValueError("Delegation cycle detected: source and target mandates are identical")
+
+        # Prevent cycles by denying any edge when a reverse active path exists.
+        # The seed check avoids recursive traversal when the target has no outgoing edges.
+        reverse_path_seed = self.db_session.query(DelegationEdgeModel).filter(
+            DelegationEdgeModel.source_mandate_id == target_mandate_id,
+            DelegationEdgeModel.revoked == False,
+        ).first()
+        if reverse_path_seed and self.validate_authority_path(target_mandate_id, source_mandate_id):
+            raise ValueError(
+                "Delegation cycle detected: "
+                f"adding {source_mandate_id} -> {target_mandate_id} creates a cycle"
+            )
+
         # Enforce parity between denormalized mandate lineage and graph edges.
         if target_mandate.source_mandate_id is None:
             target_mandate.source_mandate_id = source_mandate_id
@@ -325,6 +340,15 @@ class DelegationGraph:
             raise ValueError(
                 f"Active delegation edge already exists between "
                 f"{source_mandate_id} and {target_mandate_id}"
+            )
+
+        existing_inbound = self.db_session.query(DelegationEdgeModel).filter(
+            DelegationEdgeModel.target_mandate_id == target_mandate_id,
+            DelegationEdgeModel.revoked == False,
+        ).first()
+        if existing_inbound and existing_inbound.source_mandate_id != source_mandate_id:
+            raise ValueError(
+                "Single-lineage violation: target mandate already has an active inbound delegation edge"
             )
 
         # Determine delegation type
