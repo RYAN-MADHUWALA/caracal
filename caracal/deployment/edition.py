@@ -46,11 +46,10 @@ class EditionManager:
     Manages edition detection and configuration.
     
     Provides methods to detect, set, and query the current edition.
-    Auto-detects edition based on available components.
-    
-    Edition detection follows a fallback chain:
-    1. Configuration file (~/.caracal/config.toml)
-    2. Auto-detection based on available components
+
+    Edition detection follows a strict explicit chain:
+    1. CARACAL_GATEWAY_ENABLED runtime mode signal (if provided)
+    2. Persisted config (~/.caracal/config.toml)
     3. Default edition (OPENSOURCE)
     
     The edition configuration is stored in ~/.caracal/config.toml and cached
@@ -73,9 +72,10 @@ class EditionManager:
         """
         Returns current edition (OPENSOURCE or ENTERPRISE).
         
-          Edition detection is policy-driven and auto-derived from runtime state:
-          1. Enterprise connectivity indicators (gateway URL)
-          2. Default edition (OPENSOURCE)
+          Edition detection is policy-driven and explicit:
+          1. CARACAL_GATEWAY_ENABLED runtime signal (if provided)
+          2. Persisted edition config
+          3. Default edition (OPENSOURCE)
         
         The result is cached to avoid repeated file I/O.
         
@@ -138,29 +138,35 @@ class EditionManager:
         return None
 
     def _auto_detect_edition(self) -> Edition:
-        """
-        Auto-detects edition based on available components.
-
-        Detection logic:
-        - If gateway URL is configured, assume Enterprise Edition
-        - Otherwise, default to Open Source Edition
-
-        Returns:
-            Detected edition
-        """
-        gateway_url = self.get_gateway_url()
-        if gateway_url:
-            logger.debug(
-                "edition_detected_gateway_url",
-                gateway_url=gateway_url
-            )
+        """Resolve edition from explicit runtime mode signal, then persisted config."""
+        gateway_enabled_raw = (os.environ.get("CARACAL_GATEWAY_ENABLED") or "").strip().lower()
+        if gateway_enabled_raw in {"1", "true", "yes", "on"}:
+            logger.debug("edition_detected_from_runtime_signal", signal="gateway_enabled")
             return Edition.ENTERPRISE
-        
-        # Default to Open Source Edition
+
+        if gateway_enabled_raw in {"0", "false", "no", "off"}:
+            logger.debug("edition_detected_from_runtime_signal", signal="gateway_disabled")
+            return Edition.OPENSOURCE
+
+        if self.CONFIG_FILE.exists():
+            try:
+                config = toml.load(self.CONFIG_FILE)
+                raw_edition = str(config.get("edition", {}).get("current") or "").strip().lower()
+                if raw_edition in {Edition.OPENSOURCE.value, Edition.ENTERPRISE.value}:
+                    logger.debug("edition_detected_from_persisted_config", edition=raw_edition)
+                    return Edition(raw_edition)
+            except (toml.TomlDecodeError, OSError) as exc:
+                logger.warning(
+                    "failed_to_read_persisted_edition",
+                    config_file=str(self.CONFIG_FILE),
+                    error=str(exc),
+                )
+
+        # Default to Open Source Edition.
         logger.debug(
             "edition_using_default",
             edition=self.DEFAULT_EDITION.value,
-            reason="no_enterprise_indicators"
+            reason="no_explicit_runtime_or_persisted_signal"
         )
         return self.DEFAULT_EDITION
 
@@ -199,7 +205,7 @@ class EditionManager:
 
         if detected_edition == Edition.ENTERPRISE and not gateway_url:
             raise EditionConfigurationError(
-                "Enterprise execution requires a gateway URL (CARACAL_ENTERPRISE_URL/CARACAL_GATEWAY_ENDPOINT/CARACAL_GATEWAY_URL). "
+                "Enterprise execution requires a gateway URL (CARACAL_ENTERPRISE_URL). "
                 "Broker fallback is forbidden in hard-cut mode."
             )
     
@@ -381,10 +387,9 @@ class EditionManager:
         if configured_gateway_url:
             return configured_gateway_url
 
-        for env_key in ("CARACAL_ENTERPRISE_URL", "CARACAL_GATEWAY_ENDPOINT", "CARACAL_GATEWAY_URL"):
-            value = (os.environ.get(env_key) or "").strip()
-            if value:
-                return value
+        value = (os.environ.get("CARACAL_ENTERPRISE_URL") or "").strip()
+        if value:
+            return value
         return None
     
     def get_gateway_token(self) -> Optional[str]:

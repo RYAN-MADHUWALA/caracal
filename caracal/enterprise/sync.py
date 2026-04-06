@@ -39,20 +39,10 @@ from caracal.enterprise.license import (
     _get_json,
     _resolve_api_url,
     load_enterprise_config,
-    resolve_revocation_webhook_target as _resolve_revocation_webhook_target,
     save_enterprise_config,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def resolve_revocation_webhook_target(
-    *,
-    webhook_url_override: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str]]:
-    """Compatibility shim. Prefer caracal.enterprise.license.resolve_revocation_webhook_target."""
-    return _resolve_revocation_webhook_target(webhook_url_override=webhook_url_override)
-
 
 # ---------------------------------------------------------------------------
 # Retry helper
@@ -443,10 +433,8 @@ class EnterpriseSyncClient:
     Uses the sync API key stored in enterprise runtime metadata (generated
     during license validation) for authentication.
 
-    In addition to pushing local data *up*, the client also pulls the
-    gateway configuration *down* from the Enterprise API so that the
-    local SDK/CLI can auto-configure the gateway connection without
-    manual endpoint/key entry.
+    Gateway configuration pull is exposed as an explicit operation via
+    ``pull_gateway_config()`` and is not executed implicitly by ``sync()``.
     """
 
     def __init__(
@@ -581,11 +569,7 @@ class EnterpriseSyncClient:
             }
             save_enterprise_config(cfg)
 
-            # Pull gateway configuration from Enterprise (auto-setup)
-            gw_result = self.pull_gateway_config()
             errors = result.get("errors", [])
-            if not gw_result.get("success"):
-                errors.append(f"Gateway config pull: {gw_result.get('message', 'unknown')}")
 
             return SyncResult(
                 success=result.get("success", True),
@@ -619,11 +603,10 @@ class EnterpriseSyncClient:
     def pull_gateway_config(self) -> Dict[str, Any]:
         """Pull gateway configuration from the Enterprise API.
 
-        Called automatically during ``sync()`` and available standalone so
-        the gateway flow can refresh the local config without a full data
-        push.  The Enterprise API's ``/api/gateway/sync-config`` endpoint
-        returns the provisioned gateway endpoint, API key, deployment type,
-        and enforcement settings for the authenticated organization.
+        Explicit operation for gateway-connected deployments. The Enterprise
+        API's ``/api/gateway/sync-config`` endpoint returns the provisioned
+        gateway endpoint, API key, deployment type, and enforcement settings
+        for the authenticated organization.
 
         On success the gateway section of enterprise runtime metadata is updated
         and the gateway feature flags are reloaded.
