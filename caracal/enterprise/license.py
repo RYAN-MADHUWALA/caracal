@@ -59,45 +59,6 @@ def _is_allowed_enterprise_host(host: str) -> bool:
         return False
 
 
-def _is_running_in_container() -> bool:
-    """Best-effort detection for Docker/OCI runtime."""
-    if Path("/.dockerenv").exists():
-        return True
-
-    try:
-        cgroup_data = Path("/proc/1/cgroup").read_text()
-    except OSError:
-        return False
-
-    lowered = cgroup_data.lower()
-    return "docker" in lowered or "containerd" in lowered or "kubepods" in lowered
-
-
-def _get_default_gateway_ipv4() -> Optional[str]:
-    """Read Linux default gateway from /proc/net/route."""
-    route_path = Path("/proc/net/route")
-    if not route_path.exists():
-        return None
-
-    try:
-        for line in route_path.read_text().splitlines()[1:]:
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            destination, gateway = parts[1], parts[2]
-            if destination != "00000000":
-                continue
-
-            # Gateway is little-endian hex in /proc/net/route
-            octets = [str(int(gateway[i:i + 2], 16)) for i in range(0, 8, 2)]
-            octets.reverse()
-            return ".".join(octets)
-    except Exception:
-        return None
-
-    return None
-
-
 def _load_workspace_dotenv() -> Dict[str, str]:
     """Load key/value pairs from workspace .env (best-effort)."""
     env_data: Dict[str, str] = {}
@@ -422,45 +383,6 @@ def _resolve_api_url(override: Optional[str] = None) -> str:
     return _normalize_enterprise_url(_DEFAULT_ENTERPRISE_URL) or _DEFAULT_ENTERPRISE_URL
 
 
-def _candidate_api_urls(base_url: str) -> list[str]:
-    """Build connection candidates for local development URLs.
-
-    Some Linux hosts resolve ``localhost`` to IPv6 first; if the API is bound
-    on IPv4 only, a direct localhost attempt can fail. For local URLs, retry
-    equivalent loopback hostnames before declaring the API unreachable.
-    """
-    parsed = urlparse(base_url)
-    host = (parsed.hostname or "").lower()
-
-    if host not in {"localhost", "127.0.0.1", "::1"}:
-        return [base_url]
-
-    port_part = f":{parsed.port}" if parsed.port else ""
-    path_part = parsed.path.rstrip("/")
-    if path_part == "/":
-        path_part = ""
-
-    candidates: list[str] = []
-    for loopback_host in ("localhost", "127.0.0.1", "[::1]"):
-        candidate = f"{parsed.scheme}://{loopback_host}{port_part}{path_part}".rstrip("/")
-        if candidate not in candidates:
-            candidates.append(candidate)
-
-    if _is_running_in_container():
-        for container_host in ("host.containers.internal", "host.docker.internal"):
-            candidate = f"{parsed.scheme}://{container_host}{port_part}{path_part}".rstrip("/")
-            if candidate not in candidates:
-                candidates.append(candidate)
-
-        gateway_ip = _get_default_gateway_ipv4()
-        if gateway_ip:
-            candidate = f"{parsed.scheme}://{gateway_ip}{port_part}{path_part}".rstrip("/")
-            if candidate not in candidates:
-                candidates.append(candidate)
-
-    return candidates
-
-
 # ---------------------------------------------------------------------------
 # Validator
 # ---------------------------------------------------------------------------
@@ -545,33 +467,8 @@ class EnterpriseLicenseValidator:
                 "client_instance_id": _get_or_create_client_instance_id(),
                 "client_metadata": _build_client_metadata(),
             }
-
-            resp: Optional[Dict[str, Any]] = None
-            resolved_api_url = self._api_url
-            last_connection_error: Optional[ConnectionError] = None
-
-            for candidate_api_url in _candidate_api_urls(self._api_url):
-                url = f"{candidate_api_url}/api/license/validate"
-                try:
-                    resp = _post_json(url, payload)
-                    resolved_api_url = candidate_api_url
-                    break
-                except ConnectionError as exc:
-                    last_connection_error = exc
-
-            if resp is None:
-                if last_connection_error:
-                    raise last_connection_error
-                raise ConnectionError(
-                    f"Cannot reach Enterprise API at {self._api_url}/api/license/validate"
-                )
-
-            if resolved_api_url != self._api_url:
-                logger.info(
-                    "Enterprise API resolved via alternate loopback URL: %s",
-                    resolved_api_url,
-                )
-                self._api_url = resolved_api_url
+            url = f"{self._api_url}/api/license/validate"
+            resp = _post_json(url, payload)
 
             if resp.get("valid"):
                 features = resp.get("features") or {}
@@ -585,7 +482,7 @@ class EnterpriseLicenseValidator:
 
                 tier = resp.get("tier")
                 sync_api_key = resp.get("sync_api_key")
-                enterprise_api_url = resp.get("enterprise_api_url") or resolved_api_url
+                enterprise_api_url = resp.get("enterprise_api_url") or self._api_url
 
                 # Persist to workspace config for auto-sync
                 self._persist_license(

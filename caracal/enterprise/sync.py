@@ -34,7 +34,6 @@ from typing import Any, Dict, List, Optional
 
 from caracal.enterprise.license import (
     _build_client_metadata,
-    _candidate_api_urls,
     _get_or_create_client_instance_id,
     _get_json,
     _resolve_api_url,
@@ -522,47 +521,28 @@ class EnterpriseSyncClient:
 
         try:
             data = json.dumps(payload).encode()
-            result: Optional[Dict[str, Any]] = None
-            resolved_api_url = self._api_url
-            last_url_error: Optional[urllib.error.URLError] = None
+            url = f"{self._api_url}/api/sync/upload"
 
-            for candidate_api_url in _candidate_api_urls(self._api_url):
-                url = f"{candidate_api_url}/api/sync/upload"
+            headers = self._resolve_enterprise_auth_headers()
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json", **headers},
+                method="POST",
+            )
 
-                # Build the request manually so we can add the sync header.
-                headers = self._resolve_enterprise_auth_headers()
-                req = urllib.request.Request(
-                    url,
-                    data=data,
-                    headers={"Content-Type": "application/json", **headers},
-                    method="POST",
-                )
-
-                try:
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        result = json.loads(resp.read().decode())
-                    resolved_api_url = candidate_api_url
-                    break
-                except urllib.error.URLError as exc:
-                    last_url_error = exc
-
-            if result is None:
-                reason = last_url_error.reason if last_url_error else "unknown"
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    result = json.loads(resp.read().decode())
+            except urllib.error.URLError as exc:
                 return SyncResult(
                     success=False,
-                    message=f"Cannot reach Enterprise API at {self._api_url}: {reason}",
+                    message=f"Cannot reach Enterprise API at {self._api_url}: {exc.reason}",
                 )
-
-            if resolved_api_url != self._api_url:
-                logger.info(
-                    "Enterprise sync resolved via alternate loopback URL: %s",
-                    resolved_api_url,
-                )
-                self._api_url = resolved_api_url
 
             # Update last sync in local config
             cfg = load_enterprise_config()
-            cfg["enterprise_api_url"] = resolved_api_url
+            cfg["enterprise_api_url"] = self._api_url
             cfg["last_sync"] = {
                 "timestamp": datetime.utcnow().isoformat(),
                 "counts": result.get("synced_counts", {}),
@@ -620,33 +600,8 @@ class EnterpriseSyncClient:
 
         try:
             headers = self._resolve_enterprise_auth_headers()
-
-            result: Optional[Dict[str, Any]] = None
-            resolved_api_url = self._api_url
-            last_exc: Optional[Exception] = None
-
-            for candidate_api_url in _candidate_api_urls(self._api_url):
-                url = f"{candidate_api_url}/api/gateway/sync-config"
-                try:
-                    result = _get_json_with_retry(url, headers=headers)
-                    resolved_api_url = candidate_api_url
-                    break
-                except Exception as exc:  # pragma: no cover - defensive aggregation
-                    last_exc = exc
-
-            if result is None:
-                if last_exc:
-                    raise last_exc
-                raise ConnectionError(
-                    f"Cannot reach Enterprise API at {self._api_url}/api/gateway/sync-config"
-                )
-
-            if resolved_api_url != self._api_url:
-                logger.info(
-                    "Gateway sync resolved via alternate loopback URL: %s",
-                    resolved_api_url,
-                )
-                self._api_url = resolved_api_url
+            url = f"{self._api_url}/api/gateway/sync-config"
+            result = _get_json_with_retry(url, headers=headers)
 
             if not result.get("gateway_configured"):
                 return {
@@ -665,7 +620,7 @@ class EnterpriseSyncClient:
                 "fail_closed": result.get("fail_closed", True),
                 "use_provider_registry": result.get("use_provider_registry", True),
             }
-            cfg["enterprise_api_url"] = resolved_api_url
+            cfg["enterprise_api_url"] = self._api_url
             cfg["tier"] = result.get("tier", cfg.get("tier", "starter"))
             save_enterprise_config(cfg)
 
@@ -707,15 +662,6 @@ class EnterpriseSyncClient:
             return _get_json(url, headers=headers)
 
         except Exception as exc:
-            # Fall back to local cache
-            cfg = load_enterprise_config()
-            last_sync = cfg.get("last_sync")
-            if last_sync:
-                return {
-                    "success": True,
-                    "source": "cache",
-                    "last_sync": last_sync,
-                }
             return {"error": f"Cannot fetch sync status: {exc}"}
 
     def test_connection(self) -> bool:
@@ -723,33 +669,22 @@ class EnterpriseSyncClient:
         if not self.is_configured:
             return False
 
-        for candidate_api_url in _candidate_api_urls(self._api_url):
-            for probe_path in ("/health", "/api/health"):
-                url = f"{candidate_api_url}{probe_path}"
-                req = urllib.request.Request(
-                    url,
-                    headers=self._resolve_enterprise_auth_headers(),
-                    method="GET",
-                )
+        for probe_path in ("/health", "/api/health"):
+            url = f"{self._api_url}{probe_path}"
+            req = urllib.request.Request(
+                url,
+                headers=self._resolve_enterprise_auth_headers(),
+                method="GET",
+            )
 
-                try:
-                    # Any HTTP response means the API is network-reachable.
-                    with urllib.request.urlopen(req, timeout=5):
-                        pass
-                    if candidate_api_url != self._api_url:
-                        self._api_url = candidate_api_url
-                        cfg = load_enterprise_config()
-                        cfg["enterprise_api_url"] = candidate_api_url
-                        save_enterprise_config(cfg)
-                    return True
-                except urllib.error.HTTPError:
-                    if candidate_api_url != self._api_url:
-                        self._api_url = candidate_api_url
-                        cfg = load_enterprise_config()
-                        cfg["enterprise_api_url"] = candidate_api_url
-                        save_enterprise_config(cfg)
-                    return True
-                except Exception:
-                    continue
+            try:
+                # Any HTTP response means the API is network-reachable.
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+                return True
+            except urllib.error.HTTPError:
+                return True
+            except Exception:
+                continue
 
         return False
