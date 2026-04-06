@@ -99,8 +99,7 @@ class EnterpriseWebhookRevocationEventPublisher:
         self,
         webhook_url: str,
         *,
-        sync_api_key: Optional[str] = None,
-        bearer_token: Optional[str] = None,
+        sync_api_key: str,
         timeout_seconds: float = 5.0,
         post_json_fn: Callable[..., None] = _post_webhook_json,
     ) -> None:
@@ -110,9 +109,12 @@ class EnterpriseWebhookRevocationEventPublisher:
         if not normalized_url.startswith(("http://", "https://")):
             raise ValueError("webhook_url must start with http:// or https://")
 
+        normalized_sync_api_key = str(sync_api_key or "").strip()
+        if not normalized_sync_api_key:
+            raise ValueError("sync_api_key cannot be empty")
+
         self._webhook_url = normalized_url
-        self._sync_api_key = str(sync_api_key or "").strip() or None
-        self._bearer_token = str(bearer_token or "").strip() or None
+        self._sync_api_key = normalized_sync_api_key
         self._timeout_seconds = float(timeout_seconds)
         self._post_json_fn = post_json_fn
 
@@ -140,11 +142,8 @@ class EnterpriseWebhookRevocationEventPublisher:
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "caracal-revocation-publisher/1.0",
+            "X-Sync-Api-Key": self._sync_api_key,
         }
-        if self._sync_api_key:
-            headers["X-Sync-Api-Key"] = self._sync_api_key
-        if self._bearer_token:
-            headers["Authorization"] = f"Bearer {self._bearer_token}"
 
         self._post_json_fn(
             webhook_url=self._webhook_url,
