@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import re
 
@@ -134,8 +135,19 @@ def test_enterprise_startup_local_infra_boots_vault_sidecar() -> None:
     payload = main_file.read_text(encoding="utf-8")
 
     assert '"up", "-d", "redis", "postgres", "vault"' in payload
-    assert '{"postgres", "redis", "vault"}' in payload
-    assert "5433/6380/8180" in payload
+    assert "Start Postgres, Redis, and Vault manually before running uvicorn" in payload
+
+
+@pytest.mark.unit
+def test_enterprise_startup_has_no_best_effort_infra_fallbacks() -> None:
+    main_file = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "src" / "caracal_enterprise" / "main.py"
+    payload = main_file.read_text(encoding="utf-8")
+
+    assert "_try_start_known_containers" not in payload
+    assert "ps --services --status running" not in payload
+    assert "already reachable on localhost ports" not in payload
+    assert "detected despite compose warnings" not in payload
+    assert "continuing startup" not in payload
 
 
 @pytest.mark.unit
@@ -154,12 +166,17 @@ def test_oss_env_example_uses_vault_only_hardcut_defaults() -> None:
 def test_enterprise_schema_hardcut_removes_bootstrap_sql_and_license_password_hash_artifact() -> None:
     bootstrap_sql = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "create_caracal_tables.sql"
     migration_file = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "alembic" / "versions" / "029_drop_license_password_hash_hardcut.py"
+    metadata_cleanup_file = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "alembic" / "versions" / "030_cleanup_registration_metadata_hardcut.py"
     migration_payload = migration_file.read_text(encoding="utf-8")
+    metadata_cleanup_payload = metadata_cleanup_file.read_text(encoding="utf-8")
 
     assert not bootstrap_sql.exists()
     assert 'revision: str = "029"' in migration_payload
     assert 'down_revision: Union[str, None] = "028"' in migration_payload
     assert 'op.drop_column("licenses", "password_hash")' in migration_payload
+    assert 'revision: str = "030"' in metadata_cleanup_payload
+    assert 'down_revision: Union[str, None] = "029"' in metadata_cleanup_payload
+    assert '"sync_password_hash"' in metadata_cleanup_payload
 
 
 @pytest.mark.unit
@@ -292,6 +309,17 @@ def test_gateway_features_resolve_gateway_endpoint_through_edition_adapter() -> 
 
 
 @pytest.mark.unit
+def test_sdk_gateway_adapter_has_no_direct_api_fallback_transport() -> None:
+    gateway_adapter_file = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "gateway.py"
+    payload = gateway_adapter_file.read_text(encoding="utf-8")
+
+    assert "fallback_base_url" not in payload
+    assert "falling back to direct API" not in payload
+    assert "endpoint-implies-enabled" not in payload
+    assert "broker_base_url" in payload
+
+
+@pytest.mark.unit
 def test_core_and_runtime_modules_do_not_import_enterprise_license_directly() -> None:
     source_roots = (
         _REPO_ROOT / "caracal" / "core",
@@ -307,6 +335,32 @@ def test_core_and_runtime_modules_do_not_import_enterprise_license_directly() ->
         for py_file in source_root.rglob("*.py"):
             payload = py_file.read_text(encoding="utf-8")
             if any(marker in payload for marker in forbidden_markers):
+                offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
+
+
+@pytest.mark.unit
+def test_core_runtime_and_deployment_modules_have_no_enterprise_route_or_ui_workflow_markers() -> None:
+    source_roots = (
+        _REPO_ROOT / "caracal" / "core",
+        _REPO_ROOT / "caracal" / "runtime",
+        _REPO_ROOT / "caracal" / "deployment",
+        _REPO_ROOT / "caracal" / "db",
+    )
+    offenders: list[str] = []
+    forbidden_markers = (
+        "/api/onboarding",
+        "/api/license",
+        "registration_handoff",
+        "better_auth",
+        "gateway admin API",
+    )
+
+    for source_root in source_roots:
+        for py_file in source_root.rglob("*.py"):
+            payload = py_file.read_text(encoding="utf-8").lower()
+            if any(marker.lower() in payload for marker in forbidden_markers):
                 offenders.append(str(py_file.relative_to(_REPO_ROOT)))
 
     assert offenders == []
@@ -674,6 +728,23 @@ def test_edition_detection_has_no_sync_or_license_backdoor_markers() -> None:
 
 
 @pytest.mark.unit
+def test_edition_surfaces_have_no_auto_detected_gateway_copy() -> None:
+    edition_file = _REPO_ROOT / "caracal" / "deployment" / "edition.py"
+    deployment_cli_file = _REPO_ROOT / "caracal" / "cli" / "deployment_cli.py"
+
+    combined = "\n".join(
+        [
+            edition_file.read_text(encoding="utf-8"),
+            deployment_cli_file.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "auto-detected edition" not in combined.lower()
+    assert "auto-detected from enterprise connectivity" not in combined.lower()
+    assert "explicit gateway execution signals" in combined
+
+
+@pytest.mark.unit
 def test_connector_docs_use_enterprise_command_path_only() -> None:
     docs_file = _REPO_ROOT / "docs" / "content" / "open-source" / "developers" / "enterprise-connector" / "index.mdx"
     payload = docs_file.read_text(encoding="utf-8")
@@ -736,6 +807,15 @@ def test_sdk_sync_extension_stubs_are_removed() -> None:
     assert "SyncExtension" not in python_payload
     assert "SyncExtension" not in node_payload
     assert "SyncExtension" not in facade_payload
+
+
+@pytest.mark.unit
+def test_node_sdk_dist_has_no_removed_sync_artifacts() -> None:
+    node_dist_sync_js = _REPO_ROOT / "sdk" / "node-sdk" / "dist" / "enterprise" / "sync.js"
+    node_dist_sync_dts = _REPO_ROOT / "sdk" / "node-sdk" / "dist" / "enterprise" / "sync.d.ts"
+
+    assert not node_dist_sync_js.exists()
+    assert not node_dist_sync_dts.exists()
 
 
 @pytest.mark.unit
@@ -826,12 +906,161 @@ def test_enterprise_frontend_settings_copy_uses_hardcut_enterprise_commands_only
 
 
 @pytest.mark.unit
+def test_enterprise_registration_rebind_surface_uses_final_route_names_only() -> None:
+    license_route = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "enterprise-api" / "src" / "caracal_enterprise" / "routes" / "license.py"
+    frontend_api = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "lib" / "api.ts"
+
+    combined = "\n".join(
+        [
+            license_route.read_text(encoding="utf-8"),
+            frontend_api.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "/api/license/request-rebind" in combined
+    assert "/api/license/switch-container" not in combined
+    assert "SwitchContainerRequest" not in combined
+    assert "SwitchContainerResponse" not in combined
+    assert "automatic sync" not in combined.lower()
+    assert "cli auto-sync" not in combined.lower()
+
+
+@pytest.mark.unit
+def test_phase20_minimal_sdk_contract_artifact_is_present_and_complete() -> None:
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase20-minimal-sdk-contract-checklist.md"
+    payload = artifact.read_text(encoding="utf-8")
+
+    assert artifact.exists()
+    assert "Status: COMPLETE" in payload
+    assert "## Public Surface Inventory" in payload
+    assert "Python SDK" in payload
+    assert "Node SDK" in payload
+    assert "Generated Node outputs must match the surviving source modules exactly." in payload
+    assert "enterprise/sync.py" in payload
+    assert "enterprise/sync.ts" in payload
+
+
+@pytest.mark.unit
+def test_phase21_user_surface_conformance_artifact_is_present_and_complete() -> None:
+    artifact = _REPO_ROOT / ".github" / "hardcut" / "phase21-user-surface-conformance.md"
+    payload = artifact.read_text(encoding="utf-8")
+
+    assert artifact.exists()
+    assert "Status: COMPLETE" in payload
+    assert "## Final-Surface Matrix" in payload
+    assert "OSS CLI / TUI" in payload
+    assert "Enterprise UI" in payload
+    assert "Enterprise Backend" in payload
+    assert "/api/license/request-rebind" in payload
+    assert "switch-container naming" in payload
+
+
+@pytest.mark.unit
+def test_python_sdk_public_surface_remains_minimal_and_explicit() -> None:
+    sdk_init = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "__init__.py"
+    payload = sdk_init.read_text(encoding="utf-8")
+
+    expected_exports = {
+        "__version__",
+        "CaracalClient",
+        "CaracalBuilder",
+        "AuthorityClient",
+        "AsyncAuthorityClient",
+        "SDKConfigurationError",
+        "ContextManager",
+        "ScopeContext",
+        "AgentOperations",
+        "MandateOperations",
+        "DelegationOperations",
+        "LedgerOperations",
+        "HookRegistry",
+        "CaracalExtension",
+        "BaseAdapter",
+        "HttpAdapter",
+        "MockAdapter",
+        "WebSocketAdapter",
+        "GatewayAdapter",
+        "GatewayAdapterError",
+        "build_gateway_adapter",
+        "management",
+        "migration",
+        "ais",
+    }
+
+    module = ast.parse(payload)
+    exports: set[str] | None = None
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        if node.targets[0].id != "__all__" or not isinstance(node.value, ast.List):
+            continue
+        exports = {
+            element.value
+            for element in node.value.elts
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+        break
+
+    assert exports is not None
+
+    assert exports == expected_exports
+    assert "caracal_sdk.enterprise" not in payload
+    assert "SyncExtension" not in payload
+
+
+@pytest.mark.unit
+def test_node_sdk_generated_output_matches_surviving_source_modules() -> None:
+    src_root = _REPO_ROOT / "sdk" / "node-sdk" / "src"
+    dist_root = _REPO_ROOT / "sdk" / "node-sdk" / "dist"
+
+    src_modules = {
+        path.relative_to(src_root).with_suffix("").as_posix()
+        for path in src_root.rglob("*.ts")
+    }
+    dist_modules = {
+        path.relative_to(dist_root).with_suffix("").as_posix()
+        for path in dist_root.rglob("*.js")
+    }
+
+    assert src_modules == dist_modules
+    assert "enterprise/sync" not in src_modules
+    assert "enterprise/sync" not in dist_modules
+
+
+@pytest.mark.unit
+def test_broker_and_gateway_migration_surfaces_remain_explicit_with_no_live_sync_dependency() -> None:
+    migration_cli_file = _REPO_ROOT / "caracal" / "cli" / "migration.py"
+    migration_manager_file = _REPO_ROOT / "caracal" / "deployment" / "migration.py"
+    onboarding_file = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "components" / "onboarding" / "LicenseSetupStep.tsx"
+    settings_file = _REPO_ROOT / ".." / "caracalEnterprise" / "src" / "app" / "dashboard" / "settings" / "page.tsx"
+
+    combined = "\n".join(
+        [
+            migration_cli_file.read_text(encoding="utf-8"),
+            migration_manager_file.read_text(encoding="utf-8"),
+            onboarding_file.read_text(encoding="utf-8"),
+            settings_file.read_text(encoding="utf-8"),
+        ]
+    )
+
+    assert "explicit_only" in combined
+    assert "migration_contracts" in combined
+    assert "background reconciliation" in combined
+    assert "continuous synchronization" in combined
+    assert "live sync dependency" not in combined.lower()
+
+
+@pytest.mark.unit
 def test_migration_cli_exposes_explicit_hardcut_bidirectional_commands() -> None:
     migration_cli_file = _REPO_ROOT / "caracal" / "cli" / "migration.py"
     payload = migration_cli_file.read_text(encoding="utf-8")
 
     assert '@migrate_group.command(name="oss-to-enterprise")' in payload
     assert '@migrate_group.command(name="enterprise-to-oss")' in payload
+    assert "--write-contract-file" in payload
+    assert "--import-contract-file" in payload
 
 
 @pytest.mark.unit
@@ -931,3 +1160,44 @@ def test_ais_runtime_has_no_credential_envelope_disk_persistence_markers() -> No
     assert "credential_envelope_path" not in combined
     assert "credential-envelope" not in combined
     assert "credential_envelope.json" not in combined
+
+
+@pytest.mark.unit
+def test_python_sdk_compat_module_has_no_fallback_alias_logic() -> None:
+    compat_file = _REPO_ROOT / "sdk" / "python-sdk" / "src" / "caracal_sdk" / "_compat.py"
+    payload = compat_file.read_text(encoding="utf-8")
+
+    assert 'return "0.1.0"' not in payload
+    assert "except Exception" not in payload
+    assert "except ImportError" not in payload
+    assert "CoreSDKConfigurationError" not in payload
+    assert "CoreConnectionError" not in payload
+    assert "CoreAuthorityDeniedError" not in payload
+
+
+@pytest.mark.unit
+def test_oss_enterprise_facade_has_no_sdk_extension_redirect_exports() -> None:
+    enterprise_facade = _REPO_ROOT / "caracal" / "enterprise" / "__init__.py"
+    payload = enterprise_facade.read_text(encoding="utf-8")
+
+    assert "def __getattr__(" not in payload
+    assert "ComplianceExtension" not in payload
+    assert "AnalyticsExtension" not in payload
+    assert "WorkflowsExtension" not in payload
+    assert "SSOExtension" not in payload
+    assert "LicenseExtension" not in payload
+
+
+@pytest.mark.unit
+def test_provider_manager_has_no_legacy_provider_secret_key_cleanup_markers() -> None:
+    provider_manager_file = _REPO_ROOT / "caracal" / "flow" / "screens" / "provider_manager.py"
+    payload = provider_manager_file.read_text(encoding="utf-8")
+
+    assert "provider_{selected}_api_key" not in payload
+    assert "provider_{selected}_credential" not in payload
+
+
+@pytest.mark.unit
+def test_enterprise_gateway_authority_proxy_module_is_removed() -> None:
+    authority_proxy_file = _REPO_ROOT / ".." / "caracalEnterprise" / "services" / "gateway" / "authority_proxy.py"
+    assert not authority_proxy_file.exists()

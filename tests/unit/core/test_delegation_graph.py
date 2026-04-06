@@ -352,7 +352,7 @@ class TestDelegationGraphLineageParity:
 
         self.mock_db_session.query.side_effect = query_side_effect
 
-        with pytest.raises(ValueError, match="Single-lineage violation"):
+        with pytest.raises(ValueError, match="Active inbound-edge conflict"):
             self.graph.add_edge(
                 source_mandate_id=source_mandate_id,
                 target_mandate_id=target_mandate_id,
