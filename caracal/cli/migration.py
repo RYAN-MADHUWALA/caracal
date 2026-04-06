@@ -70,6 +70,27 @@ def _parse_credential_exports(export_items: List[str]) -> Dict[str, str]:
     return parsed
 
 
+def _read_contract_file(path: Path) -> Dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise click.ClickException(f"Failed to read migration contract file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"Migration contract file {path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise click.ClickException("Migration contract file must contain a JSON object.")
+
+    return payload
+
+
+def _write_contract_file(path: Path, payload: Dict[str, object]) -> None:
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise click.ClickException(f"Failed to write migration contract file {path}: {exc}") from exc
+
+
 @migrate_group.command(name="oss-to-enterprise")
 @click.option("--workspace", "workspace", type=str, default=None, help="Target workspace (defaults to all workspaces)")
 @click.option("--gateway-url", "gateway_url", type=str, required=True, help="Enterprise gateway URL")
@@ -80,6 +101,12 @@ def _parse_credential_exports(export_items: List[str]) -> Dict[str, str]:
     multiple=True,
     help="Credential key to migrate (repeatable). Defaults to all credentials when omitted.",
 )
+@click.option(
+    "--write-contract-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write the explicit broker-to-gateway migration contract JSON to a file.",
+)
 @click.option("--dry-run", is_flag=True, help="Preview decisions without writing custody metadata")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON result")
 @pass_context
@@ -89,6 +116,7 @@ def migrate_oss_to_enterprise(
     gateway_url: str,
     gateway_token: Optional[str],
     migrate_credentials: tuple[str, ...],
+    write_contract_file: Optional[Path],
     dry_run: bool,
     output_json: bool,
 ):
@@ -103,6 +131,9 @@ def migrate_oss_to_enterprise(
         include_credentials=list(migrate_credentials) or None,
         dry_run=dry_run,
     )
+
+    if write_contract_file is not None:
+        _write_contract_file(write_contract_file, result)
 
     if output_json:
         click.echo(json.dumps(result, indent=2))
@@ -128,6 +159,12 @@ def migrate_oss_to_enterprise(
     multiple=True,
     help="Credential export payload in KEY=VALUE form (repeatable)",
 )
+@click.option(
+    "--import-contract-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Import the explicit gateway-to-broker migration contract JSON from a file.",
+)
 @click.option("--deactivate-license", is_flag=True, help="Deactivate enterprise license after successful migration")
 @click.option("--dry-run", is_flag=True, help="Preview decisions without writing local secrets/custody metadata")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON result")
@@ -137,6 +174,7 @@ def migrate_enterprise_to_oss(
     workspace: Optional[str],
     migrate_credentials: tuple[str, ...],
     import_credentials: tuple[str, ...],
+    import_contract_file: Optional[Path],
     deactivate_license: bool,
     dry_run: bool,
     output_json: bool,
@@ -145,12 +183,14 @@ def migrate_enterprise_to_oss(
     _enforce_explicit_hardcut_migration_policy()
 
     exports = _parse_credential_exports(list(import_credentials)) if import_credentials else None
+    migration_contract = _read_contract_file(import_contract_file) if import_contract_file else None
 
     manager = MigrationManager()
     result = manager.migrate_credentials_enterprise_to_oss(
         workspace=workspace,
         include_credentials=list(migrate_credentials) or None,
         exported_credentials=exports,
+        migration_contract=migration_contract,
         deactivate_license=deactivate_license,
         dry_run=dry_run,
     )

@@ -58,6 +58,10 @@ class MigrationManager:
     # Workspace metadata keys used for hard-cut migration audits/custody tracking.
     CREDENTIAL_CUSTODY_METADATA_KEY = "credential_custody"
     MIGRATION_AUDIT_METADATA_KEY = "migration_audit"
+    REGISTRATION_STATE_METADATA_KEY = "registration_state"
+    AUTHORITY_GRAPH_STATE_METADATA_KEY = "authority_graph_state"
+    RUNTIME_SESSION_STATE_METADATA_KEY = "runtime_session_state"
+    MIGRATION_CONTRACT_VERSION = "v1"
     
     def __init__(self):
         """Initialize the migration manager."""
@@ -778,6 +782,138 @@ class MigrationManager:
         )
         metadata[self.MIGRATION_AUDIT_METADATA_KEY] = audit[-200:]
 
+    def _explicit_migration_contract(
+        self,
+        *,
+        workspace: str,
+        direction: str,
+        gateway_url: Optional[str],
+        selected_credentials: List[str],
+    ) -> Dict[str, Any]:
+        """Build the explicit migration contract payload for broker/gateway moves."""
+        metadata = self._load_workspace_metadata(workspace)
+
+        registration_state = metadata.get(self.REGISTRATION_STATE_METADATA_KEY, {})
+        if not isinstance(registration_state, dict):
+            registration_state = {}
+
+        authority_graph_state = metadata.get(self.AUTHORITY_GRAPH_STATE_METADATA_KEY, {})
+        if not isinstance(authority_graph_state, dict):
+            authority_graph_state = {}
+
+        runtime_session_state = metadata.get(self.RUNTIME_SESSION_STATE_METADATA_KEY, {})
+        if not isinstance(runtime_session_state, dict):
+            runtime_session_state = {}
+
+        secret_refs = metadata.get("secret_refs", {})
+        if not isinstance(secret_refs, dict):
+            secret_refs = {}
+
+        credential_custody = metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+        if not isinstance(credential_custody, dict):
+            credential_custody = {}
+
+        source_model = "broker" if direction == "oss_to_enterprise" else "gateway"
+        target_model = "gateway" if direction == "oss_to_enterprise" else "broker"
+
+        contract: Dict[str, Any] = {
+            "version": self.MIGRATION_CONTRACT_VERSION,
+            "direction": direction,
+            "workspace": workspace,
+            "source_model": source_model,
+            "target_model": target_model,
+            "migration_mode": "explicit_only",
+            "generated_at": datetime.now().isoformat(),
+            "credentials_selected": list(selected_credentials),
+            "registration_state": {
+                "workspace": workspace,
+                "migration_mode": "explicit_only",
+                **registration_state,
+            },
+            "authority_graph_state": {
+                "graph_model": "delegation_edges",
+                **authority_graph_state,
+            },
+            "runtime_session_state": {
+                "lifecycle_model": "explicit_session_bootstrap",
+                **runtime_session_state,
+            },
+            "vault_references": {
+                "secret_refs": dict(secret_refs),
+                "credential_custody": dict(credential_custody),
+            },
+        }
+        if gateway_url:
+            contract["gateway_url"] = gateway_url
+            contract["vault_references"]["gateway_url"] = gateway_url
+
+        return contract
+
+    def _apply_imported_migration_contract(
+        self,
+        *,
+        workspace: str,
+        contract: Dict[str, Any],
+        audit_event: str,
+    ) -> None:
+        """Persist imported migration contract sections additively into workspace metadata."""
+        if not isinstance(contract, dict):
+            raise MigrationValidationError("Imported migration contract must be a JSON object")
+
+        version = str(contract.get("version") or "").strip()
+        if version != self.MIGRATION_CONTRACT_VERSION:
+            raise MigrationValidationError(
+                f"Unsupported migration contract version {version!r}; expected {self.MIGRATION_CONTRACT_VERSION!r}"
+            )
+
+        metadata = self._load_workspace_metadata(workspace)
+
+        for key in (
+            self.REGISTRATION_STATE_METADATA_KEY,
+            self.AUTHORITY_GRAPH_STATE_METADATA_KEY,
+            self.RUNTIME_SESSION_STATE_METADATA_KEY,
+        ):
+            value = contract.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise MigrationValidationError(f"Migration contract section {key!r} must be an object")
+            metadata[key] = dict(value)
+
+        vault_references = contract.get("vault_references")
+        if vault_references is not None:
+            if not isinstance(vault_references, dict):
+                raise MigrationValidationError("Migration contract section 'vault_references' must be an object")
+
+            imported_secret_refs = vault_references.get("secret_refs")
+            if imported_secret_refs is not None:
+                if not isinstance(imported_secret_refs, dict):
+                    raise MigrationValidationError("Migration contract secret_refs must be an object")
+                metadata["secret_refs"] = dict(imported_secret_refs)
+
+            imported_custody = vault_references.get("credential_custody")
+            if imported_custody is not None:
+                if not isinstance(imported_custody, dict):
+                    raise MigrationValidationError("Migration contract credential_custody must be an object")
+                current_custody = metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
+                if not isinstance(current_custody, dict):
+                    current_custody = {}
+                current_custody.update(dict(imported_custody))
+                metadata[self.CREDENTIAL_CUSTODY_METADATA_KEY] = current_custody
+
+        self._append_migration_audit(
+            metadata,
+            event_type=audit_event,
+            workspace=workspace,
+            payload={
+                "contract_version": version,
+                "direction": contract.get("direction"),
+                "source_model": contract.get("source_model"),
+                "target_model": contract.get("target_model"),
+            },
+        )
+        self._save_workspace_metadata(workspace, metadata)
+
     def migrate_credentials_oss_to_enterprise(
         self,
         *,
@@ -799,6 +935,7 @@ class MigrationManager:
 
         workspaces = self._target_workspaces(workspace)
         decisions: List[Dict[str, Any]] = []
+        migration_contracts: Dict[str, Dict[str, Any]] = {}
         selected_total = 0
 
         for ws in workspaces:
@@ -845,6 +982,14 @@ class MigrationManager:
                     "additive": True,
                 }
 
+            migration_contract = self._explicit_migration_contract(
+                workspace=ws,
+                direction="oss_to_enterprise",
+                gateway_url=gateway_url,
+                selected_credentials=selected,
+            )
+            migration_contracts[ws] = migration_contract
+
             if not dry_run:
                 latest_metadata = self._load_workspace_metadata(ws)
                 latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
@@ -860,6 +1005,7 @@ class MigrationManager:
                         "selected": selected,
                         "missing": missing,
                         "gateway_url": gateway_url,
+                        "migration_contract": migration_contract,
                     },
                 )
                 self._save_workspace_metadata(ws, latest_metadata)
@@ -870,6 +1016,7 @@ class MigrationManager:
             "workspaces": workspaces,
             "credentials_selected": selected_total,
             "decisions": decisions,
+            "migration_contracts": migration_contracts,
         }
 
     def migrate_credentials_enterprise_to_oss(
@@ -878,14 +1025,21 @@ class MigrationManager:
         workspace: Optional[str] = None,
         include_credentials: Optional[List[str]] = None,
         exported_credentials: Optional[Dict[str, str]] = None,
+        migration_contract: Optional[Dict[str, Any]] = None,
         deactivate_license: bool = False,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Migrate selected enterprise-managed credentials into local encrypted storage."""
         workspaces = self._target_workspaces(workspace)
         decisions: List[Dict[str, Any]] = []
+        migration_contracts: Dict[str, Dict[str, Any]] = {}
         selected_total = 0
         imported_total = 0
+
+        if migration_contract is not None and len(workspaces) != 1:
+            raise MigrationValidationError(
+                "Imported migration contracts require an explicit single workspace target"
+            )
 
         normalized_exports: Dict[str, str] = {}
         if exported_credentials:
@@ -910,6 +1064,13 @@ class MigrationManager:
             selected, missing = self._resolve_credential_selection(available, include_credentials)
 
             vault_map = self.config_manager._load_vault(ws)
+
+            if migration_contract is not None and not dry_run:
+                self._apply_imported_migration_contract(
+                    workspace=ws,
+                    contract=migration_contract,
+                    audit_event="enterprise_contract_import",
+                )
 
             for missing_key in missing:
                 decisions.append(
@@ -960,6 +1121,13 @@ class MigrationManager:
                     "source": decision["source"],
                 }
 
+            migration_contracts[ws] = self._explicit_migration_contract(
+                workspace=ws,
+                direction="enterprise_to_oss",
+                gateway_url=None,
+                selected_credentials=selected,
+            )
+
             if not dry_run:
                 latest_metadata = self._load_workspace_metadata(ws)
                 latest_custody_map = latest_metadata.get(self.CREDENTIAL_CUSTODY_METADATA_KEY, {})
@@ -975,6 +1143,7 @@ class MigrationManager:
                         "selected": selected,
                         "missing": missing,
                         "imported_from_export": [k for k in selected if k in normalized_exports],
+                        "migration_contract": migration_contracts[ws],
                     },
                 )
                 self._save_workspace_metadata(ws, latest_metadata)
@@ -995,6 +1164,7 @@ class MigrationManager:
             "credentials_imported": imported_total,
             "license_deactivated": bool(deactivate_license and not dry_run),
             "decisions": decisions,
+            "migration_contracts": migration_contracts,
         }
     
     def _migrate_edition_settings(
