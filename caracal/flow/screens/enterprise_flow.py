@@ -544,9 +544,13 @@ class EnterpriseFlow:
         self.console.print(f"\n[{Colors.DIM}]Syncing local data to Enterprise...[/]")
         
         try:
+            from caracal.deployment.enterprise_sync_payload import build_enterprise_sync_payload
             from caracal.enterprise.sync import EnterpriseSyncClient
             client = EnterpriseSyncClient()
-            result = client.sync()
+            payload = build_enterprise_sync_payload(
+                client_instance_id=client._client_instance_id,
+            )
+            result = client.upload_payload(payload)
             
             self.console.print()
             
