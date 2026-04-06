@@ -276,7 +276,7 @@ def test_feature_modules_do_not_branch_on_is_enterprise_directly() -> None:
 
 @pytest.mark.unit
 def test_enterprise_license_validation_has_no_offline_acceptance_fallback() -> None:
-    license_file = _REPO_ROOT / "caracal" / "enterprise" / "license.py"
+    license_file = _REPO_ROOT / "caracal" / "deployment" / "enterprise_license.py"
     payload = license_file.read_text(encoding="utf-8")
 
     assert "validated from cache" not in payload
@@ -341,6 +341,31 @@ def test_core_and_runtime_modules_do_not_import_enterprise_license_directly() ->
 
 
 @pytest.mark.unit
+def test_runtime_cli_flow_and_deployment_modules_do_not_import_retired_enterprise_client_modules() -> None:
+    source_roots = (
+        _REPO_ROOT / "caracal" / "cli",
+        _REPO_ROOT / "caracal" / "flow",
+        _REPO_ROOT / "caracal" / "deployment",
+    )
+    offenders: list[str] = []
+    forbidden_markers = (
+        "from caracal.enterprise.license import",
+        "import caracal.enterprise.license",
+        "from caracal.enterprise.sync import",
+        "import caracal.enterprise.sync",
+        "from caracal.enterprise import EnterpriseLicenseValidator",
+    )
+
+    for source_root in source_roots:
+        for py_file in source_root.rglob("*.py"):
+            payload = py_file.read_text(encoding="utf-8")
+            if any(marker in payload for marker in forbidden_markers):
+                offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+
+    assert offenders == []
+
+
+@pytest.mark.unit
 def test_core_runtime_and_deployment_modules_have_no_enterprise_route_or_ui_workflow_markers() -> None:
     source_roots = (
         _REPO_ROOT / "caracal" / "core",
@@ -356,12 +381,18 @@ def test_core_runtime_and_deployment_modules_have_no_enterprise_route_or_ui_work
         "better_auth",
         "gateway admin API",
     )
+    allowed_files = {
+        "caracal/deployment/enterprise_license.py",
+    }
 
     for source_root in source_roots:
         for py_file in source_root.rglob("*.py"):
+            relative_path = str(py_file.relative_to(_REPO_ROOT))
+            if relative_path in allowed_files:
+                continue
             payload = py_file.read_text(encoding="utf-8").lower()
             if any(marker.lower() in payload for marker in forbidden_markers):
-                offenders.append(str(py_file.relative_to(_REPO_ROOT)))
+                offenders.append(relative_path)
 
     assert offenders == []
 
@@ -500,7 +531,7 @@ def test_forbidden_marker_scanner_covers_phase_13_hardcut_expansion() -> None:
 
 @pytest.mark.unit
 def test_enterprise_sync_client_has_no_payload_or_query_auth_fallbacks() -> None:
-    sync_file = _REPO_ROOT / "caracal" / "enterprise" / "sync.py"
+    sync_file = _REPO_ROOT / "caracal" / "deployment" / "enterprise_sync.py"
     payload = sync_file.read_text(encoding="utf-8")
 
     assert 'payload["sync_api_key"]' not in payload
