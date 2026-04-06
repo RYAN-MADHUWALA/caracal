@@ -139,3 +139,51 @@ def test_ais_endpoints_delegate_to_handlers() -> None:
     )
     assert refresh_resp.status_code == 200
     assert refresh_resp.json()["access_token"] == "refresh:r-1"
+
+
+@pytest.mark.unit
+def test_spawn_request_rejects_manual_identity_and_key_material_fields() -> None:
+    app = create_ais_app(_handlers(), AISServerConfig(unix_socket_path="", listen_host="127.0.0.1"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/ais/spawn",
+        json={
+            "issuer_principal_id": "issuer-1",
+            "principal_name": "worker-1",
+            "principal_kind": "worker",
+            "owner": "ops",
+            "resource_scope": ["provider:openai"],
+            "action_scope": ["infer"],
+            "validity_seconds": 300,
+            "idempotency_key": "idemp-1",
+            "source_principal_id": "principal-manual",
+            "public_key_pem": "must-not-be-accepted",
+            "private_key_pem": "must-not-be-accepted",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    fields = {tuple(item["loc"]) for item in detail}
+    assert ("body", "source_principal_id") in fields
+    assert ("body", "public_key_pem") in fields
+    assert ("body", "private_key_pem") in fields
+
+
+@pytest.mark.unit
+def test_other_ais_request_models_reject_extra_fields() -> None:
+    with pytest.raises(Exception):
+        TokenIssueRequest(
+            principal_id="p-1",
+            organization_id="org-1",
+            tenant_id="tenant-1",
+            authority_sources=["m-1"],
+        )
+
+    with pytest.raises(Exception):
+        HandoffRequest(
+            source_access_token="tok-1",
+            target_subject_id="p-2",
+            authority_sources=["m-1"],
+        )

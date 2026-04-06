@@ -175,6 +175,18 @@ def test_runtime_preflight_blocks_local_vault_mode_in_hardcut() -> None:
     with pytest.raises(HardCutPreflightError, match="Local vault mode"):
         env_vars = _valid_vault_env()
         env_vars["CARACAL_VAULT_MODE"] = "local"
+        assert_runtime_hardcut(
+            compose_file=None,
+            database_urls={"DATABASE_URL": "postgresql://ok"},
+            check_jsonb=False,
+            env_vars=env_vars,
+        )
+
+
+@pytest.mark.unit
+def test_runtime_preflight_blocks_legacy_hardcut_mode_variable() -> None:
+    with pytest.raises(HardCutPreflightError, match="Compatibility aliases"):
+        env_vars = _valid_vault_env()
         env_vars["CARACAL_HARDCUT_MODE"] = "true"
         assert_runtime_hardcut(
             compose_file=None,
