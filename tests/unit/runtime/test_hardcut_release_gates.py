@@ -187,6 +187,8 @@ def test_enterprise_license_validation_has_no_offline_acceptance_fallback() -> N
     assert "validated from cache" not in payload
     assert "trying cached license" not in payload
     assert "falling back to cached license" not in payload
+    assert "CARACAL_ENTERPRISE_API_URL" not in payload
+    assert "password_protected" not in payload
 
 
 @pytest.mark.unit
@@ -240,6 +242,8 @@ def test_enterprise_connect_flow_has_no_implicit_gateway_sync_or_auto_sync_copy(
     assert "pull_gateway_config()" not in payload
     assert "automatic sync" not in payload.lower()
     assert "Gateway auto-configured" not in payload
+    assert "Enter license password" not in payload
+    assert "password=" not in payload
 
 
 @pytest.mark.unit

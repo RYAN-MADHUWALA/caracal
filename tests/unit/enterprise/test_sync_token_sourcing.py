@@ -186,3 +186,50 @@ def test_license_validation_fails_closed_when_api_is_unreachable(monkeypatch: py
 
     assert result.valid is False
     assert "requires a live Enterprise API" in result.message
+
+
+@pytest.mark.unit
+def test_license_validation_request_has_no_password_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_payload: dict[str, object] = {}
+
+    monkeypatch.setattr(enterprise_license, "_resolve_api_url", lambda override=None: "https://enterprise.example")
+    monkeypatch.setattr(enterprise_license, "_candidate_api_urls", lambda base_url: [base_url])
+    monkeypatch.setattr(enterprise_license, "_get_or_create_client_instance_id", lambda: "client-1")
+
+    def _capture_post(_url: str, payload: dict, timeout: int = 15) -> dict:
+        captured_payload.update(payload)
+        return {
+            "valid": True,
+            "message": "ok",
+            "tier": "starter",
+            "features": {},
+            "enterprise_api_url": "https://enterprise.example",
+        }
+
+    monkeypatch.setattr(enterprise_license, "_post_json", _capture_post)
+    monkeypatch.setattr(
+        enterprise_license.EnterpriseLicenseValidator,
+        "_persist_license",
+        lambda self, **kwargs: None,
+    )
+
+    validator = enterprise_license.EnterpriseLicenseValidator()
+    result = validator.validate_license("license-key-1")
+
+    assert result.valid is True
+    assert "password" not in captured_payload
+
+
+@pytest.mark.unit
+def test_resolve_api_url_ignores_removed_legacy_gateway_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(enterprise_license, "load_enterprise_config", lambda: {})
+    monkeypatch.setattr(enterprise_license, "_load_workspace_dotenv", lambda: {})
+    monkeypatch.delenv("CARACAL_ENTERPRISE_URL", raising=False)
+    monkeypatch.delenv("CARACAL_ENTERPRISE_DEV_URL", raising=False)
+    monkeypatch.delenv("CARACAL_ENTERPRISE_DEFAULT_URL", raising=False)
+    monkeypatch.setenv("CARACAL_ENTERPRISE_API_URL", "https://legacy-enterprise.example")
+    monkeypatch.setenv("CARACAL_GATEWAY_URL", "https://legacy-gateway.example")
+
+    resolved = enterprise_license._resolve_api_url()
+
+    assert resolved == "https://www.garudexlabs.com"
