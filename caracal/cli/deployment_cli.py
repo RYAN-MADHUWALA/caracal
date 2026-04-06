@@ -664,6 +664,7 @@ def enterprise_disconnect(
 def enterprise_sync(workspace: Optional[str], direction: str, format: str):
     """Perform immediate synchronization."""
     try:
+        from caracal.deployment.enterprise_sync_payload import build_enterprise_sync_payload
         from caracal.enterprise.sync import EnterpriseSyncClient
         
         config_manager = ConfigManager()
@@ -681,7 +682,10 @@ def enterprise_sync(workspace: Optional[str], direction: str, format: str):
             console=console,
         ) as progress:
             task = progress.add_task(f"Syncing workspace '{workspace}'...", total=None)
-            result = sync_client.sync()
+            payload = build_enterprise_sync_payload(
+                client_instance_id=sync_client._client_instance_id,
+            )
+            result = sync_client.upload_payload(payload)
             progress.update(task, completed=True)
         
         if format == "json":
