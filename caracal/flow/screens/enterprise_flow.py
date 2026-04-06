@@ -328,11 +328,7 @@ class EnterpriseFlow:
         self.console.print(info_panel)
         self.console.print()
         
-        # Explicit default URL from env/.env takes precedence for this flow.
-        configured_default = _normalize_enterprise_url(
-            _read_env("CARACAL_ENTERPRISE_DEFAULT_URL")
-        )
-        enterprise_url = configured_default or _resolve_api_url()
+        enterprise_url = _resolve_api_url()
         
         # Prompt for license token
         license_token = Prompt.ask(

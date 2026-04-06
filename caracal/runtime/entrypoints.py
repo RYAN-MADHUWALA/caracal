@@ -169,9 +169,6 @@ services:
             CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
             CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
-            CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
-            CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
-            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
@@ -247,9 +244,6 @@ services:
             CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
             CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
-            CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
-            CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
-            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
@@ -303,9 +297,6 @@ services:
             CARACAL_VAULT_RETRY_MAX_ATTEMPTS: ${CARACAL_VAULT_RETRY_MAX_ATTEMPTS:-3}
             CARACAL_VAULT_RETRY_BACKOFF_SECONDS: ${CARACAL_VAULT_RETRY_BACKOFF_SECONDS:-0.2}
             CARACAL_ENTERPRISE_URL: ${CARACAL_ENTERPRISE_URL:-}
-            CARACAL_ENTERPRISE_DEFAULT_URL: ${CARACAL_ENTERPRISE_DEFAULT_URL:-https://www.garudexlabs.com}
-            CARACAL_GATEWAY_URL: ${CARACAL_GATEWAY_URL:-}
-            CARACAL_GATEWAY_ENDPOINT: ${CARACAL_GATEWAY_ENDPOINT:-}
             CARACAL_GATEWAY_ENABLED: ${CARACAL_GATEWAY_ENABLED:-false}
             CARACAL_ENV_MODE: ${CARACAL_ENV_MODE:-dev}
             CARACAL_DEBUG_LOGS: ${CARACAL_DEBUG_LOGS:-false}
@@ -1662,56 +1653,10 @@ def _resolve_runtime_revocation_publisher_mode(*, edition_manager: object | None
 
     adapter = edition_manager or get_deployment_edition_adapter()
     resolve_mode = getattr(adapter, "resolve_revocation_publisher_mode", None)
-    if callable(resolve_mode):
-        return resolve_mode(explicit_mode=explicit_mode)
+    if not callable(resolve_mode):
+        raise RuntimeError("Edition adapter is missing resolve_revocation_publisher_mode")
 
-    if explicit_mode:
-        if explicit_mode in {"redis", "enterprise_webhook"}:
-            return explicit_mode
-        raise RuntimeError(
-            f"{AIS_REVOCATION_PUBLISHER_MODE_ENV} must be one of: redis, enterprise_webhook"
-        )
-
-    resolved_is_enterprise = getattr(adapter, "is_enterprise", None)
-    if callable(resolved_is_enterprise):
-        return "enterprise_webhook" if bool(resolved_is_enterprise()) else "redis"
-
-    resolved_get_edition = getattr(adapter, "get_edition", None)
-    if not callable(resolved_get_edition):
-        raise RuntimeError("Unable to resolve runtime revocation publisher mode from edition adapter")
-
-    edition = resolved_get_edition()
-
-    normalized = str(getattr(edition, "value", edition) or "").strip().lower()
-    return "enterprise_webhook" if normalized == "enterprise" else "redis"
-
-
-def _resolve_enterprise_revocation_webhook_url(*, edition_manager: object | None = None) -> str:
-    configured_url = (os.environ.get(AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV) or "").strip()
-    from caracal.deployment.edition_adapter import get_deployment_edition_adapter
-
-    adapter = edition_manager or get_deployment_edition_adapter()
-    resolve_target = getattr(adapter, "resolve_enterprise_revocation_target", None)
-    if callable(resolve_target):
-        webhook_url, _sync_api_key = resolve_target(webhook_url_override=configured_url or None)
-        return webhook_url
-
-    if configured_url:
-        return configured_url
-
-    require_gateway_url = getattr(adapter, "require_gateway_url", None)
-    if callable(require_gateway_url):
-        gateway_url = str(require_gateway_url() or "").strip()
-    else:
-        resolved_gateway_url = getattr(adapter, "get_gateway_url", None)
-        if not callable(resolved_gateway_url):
-            raise RuntimeError("Enterprise revocation webhook URL is not configured")
-        gateway_url = str(resolved_gateway_url() or "").strip()
-
-    if not gateway_url:
-        raise RuntimeError("Enterprise revocation webhook URL is not configured")
-
-    return f"{gateway_url.rstrip('/')}{AIS_DEFAULT_ENTERPRISE_REVOCATION_WEBHOOK_PATH}"
+    return resolve_mode(explicit_mode=explicit_mode)
 
 
 def _create_enterprise_revocation_event_publisher(*, edition_manager: object | None = None):
@@ -1722,14 +1667,13 @@ def _create_enterprise_revocation_event_publisher(*, edition_manager: object | N
     configured_sync_api_key = (os.environ.get(AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV) or "").strip() or None
     adapter = edition_manager or get_deployment_edition_adapter()
     resolve_target = getattr(adapter, "resolve_enterprise_revocation_target", None)
-    if callable(resolve_target):
-        webhook_url, sync_api_key = resolve_target(
-            webhook_url_override=configured_url,
-            sync_api_key_override=configured_sync_api_key,
-        )
-    else:
-        webhook_url = _resolve_enterprise_revocation_webhook_url(edition_manager=adapter)
-        sync_api_key = configured_sync_api_key
+    if not callable(resolve_target):
+        raise RuntimeError("Edition adapter is missing resolve_enterprise_revocation_target")
+
+    webhook_url, sync_api_key = resolve_target(
+        webhook_url_override=configured_url,
+        sync_api_key_override=configured_sync_api_key,
+    )
 
     if not sync_api_key:
         raise RuntimeError(
