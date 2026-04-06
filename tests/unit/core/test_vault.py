@@ -41,7 +41,6 @@ def vault_env():
         "CARACAL_VAULT_PROJECT_ID": "proj-default",
         "CARACAL_VAULT_ENVIRONMENT": "dev",
         "CARACAL_VAULT_SECRET_PATH": "/",
-        "CARACAL_HARDCUT_MODE": "1",
         "CARACAL_VAULT_MODE": "managed",
     }
 
@@ -131,19 +130,15 @@ def test_load_vault_config_forbids_local_mode_in_hardcut(vault_env):
 
 
 @pytest.mark.unit
-def test_load_vault_config_local_mode_defaults_without_url_or_token(vault_env):
+def test_load_vault_config_rejects_local_mode_without_fallback_defaults(vault_env):
     env = dict(vault_env)
     env["CARACAL_VAULT_MODE"] = "local"
-    env["CARACAL_HARDCUT_MODE"] = "0"
     env.pop("CARACAL_VAULT_URL", None)
     env.pop("CARACAL_VAULT_TOKEN", None)
 
     with patch("caracal.core.vault._read_env_or_dotenv", side_effect=lambda name: env.get(name)):
-        cfg = _load_vault_config()
-
-    assert cfg.mode == "local"
-    assert cfg.base_url == "http://127.0.0.1:8080"
-    assert cfg.token == "dev-local-token"
+        with pytest.raises(VaultConfigurationError, match="forbidden"):
+            _load_vault_config()
 
 
 @pytest.mark.unit
