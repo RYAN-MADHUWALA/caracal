@@ -83,7 +83,7 @@ class DeploymentEditionAdapter:
                 "Enterprise revocation target resolution is only valid in enterprise mode."
             )
 
-        from caracal.enterprise.license import resolve_revocation_webhook_target
+        from caracal.deployment.enterprise_runtime import resolve_revocation_webhook_target
 
         normalized_webhook_override = str(webhook_url_override or "").strip() or None
         normalized_sync_override = str(sync_api_key_override or "").strip() or None
@@ -113,7 +113,7 @@ class DeploymentEditionAdapter:
         if not self.is_enterprise():
             return {}
 
-        from caracal.enterprise.license import load_enterprise_config
+        from caracal.deployment.enterprise_runtime import load_enterprise_config
 
         raw_config = load_enterprise_config()
         if not isinstance(raw_config, dict):
@@ -169,7 +169,7 @@ class DeploymentEditionAdapter:
             return
 
         try:
-            from caracal.enterprise.license import load_enterprise_config
+            from caracal.deployment.enterprise_runtime import load_enterprise_config
 
             cfg = load_enterprise_config()
         except Exception as exc:
