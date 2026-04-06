@@ -60,10 +60,10 @@ class DelegationTokenClaims:
         token_id: Unique token identifier (jti claim)
         allowed_operations: List of allowed operation types
         delegation_type: Type of delegation (directed/peer)
-        source_principal_type: Type of the delegating principal (user/agent/service)
-        target_principal_type: Type of the receiving principal (user/agent/service)
+        source_principal_type: Type of the delegating principal
+        target_principal_type: Type of the receiving principal
         context_tags: Context tags for dynamic authority filtering
-        authority_sources: List of source mandate IDs (for multi-source)
+        source_mandate_id: Canonical source mandate lineage ID
     """
     issuer: UUID
     subject: UUID
@@ -76,7 +76,7 @@ class DelegationTokenClaims:
     source_principal_type: str = "agent"
     target_principal_type: str = "agent"
     context_tags: Optional[List[str]] = None
-    authority_sources: Optional[List[str]] = None
+    source_mandate_id: Optional[UUID] = None
 
 
 class DelegationTokenManager:
@@ -110,7 +110,7 @@ class DelegationTokenManager:
         source_principal_type: str = "agent",
         target_principal_type: str = "agent",
         context_tags: Optional[List[str]] = None,
-        authority_sources: Optional[List[str]] = None,
+        source_mandate_id: Optional[UUID] = None,
     ) -> str:
         """
         Generate delegation token.
@@ -124,10 +124,10 @@ class DelegationTokenManager:
             expiration_seconds: Token validity duration (default: 86400 = 24 hours)
             allowed_operations: List of allowed operations (default: ["api_call", "mcp_tool"])
             delegation_type: Type of delegation (directed/peer)
-            source_principal_type: Type of delegating principal (user/agent/service)
-            target_principal_type: Type of receiving principal (user/agent/service)
+            source_principal_type: Type of delegating principal
+            target_principal_type: Type of receiving principal
             context_tags: Context tags for dynamic authority filtering
-            authority_sources: List of source mandate IDs for multi-source
+            source_mandate_id: Canonical source mandate lineage ID
             
         Returns:
             JWT token string
@@ -177,8 +177,8 @@ class DelegationTokenManager:
         # Optional claims
         if context_tags:
             payload["contextTags"] = context_tags
-        if authority_sources:
-            payload["authoritySources"] = authority_sources
+        if source_mandate_id:
+            payload["sourceMandateId"] = str(source_mandate_id)
         
         # Build JWT header
         headers = {
@@ -324,7 +324,8 @@ class DelegationTokenManager:
                 source_principal_type = payload.get("sourcePrincipalType", "agent")
                 target_principal_type = payload.get("targetPrincipalType", "agent")
                 context_tags = payload.get("contextTags")
-                authority_sources = payload.get("authoritySources")
+                source_mandate_claim = payload.get("sourceMandateId")
+                source_mandate_id = UUID(source_mandate_claim) if source_mandate_claim else None
                 
             except (KeyError, ValueError, TypeError) as e:
                 # Missing or invalid claims - fail closed (Requirement 23.3)
@@ -354,7 +355,7 @@ class DelegationTokenManager:
                 source_principal_type=source_principal_type,
                 target_principal_type=target_principal_type,
                 context_tags=context_tags,
-                authority_sources=authority_sources,
+                source_mandate_id=source_mandate_id,
             )
             
             logger.info(
