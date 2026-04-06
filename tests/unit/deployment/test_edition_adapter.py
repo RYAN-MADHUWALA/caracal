@@ -137,6 +137,39 @@ def test_resolve_revocation_publisher_mode_defaults_from_edition() -> None:
 
 
 @pytest.mark.unit
+def test_resolve_enterprise_revocation_target_requires_sync_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))
+
+    monkeypatch.setattr(
+        "caracal.enterprise.license.resolve_revocation_webhook_target",
+        lambda webhook_url_override=None: (webhook_url_override or "https://enterprise.example/api/sync/revocation-events", None),
+    )
+
+    with pytest.raises(EditionConfigurationError, match="requires a sync API key"):
+        adapter.resolve_enterprise_revocation_target(
+            webhook_url_override="https://enterprise.example/custom-revocations",
+        )
+
+
+@pytest.mark.unit
+def test_resolve_enterprise_revocation_target_uses_override_sync_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))
+
+    monkeypatch.setattr(
+        "caracal.enterprise.license.resolve_revocation_webhook_target",
+        lambda webhook_url_override=None: (webhook_url_override or "https://enterprise.example/api/sync/revocation-events", "persisted-sync"),
+    )
+
+    webhook_url, sync_api_key = adapter.resolve_enterprise_revocation_target(
+        webhook_url_override="https://enterprise.example/custom-revocations",
+        sync_api_key_override="override-sync",
+    )
+
+    assert webhook_url == "https://enterprise.example/custom-revocations"
+    assert sync_api_key == "override-sync"
+
+
+@pytest.mark.unit
 def test_adapter_capability_helpers_reflect_edition() -> None:
     oss_adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.OPENSOURCE))
     enterprise_adapter = DeploymentEditionAdapter(edition_manager=_FakeEditionManager(edition=Edition.ENTERPRISE))

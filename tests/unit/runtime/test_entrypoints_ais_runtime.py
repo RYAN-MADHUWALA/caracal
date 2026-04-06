@@ -341,6 +341,26 @@ def test_create_ais_session_manager_requires_explicit_caveat_hmac_key(
 
 
 @pytest.mark.unit
+def test_resolve_session_signing_algorithm_ignores_legacy_alias_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(entrypoints.AIS_SESSION_ALGORITHM_ENV, raising=False)
+    monkeypatch.setenv("CARACAL_SESSION_JWT_ALGORITHM", "ES256")
+
+    assert entrypoints._resolve_session_signing_algorithm() == "RS256"
+
+
+@pytest.mark.unit
+def test_resolve_session_signing_algorithm_uses_canonical_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(entrypoints.AIS_SESSION_ALGORITHM_ENV, "es256")
+    monkeypatch.setenv("CARACAL_SESSION_JWT_ALGORITHM", "RS256")
+
+    assert entrypoints._resolve_session_signing_algorithm() == "ES256"
+
+
+@pytest.mark.unit
 def test_host_up_runs_preflight_with_resolved_compose(monkeypatch: pytest.MonkeyPatch) -> None:
     compose_file = Path("/tmp/docker-compose.image.yml")
     captured: dict[str, object] = {}
@@ -731,6 +751,22 @@ def test_create_runtime_revocation_event_publisher_uses_enterprise_webhook_mode(
     )
 
     assert publisher.__class__.__name__ == "EnterpriseWebhookRevocationEventPublisher"
+
+
+@pytest.mark.unit
+def test_create_runtime_revocation_event_publisher_requires_sync_key_in_enterprise_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        entrypoints.AIS_ENTERPRISE_REVOCATION_WEBHOOK_URL_ENV,
+        "https://enterprise.example/custom-revocations",
+    )
+    monkeypatch.delenv(entrypoints.AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match=entrypoints.AIS_ENTERPRISE_REVOCATION_SYNC_API_KEY_ENV):
+        entrypoints._create_runtime_revocation_event_publisher(
+            edition_manager=_EnterpriseEditionManager(),
+        )
 
 
 @pytest.mark.unit
