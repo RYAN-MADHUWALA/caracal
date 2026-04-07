@@ -23,6 +23,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from caracal.deployment import ConfigManager, get_deployment_edition_adapter
+from caracal.deployment.exceptions import SecretNotFoundError
 from caracal.flow.components.menu import Menu, MenuItem
 from caracal.flow.components.prompt import FlowPrompt, FlowValidator
 from caracal.flow.screens._workspace_helpers import get_active_workspace_name
@@ -37,6 +38,10 @@ from caracal.provider.catalog import (
     build_resources_from_pattern as shared_build_resources_from_pattern,
 )
 from caracal.provider.definitions import build_action_scope, build_resource_scope
+from caracal.provider.credential_store import (
+    delete_workspace_provider_credential,
+    store_workspace_provider_credential,
+)
 from caracal.provider.workspace import (
     load_workspace_provider_registry,
     save_workspace_provider_registry,
@@ -757,9 +762,9 @@ def _add_provider(console: Console, state: FlowState) -> None:
     )
     advanced = _collect_advanced_settings(console=console, prompt=prompt)
 
-    secret_ref = None
+    stored_credential_ref = None
     if auth_scheme != "none":
-        secret_ref = credential_ref or f"provider_{name}_credential"
+        stored_credential_ref = credential_ref
 
     _render_summary(
         console=console,
@@ -772,7 +777,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         base_url=base_url,
         auth_header_name=auth_header_name,
         credential_mode=credential_mode,
-        credential_ref=secret_ref,
+        credential_ref=stored_credential_ref,
         credential_value=credential_value,
         resources=resources,
         advanced=advanced,
@@ -783,8 +788,12 @@ def _add_provider(console: Console, state: FlowState) -> None:
         Prompt.ask("Press Enter to continue", default="")
         return
 
-    if auth_scheme != "none" and credential_mode == "store-new" and credential_value is not None and secret_ref:
-        config_manager.store_secret(secret_ref, credential_value, workspace)
+    if auth_scheme != "none" and credential_mode == "store-new" and credential_value is not None:
+        stored_credential_ref = store_workspace_provider_credential(
+            workspace=workspace,
+            provider_id=name,
+            value=credential_value,
+        )
 
     providers[name] = build_provider_record(
         name=name,
@@ -801,7 +810,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         tags=[],
         metadata={"starter_pattern": pattern.key} if pattern else {},
         auth_header_name=auth_header_name,
-        credential_ref=secret_ref,
+        credential_ref=stored_credential_ref,
         existing=providers.get(name),
         created_at=datetime.utcnow().isoformat(),
     )
@@ -1760,10 +1769,11 @@ def _remove_provider(console: Console, state: FlowState) -> None:
     save_workspace_provider_registry(config_manager, workspace, providers)
 
     credential_ref = removed.get("credential_ref")
-    vault = config_manager._load_vault(workspace)
-    if credential_ref and credential_ref in vault:
-        del vault[credential_ref]
-    config_manager._save_vault(workspace, vault)
+    if credential_ref:
+        try:
+            delete_workspace_provider_credential(workspace, credential_ref)
+        except SecretNotFoundError:
+            pass
 
     console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' removed.[/]")
     if state:

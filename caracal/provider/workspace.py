@@ -78,9 +78,23 @@ def load_workspace_provider_registry(
         for item in providers:
             if isinstance(item, dict) and item.get("name"):
                 normalized[str(item["name"])] = dict(item)
-        return normalized
+        providers = normalized
+    else:
+        providers = providers if isinstance(providers, dict) else {}
 
-    return providers if isinstance(providers, dict) else {}
+    from caracal.provider.credential_store import migrate_workspace_provider_credentials
+
+    migrated_providers, migrated_secret_refs, changed = migrate_workspace_provider_credentials(
+        workspace=workspace,
+        providers=providers,
+        legacy_secret_refs=config_manager._load_vault(workspace),
+    )
+    if changed:
+        save_workspace_provider_registry(config_manager, workspace, migrated_providers)
+        config_manager._save_vault(workspace, migrated_secret_refs)
+        return migrated_providers
+
+    return providers
 
 
 def save_workspace_provider_registry(
