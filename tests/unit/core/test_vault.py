@@ -380,9 +380,16 @@ def test_delete_success(vault):
 
 @pytest.mark.unit
 def test_delete_secret_raises_not_found_when_v4_delete_returns_404(vault):
-    with patch.object(vault, "_request", return_value=FakeResponse(status_code=404, payload={"message": "missing"})):
+    with patch.object(vault, "_request", return_value=FakeResponse(status_code=404, payload={"message": "missing"})) as request:
         with pytest.raises(SecretNotFound):
             vault._delete_secret("org-1", "env-1", "/", "api-key")
+
+    assert request.call_args.args[:2] == ("DELETE", "/api/v4/secrets/api-key")
+    assert request.call_args.kwargs["payload"] == {
+        "projectId": "org-1",
+        "environment": "env-1",
+        "secretPath": "/",
+    }
 
 
 @pytest.mark.unit

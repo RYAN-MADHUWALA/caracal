@@ -1051,7 +1051,7 @@ class CaracalVault:
         response = self._request(
             "DELETE",
             f"/api/v4/secrets/{name}",
-            params={
+            payload={
                 "projectId": project_id,
                 "environment": environment,
                 "secretPath": secret_path,
