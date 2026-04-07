@@ -47,13 +47,28 @@ class WorkspaceProviderBinding:
             f"Provider '{self.provider_name}' is missing structured definition payload"
         )
 
+    @property
+    def has_definition(self) -> bool:
+        definition_payload = self.entry.get("definition")
+        if not isinstance(definition_payload, dict):
+            return False
+        return bool(definition_payload.get("resources"))
+
+    @property
+    def is_scoped(self) -> bool:
+        return bool(self.entry.get("enforce_scoped_requests")) and self.has_definition
+
     def list_resource_scopes(self) -> List[str]:
+        if not self.is_scoped:
+            return []
         return [
             build_resource_scope(self.provider_name, resource_id)
             for resource_id in self.definition.list_resource_ids()
         ]
 
     def list_action_scopes(self) -> List[str]:
+        if not self.is_scoped:
+            return []
         return [
             build_action_scope(self.provider_name, action_id)
             for action_id in self.definition.list_action_ids()

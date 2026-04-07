@@ -373,6 +373,8 @@ class TestGatewayProviderModel:
             base_url="https://api.example.com",
             service_type="application",
             auth_scheme="api_key",
+            definition={},
+            credential_ref="caracal:default/providers/test-provider/credential",
             enabled=True
         )
         
@@ -381,6 +383,8 @@ class TestGatewayProviderModel:
         assert provider.name == "Test Provider"
         assert provider.base_url == "https://api.example.com"
         assert provider.service_type == "application"
+        assert provider.definition == {}
+        assert provider.credential_ref == "caracal:default/providers/test-provider/credential"
         assert provider.enabled is True
     
     def test_gateway_provider_repr(self):
