@@ -322,7 +322,8 @@ class DatabaseConnectionManager:
         with self._engine.connect() as conn:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema} CASCADE"))
             conn.commit()
-        logger.info("Schema '%s' dropped", schema)
+        # `schema` is a PostgreSQL schema name (e.g., ws_myapp_20260101_abc12345), not a credential.
+        logger.info("Schema '%s' dropped", schema)  # lgtm[py/clear-text-logging-of-sensitive-data]
 
     def close(self) -> None:
         """Dispose of engine and close all pooled connections."""

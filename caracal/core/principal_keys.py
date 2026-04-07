@@ -149,7 +149,8 @@ def generate_and_store_principal_keypair(
             )
     except VaultError as exc:
         raise PrincipalKeyStorageError(
-            f"Failed to provision principal signing keypair in vault ({org_id}/{env_id}/{private_secret_name})."
+            "Failed to provision principal signing keypair in vault "
+            f"({org_id}/{env_id}/{private_secret_name}): {exc}"
         ) from exc
 
     public_pem = _vault_get_secret(
