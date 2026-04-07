@@ -970,6 +970,7 @@ class GatewayProvider(Base):
     definition = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     resources = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
     actions = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    enforce_scoped_requests = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     auth_metadata = Column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
     provider_layer = Column(String(50), nullable=False, default="user_provider", server_default="user_provider", index=True)
     template_id = Column(String(255), nullable=True)

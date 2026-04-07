@@ -668,6 +668,10 @@ def build_provider_record(
         if enforce_scoped_requests is None
         else bool(enforce_scoped_requests)
     )
+    if scoped_requests_enabled and not normalized_resources:
+        raise ProviderCatalogError(
+            "Scoped providers require a structured definition with at least one resource and action."
+        )
 
     return asdict(
         ProviderRecord(
@@ -740,38 +744,10 @@ def resolve_auth_headers(
 
 
 def system_templates() -> List[Dict[str, Any]]:
-    templates: List[Dict[str, Any]] = []
-    for service_type, patterns in sorted(PROVIDER_PATTERNS.items()):
-        for pattern in patterns:
-            resources = build_resources_from_pattern(pattern)
-            definition = build_definition_payload(
-                definition_id=pattern.key,
-                service_type=service_type,
-                display_name=pattern.label,
-                auth_scheme=pattern.recommended_auth_scheme,
-                base_url=pattern.base_url_example,
-                resources=resources,
-                metadata={"system_template": True, "managed_by": "caracal_catalog"},
-            )
-            templates.append(
-                {
-                    "template_id": pattern.key,
-                    "name": pattern.label,
-                    "display_name": pattern.label,
-                    "description": pattern.description,
-                    "service_type": service_type,
-                    "auth_scheme": pattern.recommended_auth_scheme,
-                    "base_url_example": pattern.base_url_example,
-                    "definition_id": pattern.key,
-                    "definition": definition,
-                    "resources": sorted(resources.keys()),
-                    "actions": summarize_catalog(resources)[1],
-                    "provider_layer": "system_template",
-                    "managed_by": "caracal_catalog",
-                    "read_only": True,
-                }
-            )
-    return templates
+    # Enterprise-only ready-to-use provider packs are composed from
+    # caracalEnterprise/. Shared core keeps this key stable but does not ship
+    # runnable system templates.
+    return []
 
 
 def catalog_snapshot() -> Dict[str, Any]:
