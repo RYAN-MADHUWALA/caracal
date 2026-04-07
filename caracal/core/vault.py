@@ -20,6 +20,8 @@ from uuid import uuid4
 
 import httpx
 
+from caracal.core.vault_key_material import generate_asymmetric_keypair_pem
+
 from caracal.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -28,7 +30,7 @@ _RATE_LIMIT_WINDOW = 60.0
 _RATE_LIMIT_DEFAULT = 120
 _HEALTH_CACHE_TTL_SECONDS = 15.0
 _LOCAL_MODE_VALUES = {"local", "dev", "development"}
-_MANAGED_MODE_VALUES = {"managed", "enterprise", "cloud"}
+_MANAGED_MODE_VALUES = {"managed", "cloud"}
 _RETRYABLE_STATUS_CODES = {429, 503}
 
 
@@ -50,7 +52,6 @@ def _read_env_or_dotenv(name: str) -> Optional[str]:
     candidates.extend(
         [
             repo_root / ".env",
-            repo_root / "caracalEnterprise" / ".env",
             Path(__file__).resolve().parents[2] / ".env",
         ]
     )
@@ -172,7 +173,6 @@ def _load_vault_config() -> _VaultConfig:
     base_url = (_read_env_or_dotenv("CARACAL_VAULT_URL") or "").strip()
     token = (_read_env_or_dotenv("CARACAL_VAULT_TOKEN") or "").strip()
     mode = (_read_env_or_dotenv("CARACAL_VAULT_MODE") or "managed").strip().lower()
-
     default_project = (
         _read_env_or_dotenv("CARACAL_VAULT_PROJECT_ID")
         or _read_env_or_dotenv("CARACAL_VAULT_PROJECT_SLUG")
@@ -319,6 +319,36 @@ class CaracalVault:
         if not environment:
             raise VaultConfigurationError("Vault environment context is missing.")
         return project_id, environment, secret_path
+
+    @staticmethod
+    def _normalize_secret_path(secret_path: str) -> str:
+        normalized = (secret_path or "/").strip()
+        if not normalized:
+            normalized = "/"
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        return normalized.rstrip("/") or "/"
+
+    def _resolve_secret_locator(self, secret_path: str, name: str) -> tuple[str, str]:
+        normalized_path = self._normalize_secret_path(secret_path)
+        normalized_name = (name or "").strip().strip("/")
+        if not normalized_name:
+            raise VaultConfigurationError("Vault secret name must not be empty.")
+
+        segments = [segment.strip() for segment in normalized_name.split("/") if segment.strip()]
+        if not segments:
+            raise VaultConfigurationError("Vault secret name must not be empty.")
+
+        name = segments[-1]
+        if len(segments) == 1:
+            return normalized_path, name
+
+        nested_path = "/".join(segments[:-1])
+        if normalized_path == "/":
+            resolved_path = f"/{nested_path}"
+        else:
+            resolved_path = f"{normalized_path}/{nested_path}"
+        return self._normalize_secret_path(resolved_path), name
 
     def _request(
         self,
@@ -571,6 +601,48 @@ class CaracalVault:
             allowed_statuses={200, 201, 202, 409},
         )
 
+    @staticmethod
+    def _is_missing_bootstrap_endpoint(error: VaultError) -> bool:
+        payload = str(error)
+        return (
+            "POST /api/caracal/keys/bootstrap" in payload
+            and "-> 404" in payload
+        )
+
+    def _bootstrap_asymmetric_keypair_via_secret_upsert(
+        self,
+        *,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        private_key_name: str,
+        public_key_name: str,
+        algorithm: str,
+    ) -> None:
+        private_exists = self._secret_exists(
+            project_id,
+            environment,
+            secret_path,
+            private_key_name,
+        )
+        public_exists = self._secret_exists(
+            project_id,
+            environment,
+            secret_path,
+            public_key_name,
+        )
+
+        if private_exists and public_exists:
+            return
+        if private_exists != public_exists:
+            raise VaultError(
+                "Asymmetric keypair bootstrap cannot continue: vault keypair state is inconsistent."
+            )
+
+        private_pem, public_pem = generate_asymmetric_keypair_pem(algorithm)
+        self._upsert_secret(project_id, environment, secret_path, private_key_name, private_pem)
+        self._upsert_secret(project_id, environment, secret_path, public_key_name, public_pem)
+
     def _secret_exists(self, project_id: str, environment: str, secret_path: str, name: str) -> bool:
         try:
             self._get_secret_value(project_id, environment, secret_path, name)
@@ -749,10 +821,17 @@ class CaracalVault:
         self._ensure_service_health()
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        secret_path, name = self._resolve_secret_locator(secret_path, name)
         existed = self._secret_exists(project_id, environment, secret_path, name)
 
         try:
-            entry_id = self._upsert_secret(project_id, environment, secret_path, name, plaintext)
+            entry_id = self._upsert_secret(
+                project_id,
+                environment,
+                secret_path,
+                name,
+                plaintext,
+            )
             now = datetime.now(timezone.utc).isoformat()
             self._audit_event(org_id, env_id, name, "update" if existed else "create", 1, actor, True)
             return VaultEntry(
@@ -780,6 +859,7 @@ class CaracalVault:
         self._ensure_service_health()
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        secret_path, name = self._resolve_secret_locator(secret_path, name)
         try:
             value = self._get_secret_value(project_id, environment, secret_path, name)
             self._audit_event(org_id, env_id, name, "read", 1, actor, True)
@@ -809,6 +889,7 @@ class CaracalVault:
         self._ensure_service_health()
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        secret_path, name = self._resolve_secret_locator(secret_path, name)
         try:
             token = self._sign_jwt_via_vault_api(
                 project_id=project_id,
@@ -841,6 +922,7 @@ class CaracalVault:
         self._ensure_service_health()
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        secret_path, name = self._resolve_secret_locator(secret_path, name)
         try:
             signature = self._sign_canonical_payload_via_vault_api(
                 project_id=project_id,
@@ -874,6 +956,7 @@ class CaracalVault:
         self._ensure_service_health()
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
+        secret_path, name = self._resolve_secret_locator(secret_path, name)
         try:
             self._delete_secret(project_id, environment, secret_path, name)
             self._audit_event(org_id, env_id, name, "delete", 1, actor, True)
@@ -923,15 +1006,42 @@ class CaracalVault:
             )
 
         project_id, environment, secret_path = self._resolve_context(org_id, env_id)
-        try:
-            self._bootstrap_asymmetric_keypair_via_vault_api(
-                project_id=project_id,
-                environment=environment,
-                secret_path=secret_path,
-                private_key_name=private_key_name,
-                public_key_name=public_key_name,
-                algorithm=normalized_algorithm,
+        secret_path, private_key_name = self._resolve_secret_locator(secret_path, private_key_name)
+
+        _, _, public_secret_path = self._resolve_context(org_id, env_id)
+        public_secret_path, public_key_name = self._resolve_secret_locator(
+            public_secret_path,
+            public_key_name,
+        )
+
+        if secret_path != public_secret_path:
+            raise VaultConfigurationError(
+                "Vault bootstrap requires private/public keys to share the same secret path namespace."
             )
+
+        try:
+            try:
+                self._bootstrap_asymmetric_keypair_via_vault_api(
+                    project_id=project_id,
+                    environment=environment,
+                    secret_path=secret_path,
+                    private_key_name=private_key_name,
+                    public_key_name=public_key_name,
+                    algorithm=normalized_algorithm,
+                )
+            except VaultError as exc:
+                if not self._is_missing_bootstrap_endpoint(exc):
+                    raise
+
+                self._bootstrap_asymmetric_keypair_via_secret_upsert(
+                    project_id=project_id,
+                    environment=environment,
+                    secret_path=secret_path,
+                    private_key_name=private_key_name,
+                    public_key_name=public_key_name,
+                    algorithm=normalized_algorithm,
+                )
+
             self._audit_event(org_id, env_id, private_key_name, "create", 1, actor, True)
             self._audit_event(org_id, env_id, public_key_name, "create", 1, actor, True)
         except Exception as exc:
