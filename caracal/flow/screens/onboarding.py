@@ -179,7 +179,12 @@ def _save_db_config_to_env(config: dict) -> bool:
                     content = re.sub(f"^{key}=.*$", f"{key}={val}", content, flags=re.MULTILINE)
                 else:
                     content += f"\n{key}={val}"
-            env_path.write_text(content)
+            # Credentials stored in .env by design; restrict permissions to owner-only.
+            env_path.write_text(content)  # lgtm[py/clear-text-storage-of-sensitive-data]
+            try:
+                env_path.chmod(0o600)
+            except Exception:
+                pass
             return True
         else:
             # Create a new .env file with database config
@@ -193,7 +198,12 @@ def _save_db_config_to_env(config: dict) -> bool:
                 f"CARACAL_DB_PASSWORD={config.get('password', '')}",
                 "",
             ]
-            env_path.write_text("\n".join(lines))
+            # Credentials stored in .env by design; restrict permissions to owner-only.
+            env_path.write_text("\n".join(lines))  # lgtm[py/clear-text-storage-of-sensitive-data]
+            try:
+                env_path.chmod(0o600)
+            except Exception:
+                pass
             return True
     except Exception:
         pass
