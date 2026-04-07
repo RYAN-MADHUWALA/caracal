@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 from click.testing import CliRunner
 import pytest
@@ -62,9 +63,7 @@ def provider_cli_env(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.unit
-def test_provider_add_creates_passthrough_provider_without_definition(
-    provider_cli_env,
-) -> None:
+def test_provider_add_creates_passthrough_provider_without_definition(provider_cli_env) -> None:
     registry, _snapshots, stored_credentials, _deleted = provider_cli_env
     runner = CliRunner()
 
@@ -72,6 +71,10 @@ def test_provider_add_creates_passthrough_provider_without_definition(
         deployment_cli.provider_add,
         [
             "openai-main",
+            "--mode",
+            "passthrough",
+            "--service-type",
+            "ai",
             "--base-url",
             "https://api.example.com",
             "--auth-scheme",
@@ -92,47 +95,57 @@ def test_provider_add_creates_passthrough_provider_without_definition(
 
 
 @pytest.mark.unit
-def test_provider_add_rejects_enterprise_only_template(provider_cli_env) -> None:
+def test_provider_add_rejects_scoped_catalog_in_passthrough_mode(provider_cli_env) -> None:
     runner = CliRunner()
 
     result = runner.invoke(
         deployment_cli.provider_add,
         [
-            "storage-main",
-            "--template",
-            "storage_objects",
+            "openai-main",
+            "--mode",
+            "passthrough",
+            "--service-type",
+            "ai",
+            "--base-url",
+            "https://api.example.com",
+            "--auth-scheme",
+            "bearer",
+            "--resource",
+            "responses=Responses",
+            "--action",
+            "responses:create:POST:/v1/responses",
             "--credential",
             "secret",
         ],
     )
 
     assert result.exit_code != 0
-    assert "enterprise-only" in result.output
+    assert "only valid in scoped mode" in result.output
 
 
 @pytest.mark.unit
-def test_provider_enrich_promotes_provider_to_scoped_mode(provider_cli_env) -> None:
+def test_provider_add_scoped_mode_captures_resources_and_actions(provider_cli_env) -> None:
     registry, _snapshots, _stored_credentials, _deleted = provider_cli_env
-    registry["openai-main"] = build_provider_record(
-        name="openai-main",
-        service_type="ai",
-        definition_id="openai-main",
-        auth_scheme="bearer",
-        base_url="https://api.example.com",
-        definition=None,
-        credential_ref="caracal:default/providers/openai-main/credential",
-        enforce_scoped_requests=False,
-    )
     runner = CliRunner()
 
     result = runner.invoke(
-        deployment_cli.provider_enrich,
+        deployment_cli.provider_add,
         [
             "openai-main",
+            "--mode",
+            "scoped",
+            "--service-type",
+            "ai",
+            "--base-url",
+            "https://api.example.com",
+            "--auth-scheme",
+            "bearer",
             "--resource",
             "models=Model catalog",
             "--action",
             "models:list:GET:/v1/models",
+            "--credential",
+            "sk-test",
         ],
     )
 
@@ -182,7 +195,8 @@ def test_provider_update_can_return_scoped_provider_to_passthrough(provider_cli_
         deployment_cli.provider_update,
         [
             "openai-main",
-            "--clear-definition",
+            "--mode",
+            "passthrough",
         ],
     )
 
@@ -252,3 +266,61 @@ def test_provider_remove_deletes_workspace_credential_binding(provider_cli_env) 
     assert deleted_credentials == [
         ("alpha", "caracal:default/providers/openai-main/credential")
     ]
+
+
+@pytest.mark.unit
+def test_provider_download_writes_provider_json(provider_cli_env, tmp_path) -> None:
+    registry, _snapshots, _stored_credentials, _deleted = provider_cli_env
+    registry["openai-main"] = build_provider_record(
+        name="openai-main",
+        service_type="ai",
+        definition_id="openai-main",
+        auth_scheme="bearer",
+        base_url="https://api.example.com",
+        definition=None,
+        credential_ref="caracal:default/providers/openai-main/credential",
+        enforce_scoped_requests=False,
+    )
+    runner = CliRunner()
+    output_path = tmp_path / "openai-main.json"
+
+    result = runner.invoke(
+        deployment_cli.provider_download,
+        ["openai-main", str(output_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    exported = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exported["provider"]["name"] == "openai-main"
+
+
+@pytest.mark.unit
+def test_provider_import_validates_and_stores_provider_json(provider_cli_env, tmp_path) -> None:
+    registry, _snapshots, _stored_credentials, _deleted = provider_cli_env
+    runner = CliRunner()
+    input_path = tmp_path / "import-provider.json"
+    input_path.write_text(
+        """
+{
+  "provider": {
+    "name": "imported-main",
+    "service_type": "ai",
+    "provider_definition": "imported-main",
+    "auth_scheme": "bearer",
+    "base_url": "https://api.example.com",
+    "credential_ref": "caracal:default/providers/imported-main/credential",
+    "enforce_scoped_requests": false
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        deployment_cli.provider_import,
+        [str(input_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "imported-main" in registry
+    assert registry["imported-main"]["service_type"] == "ai"

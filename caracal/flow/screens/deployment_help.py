@@ -137,8 +137,11 @@ def _show_command_reference(console: Console) -> None:
     provider_table.add_row("List Providers", "caracal provider list")
     provider_table.add_row(
         "Add Provider",
-        "caracal provider add <name> --resource <id> --action <resource:action:method:path> --credential=<secret>",
+        "caracal provider add <name> --service-type <type> --base-url <url> --auth-scheme <scheme> [--mode scoped --resource ... --action ...]",
     )
+    provider_table.add_row("Update Provider", "caracal provider update <name> [--mode passthrough|scoped]")
+    provider_table.add_row("Download Provider JSON", "caracal provider download <name> <path>")
+    provider_table.add_row("Import Provider JSON", "caracal provider import <path> [--replace]")
     provider_table.add_row("Test Provider", "caracal provider test <name>")
     provider_table.add_row("Remove Provider", "caracal provider remove <name>")
     
@@ -215,8 +218,12 @@ Direct provider access with workspace-local provider definitions:
 
 ```bash
 caracal provider add my-provider \
-  --resource model.inference \
-  --action model.inference:invoke:POST:/v1/infer \
+    --service-type ai \
+    --mode scoped \
+    --base-url https://api.example.com \
+    --auth-scheme bearer \
+    --resource inference=Inference \
+    --action inference:invoke:POST:/v1/infer \
   --credential=<your-key>
 ```
 
