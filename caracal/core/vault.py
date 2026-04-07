@@ -1043,21 +1043,9 @@ class CaracalVault:
         )
 
         if response.status_code == 404:
-            response = self._request(
-                "GET",
-                "/api/secrets",
-                params={
-                    "secret_name": name,
-                    "project_id": project_id,
-                    "environment": environment,
-                    "path": secret_path,
-                },
-                allowed_statuses={200, 404},
+            raise SecretNotFound(
+                f"Secret '{name}' not found in env '{environment}' for project '{project_id}'."
             )
-            if response.status_code == 404:
-                raise SecretNotFound(
-                    f"Secret '{name}' not found in env '{environment}' for project '{project_id}'."
-                )
 
         payload = self._json(response)
         value = self._extract_secret_value(payload)
