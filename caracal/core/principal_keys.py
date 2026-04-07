@@ -30,6 +30,8 @@ _VAULT_BACKEND = PrincipalKeyBackend.VAULT.value
 _VAULT_BACKEND_ENV = "CARACAL_PRINCIPAL_KEY_BACKEND"
 _VAULT_ORG_ENV = "CARACAL_VAULT_ORG_ID"
 _VAULT_ENV_ENV = "CARACAL_VAULT_ENV_ID"
+_VAULT_PROJECT_ENV = "CARACAL_VAULT_PROJECT_ID"
+_VAULT_ENVIRONMENT_ENV = "CARACAL_VAULT_ENVIRONMENT"
 _VAULT_KEY_PREFIX_ENV = "CARACAL_VAULT_PRINCIPAL_KEY_PREFIX"
 
 _DEFAULT_VAULT_ORG = "caracal"
@@ -69,8 +71,16 @@ def _resolve_backend() -> str:
 
 
 def _resolve_vault_context() -> tuple[str, str]:
-    org_id = (os.getenv(_VAULT_ORG_ENV) or _DEFAULT_VAULT_ORG).strip()
-    env_id = (os.getenv(_VAULT_ENV_ENV) or _DEFAULT_VAULT_ENV).strip()
+    org_id = (
+        os.getenv(_VAULT_ORG_ENV)
+        or os.getenv(_VAULT_PROJECT_ENV)
+        or _DEFAULT_VAULT_ORG
+    ).strip()
+    env_id = (
+        os.getenv(_VAULT_ENV_ENV)
+        or os.getenv(_VAULT_ENVIRONMENT_ENV)
+        or _DEFAULT_VAULT_ENV
+    ).strip()
     if not org_id or not env_id:
         raise PrincipalKeyStorageError(
             "Vault context is incomplete. "

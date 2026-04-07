@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,265 @@ _HEALTH_CACHE_TTL_SECONDS = 15.0
 _LOCAL_MODE_VALUES = {"local", "dev", "development"}
 _MANAGED_MODE_VALUES = {"managed", "cloud"}
 _RETRYABLE_STATUS_CODES = {429, 503}
+_LOCAL_BOOTSTRAP_TOKEN_MARKERS = {"dev-local-token", "enterprise-local-token"}
+_LOCAL_BOOTSTRAP_VAULT_HOSTS = {"localhost", "127.0.0.1", "vault"}
+
+
+def _truncate_detail(detail: str, limit: int = 300) -> str:
+    normalized = (detail or "").strip()
+    if not normalized:
+        return ""
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "..."
+
+
+def _json_object(response: httpx.Response) -> dict[str, Any]:
+    if not response.content:
+        return {}
+    try:
+        payload = response.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_string(payload: dict[str, Any], *paths: tuple[str, ...]) -> Optional[str]:
+    for path in paths:
+        cursor: Any = payload
+        found = True
+        for key in path:
+            if isinstance(cursor, dict) and key in cursor:
+                cursor = cursor[key]
+            else:
+                found = False
+                break
+        if found and isinstance(cursor, str) and cursor.strip():
+            return cursor.strip()
+    return None
+
+
+def _is_local_bootstrap_token(token: str) -> bool:
+    return (token or "").strip().lower() in _LOCAL_BOOTSTRAP_TOKEN_MARKERS
+
+
+def _is_local_bootstrap_vault_url(base_url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse((base_url or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in _LOCAL_BOOTSTRAP_VAULT_HOSTS
+
+
+def _resolve_local_sidecar_token_and_project(
+    *,
+    base_url: str,
+    current_project: str,
+) -> tuple[str, str]:
+    email = (
+        _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_EMAIL")
+        or "admin@caracal.local"
+    ).strip()
+    password = (
+        _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_PASSWORD")
+        or "CaracalVaultDev123!"
+    ).strip()
+    desired_org = (
+        _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_ORGANIZATION")
+        or "caracal-local"
+    ).strip()
+    desired_project_slug = (
+        current_project
+        or _read_env_or_dotenv("CARACAL_VAULT_BOOTSTRAP_PROJECT_SLUG")
+        or "caracal"
+    ).strip()
+
+    if not email or not password:
+        raise VaultConfigurationError(
+            "Local vault bootstrap credentials are incomplete. "
+            "Set CARACAL_VAULT_BOOTSTRAP_EMAIL and CARACAL_VAULT_BOOTSTRAP_PASSWORD."
+        )
+
+    headers = {"Content-Type": "application/json"}
+    with httpx.Client(
+        base_url=base_url.rstrip("/"),
+        timeout=httpx.Timeout(10.0),
+    ) as bootstrap_client:
+        bootstrap_response = bootstrap_client.post(
+            "/api/v1/admin/bootstrap",
+            json={
+                "email": email,
+                "password": password,
+                "organization": desired_org,
+            },
+            headers=headers,
+        )
+        if bootstrap_response.status_code not in {200, 201, 400, 404, 409}:
+            raise VaultConfigurationError(
+                "Local vault bootstrap failed: "
+                f"{bootstrap_response.status_code} {_truncate_detail(bootstrap_response.text)}"
+            )
+
+        login_response = bootstrap_client.post(
+            "/api/v3/auth/login",
+            json={"email": email, "password": password},
+            headers=headers,
+        )
+        if login_response.status_code != 200:
+            raise VaultConfigurationError(
+                "Local vault login failed during token recovery: "
+                f"{login_response.status_code} {_truncate_detail(login_response.text)}"
+            )
+
+        login_payload = _json_object(login_response)
+        base_token = _extract_string(
+            login_payload,
+            ("accessToken",),
+            ("access_token",),
+            ("token",),
+        )
+        if base_token is None:
+            raise VaultConfigurationError(
+                "Local vault login succeeded but did not return an access token."
+            )
+
+        org_response = bootstrap_client.get(
+            "/api/v1/organization",
+            headers={"Authorization": f"Bearer {base_token}"},
+        )
+        if org_response.status_code != 200:
+            raise VaultConfigurationError(
+                "Failed to resolve local vault organization context: "
+                f"{org_response.status_code} {_truncate_detail(org_response.text)}"
+            )
+
+        org_payload = _json_object(org_response)
+        organizations = org_payload.get("organizations")
+        if not isinstance(organizations, list) or not organizations:
+            raise VaultConfigurationError(
+                "Local vault organization lookup did not return any organizations."
+            )
+
+        selected_org: Optional[dict[str, Any]] = None
+        desired_org_lower = desired_org.lower()
+        for organization in organizations:
+            if not isinstance(organization, dict):
+                continue
+            candidates = {
+                str(organization.get("id") or "").strip().lower(),
+                str(organization.get("slug") or "").strip().lower(),
+                str(organization.get("name") or "").strip().lower(),
+            }
+            if desired_org_lower in candidates:
+                selected_org = organization
+                break
+        if selected_org is None:
+            selected_org = organizations[0] if isinstance(organizations[0], dict) else None
+        if selected_org is None:
+            raise VaultConfigurationError("Unable to resolve a valid local vault organization.")
+
+        organization_id = str(selected_org.get("id") or "").strip()
+        if not organization_id:
+            raise VaultConfigurationError("Local vault organization is missing an id.")
+
+        select_response = bootstrap_client.post(
+            "/api/v3/auth/select-organization",
+            json={"organizationId": organization_id},
+            headers={
+                "Authorization": f"Bearer {base_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        if select_response.status_code != 200:
+            raise VaultConfigurationError(
+                "Failed to scope local vault session to organization: "
+                f"{select_response.status_code} {_truncate_detail(select_response.text)}"
+            )
+
+        scoped_payload = _json_object(select_response)
+        scoped_token = _extract_string(
+            scoped_payload,
+            ("token",),
+            ("accessToken",),
+            ("access_token",),
+        )
+        if scoped_token is None:
+            raise VaultConfigurationError(
+                "Local vault organization selection did not return a scoped token."
+            )
+
+        auth_headers = {"Authorization": f"Bearer {scoped_token}", "Content-Type": "application/json"}
+
+        project_response = bootstrap_client.get("/api/v1/projects", headers=auth_headers)
+        if project_response.status_code != 200:
+            raise VaultConfigurationError(
+                "Failed to resolve local vault project context: "
+                f"{project_response.status_code} {_truncate_detail(project_response.text)}"
+            )
+        projects_payload = _json_object(project_response)
+        projects = projects_payload.get("projects")
+        if not isinstance(projects, list):
+            projects = []
+
+        selected_project: Optional[dict[str, Any]] = None
+        desired_project_lower = desired_project_slug.lower()
+        for project in projects:
+            if not isinstance(project, dict):
+                continue
+            candidates = {
+                str(project.get("id") or "").strip().lower(),
+                str(project.get("slug") or "").strip().lower(),
+                str(project.get("name") or "").strip().lower(),
+            }
+            if desired_project_lower in candidates:
+                selected_project = project
+                break
+
+        if selected_project is None:
+            create_response = bootstrap_client.post(
+                "/api/v1/projects",
+                headers=auth_headers,
+                json={
+                    "projectName": desired_project_slug.replace("-", " ").title() or "Caracal",
+                    "projectDescription": "Caracal OSS runtime project",
+                    "slug": desired_project_slug,
+                },
+            )
+            if create_response.status_code in {200, 201}:
+                created_payload = _json_object(create_response)
+                if isinstance(created_payload.get("project"), dict):
+                    selected_project = created_payload["project"]
+            elif create_response.status_code == 409:
+                refresh_response = bootstrap_client.get("/api/v1/projects", headers=auth_headers)
+                if refresh_response.status_code == 200:
+                    refreshed_payload = _json_object(refresh_response)
+                    refreshed_projects = refreshed_payload.get("projects")
+                    if isinstance(refreshed_projects, list):
+                        for project in refreshed_projects:
+                            if not isinstance(project, dict):
+                                continue
+                            if str(project.get("slug") or "").strip().lower() == desired_project_lower:
+                                selected_project = project
+                                break
+            else:
+                raise VaultConfigurationError(
+                    "Failed to create local vault project context: "
+                    f"{create_response.status_code} {_truncate_detail(create_response.text)}"
+                )
+
+        if selected_project is None:
+            raise VaultConfigurationError(
+                "Local vault project context is unavailable after bootstrap/login."
+            )
+
+        project_id = str(selected_project.get("id") or "").strip()
+        if not project_id:
+            raise VaultConfigurationError("Local vault project context is missing an id.")
+
+    return scoped_token, project_id
 
 
 def _read_env_or_dotenv(name: str) -> Optional[str]:
@@ -214,6 +474,17 @@ def _load_vault_config() -> _VaultConfig:
         raise VaultConfigurationError(
             "CARACAL_VAULT_MODE local/dev is forbidden in runtime paths."
         )
+
+    if token and _is_local_bootstrap_token(token) and _is_local_bootstrap_vault_url(base_url):
+        recovered_token, recovered_project = _resolve_local_sidecar_token_and_project(
+            base_url=base_url,
+            current_project=default_project,
+        )
+        token = recovered_token
+        if recovered_project:
+            default_project = recovered_project
+            os.environ.setdefault("CARACAL_VAULT_PROJECT_ID", recovered_project)
+        os.environ["CARACAL_VAULT_TOKEN"] = recovered_token
 
     if not base_url:
         raise VaultConfigurationError("CARACAL_VAULT_URL is required for vault operations.")
@@ -667,6 +938,35 @@ class CaracalVault:
         if response.status_code in {200, 201}:
             payload = self._json(response)
             return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
+
+        batch_response = self._request(
+            "POST",
+            "/api/v4/secrets/batch",
+            payload={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "secrets": [{"secretKey": name, "secretValue": value}],
+            },
+            allowed_statuses={200, 201, 404, 405, 409},
+        )
+        if batch_response.status_code in {200, 201}:
+            payload = self._json(batch_response)
+            created = payload.get("secrets")
+            if isinstance(created, list) and created and isinstance(created[0], dict):
+                first = created[0]
+                return str(first.get("id") or first.get("_id") or name)
+            return name
+        if batch_response.status_code == 409:
+            retry_response = self._request(
+                "PATCH",
+                f"/api/v4/secrets/{name}",
+                payload=v4_body,
+                allowed_statuses={200, 201, 404, 405},
+            )
+            if retry_response.status_code in {200, 201}:
+                payload = self._json(retry_response)
+                return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
 
         legacy_body = {
             "secret_name": name,
