@@ -9,8 +9,8 @@ import pytest
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from caracal.core.authority import AuthorityEvaluator, AuthorityDecision
-from caracal.db.models import ExecutionMandate, Principal, AuthorityPolicy
+from caracal.core.authority import AuthorityEvaluator
+from caracal.db.models import ExecutionMandate
 from tests.helpers.crypto_signing import sign_mandate_for_test
 
 

@@ -5,15 +5,12 @@ Tests the integration between mandate management and delegation graph,
 ensuring that delegation operations work correctly with mandate lifecycle.
 """
 import pytest
-from datetime import datetime, timedelta
 from uuid import uuid4
 
 from caracal.core.mandate import MandateManager
 from caracal.core.delegation_graph import DelegationGraph
 from caracal.core.principal_keys import generate_and_store_principal_keypair
-from caracal.db.models import Principal, ExecutionMandate, AuthorityPolicy, DelegationEdgeModel
-from tests.fixtures.database import db_session, in_memory_db_engine
-
+from caracal.db.models import Principal, AuthorityPolicy, DelegationEdgeModel
 
 def _make_principal(
     principal_id,
