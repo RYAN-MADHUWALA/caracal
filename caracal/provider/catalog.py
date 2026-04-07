@@ -764,19 +764,21 @@ def catalog_snapshot() -> Dict[str, Any]:
     }
 
 
-def workspace_to_gateway_payload(
+def workspace_to_gateway_sync_record(
     provider_name: str,
     entry: Dict[str, Any],
     *,
     organization_id: Optional[str],
     credential_storage: str = "gateway_vault",
 ) -> Dict[str, Any]:
-    definition = dict(entry.get("definition") or {})
-    resources = dict(definition.get("resources") or {})
-    if not resources:
-        raise ProviderCatalogError(
-            f"Provider '{provider_name}' is missing structured resources and cannot be mapped to gateway mode."
-        )
+    """Map an OSS workspace provider into enterprise sync metadata only.
+
+    Sync import carries the shared contract fields needed for enterprise review
+    and rebinding, but it never promotes OSS credential refs or edition-local
+    template ownership into gateway runtime state.
+    """
+    raw_definition = entry.get("definition")
+    definition = dict(raw_definition) if isinstance(raw_definition, dict) and raw_definition else None
     return build_provider_record(
         name=provider_name,
         service_type=str(entry.get("service_type") or entry.get("provider_type") or "application"),
@@ -792,20 +794,11 @@ def workspace_to_gateway_payload(
         tags=entry.get("tags") or [],
         metadata=entry.get("metadata") or {},
         auth_header_name=(entry.get("auth_metadata") or {}).get("header_name"),
-        credential_ref=entry.get("credential_ref"),
+        credential_ref=None,
         credential_storage=credential_storage,
         provider_layer="user_provider",
-        template_id=entry.get("template_id"),
-        managed_by=entry.get("managed_by"),
+        template_id=None,
+        managed_by=None,
         organization_id=organization_id,
         existing=entry,
     )
-
-
-def gateway_to_workspace_entry(record: Dict[str, Any]) -> Dict[str, Any]:
-    entry = dict(record)
-    definition = dict(record.get("definition") or {})
-    entry["definition"] = definition
-    entry["provider_definition"] = str(record.get("provider_definition") or definition.get("definition_id") or record.get("name") or "custom")
-    entry["name"] = str(record.get("name") or record.get("provider_id") or "provider")
-    return entry
