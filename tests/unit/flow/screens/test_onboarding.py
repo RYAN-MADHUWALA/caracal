@@ -81,3 +81,23 @@ def test_normalize_workspace_merkle_hardcut_config_migrates_software_backend(tmp
     assert cfg["merkle"]["vault_key_ref"] == "${CARACAL_VAULT_MERKLE_SIGNING_KEY_REF}"
     assert cfg["merkle"]["vault_public_key_ref"] == "${CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF}"
     assert "private_key_path" not in cfg["merkle"]
+
+
+def test_select_persisted_workspace_schema_keeps_existing_schema() -> None:
+    assert (
+        onboarding._select_persisted_workspace_schema(
+            "ws_lsf",
+            "ws_lsf_20260407120000_deadbeef",
+        )
+        == "ws_lsf"
+    )
+
+
+def test_select_persisted_workspace_schema_uses_proposed_when_missing() -> None:
+    assert (
+        onboarding._select_persisted_workspace_schema(
+            "",
+            "ws_lsf_20260407120000_deadbeef",
+        )
+        == "ws_lsf_20260407120000_deadbeef"
+    )

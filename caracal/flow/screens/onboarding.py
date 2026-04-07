@@ -791,6 +791,17 @@ def _resolve_workspace_schema(workspace_name: str, context: dict) -> str:
     return f"ws_{safe_slug}_{created_tag}_{suffix}"
 
 
+def _select_persisted_workspace_schema(
+    existing_schema: Optional[str],
+    proposed_schema: str,
+) -> str:
+    """Preserve any existing schema to keep workspace data stable across UX paths."""
+    normalized_existing = str(existing_schema or "").strip()
+    if normalized_existing:
+        return normalized_existing
+    return proposed_schema
+
+
 def _normalize_workspace_merkle_hardcut_config(workspace_path: Path) -> None:
     """Normalize workspace config to hard-cut Merkle vault signing settings."""
     config_file = workspace_path / "config.yaml"
@@ -992,6 +1003,7 @@ def _load_existing_db_config(wizard: Wizard, console: Console) -> Any:
             "database": db_section.get("database", "caracal"),
             "username": db_section.get("user", "caracal"),
             "password": db_section.get("password", ""),
+            "schema": str(db_section.get("schema", "")).strip(),
         }
         console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Using existing PostgreSQL configuration[/]")
         console.print(f"  [{Colors.DIM}]  Host:     {env_config['host']}:{env_config['port']}[/]")
@@ -1710,6 +1722,11 @@ def run_onboarding(
         workspace_name = wizard.context.get("workspace_name", "default")
         # Derive or resolve workspace schema name.
         workspace_schema = _resolve_workspace_schema(workspace_name, wizard.context)
+        if isinstance(db_config_data, dict) and db_config_data.get("schema"):
+            workspace_schema = _select_persisted_workspace_schema(
+                db_config_data.get("schema"),
+                workspace_schema,
+            )
         
         config_file: Optional[Path] = None
 
@@ -1733,11 +1750,10 @@ def run_onboarding(
                     if isinstance(config_yaml, dict)
                     else None
                 )
-                if existing_schema:
-                    import re as _re_schema
-                    _strong_schema_pattern = r"^ws_[a-z0-9_]+_\d{14}_[0-9a-f]{8}$"
-                    if _re_schema.match(_strong_schema_pattern, str(existing_schema)):
-                        workspace_schema = str(existing_schema)
+                workspace_schema = _select_persisted_workspace_schema(
+                    existing_schema,
+                    workspace_schema,
+                )
                 
                 # Update database section — include schema for workspace isolation
                 config_yaml['database'] = {
