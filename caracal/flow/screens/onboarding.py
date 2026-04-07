@@ -648,6 +648,13 @@ def _step_config(wizard: Wizard) -> Any:
         config_path = Path(workspace_path)
     else:
         config_path = get_workspace().root
+
+    # Keep workspace config aligned with hard-cut requirements before any
+    # downstream load/validation paths run.
+    try:
+        _normalize_workspace_merkle_hardcut_config(config_path)
+    except Exception:
+        pass
     
     # If workspace was just created, initialize fresh config
     if wizard.context.get("workspace_existing") is False:
@@ -708,6 +715,8 @@ def _initialize_caracal_dir(path: Path, wipe: bool = False) -> None:
     if not config_path.exists():
         import yaml
 
+        vault_key_ref = os.environ.get("CARACAL_VAULT_MERKLE_SIGNING_KEY_REF", "")
+        vault_public_key_ref = os.environ.get("CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF", "")
         default_config = {
             "storage": {
                 "backup_dir": str(path / "backups"),
@@ -726,14 +735,17 @@ def _initialize_caracal_dir(path: Path, wipe: bool = False) -> None:
                 "db": 0,
             },
             "merkle": {
-                "signing_backend": "software",
+                "signing_backend": "vault",
                 "signing_algorithm": "ES256",
-                "private_key_path": str(path / "keys" / "merkle_signing_key.pem"),
+                "vault_key_ref": vault_key_ref,
+                "vault_public_key_ref": vault_public_key_ref,
             },
         }
         with open(config_path, "w") as f:
             f.write("# Caracal Core Configuration\n\n")
             yaml.safe_dump(default_config, f, default_flow_style=False, sort_keys=False)
+
+    _normalize_workspace_merkle_hardcut_config(path)
     
     # All authority data is managed by PostgreSQL.
     
@@ -777,6 +789,49 @@ def _resolve_workspace_schema(workspace_name: str, context: dict) -> str:
     max_slug_len = 63 - len("ws__") - len(created_tag) - len(suffix)
     safe_slug = slug[:max(8, max_slug_len)]
     return f"ws_{safe_slug}_{created_tag}_{suffix}"
+
+
+def _normalize_workspace_merkle_hardcut_config(workspace_path: Path) -> None:
+    """Normalize workspace config to hard-cut Merkle vault signing settings."""
+    config_file = workspace_path / "config.yaml"
+    if not config_file.exists():
+        return
+
+    try:
+        import yaml
+
+        config_yaml = yaml.safe_load(config_file.read_text()) or {}
+        if not isinstance(config_yaml, dict):
+            return
+
+        merkle = config_yaml.get("merkle")
+        if not isinstance(merkle, dict):
+            merkle = {}
+
+        vault_key_ref = os.environ.get("CARACAL_VAULT_MERKLE_SIGNING_KEY_REF", "")
+        vault_public_key_ref = os.environ.get("CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF", "")
+
+        updated_merkle = dict(merkle)
+        updated_merkle["signing_backend"] = "vault"
+        updated_merkle["signing_algorithm"] = updated_merkle.get("signing_algorithm") or "ES256"
+        updated_merkle["vault_key_ref"] = (
+            updated_merkle.get("vault_key_ref")
+            or vault_key_ref
+            or "${CARACAL_VAULT_MERKLE_SIGNING_KEY_REF}"
+        )
+        updated_merkle["vault_public_key_ref"] = (
+            updated_merkle.get("vault_public_key_ref")
+            or vault_public_key_ref
+            or "${CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF}"
+        )
+        updated_merkle.pop("private_key_path", None)
+
+        if merkle != updated_merkle:
+            config_yaml["merkle"] = updated_merkle
+            with open(config_file, "w") as f:
+                yaml.safe_dump(config_yaml, f, default_flow_style=False, sort_keys=False)
+    except Exception:
+        return
 
 
 def _validate_env_config(config: dict) -> list[str]:

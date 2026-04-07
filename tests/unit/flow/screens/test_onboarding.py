@@ -1,5 +1,7 @@
 from io import StringIO
+from pathlib import Path
 
+import yaml
 from rich.console import Console
 
 from caracal.flow.screens import onboarding
@@ -42,3 +44,40 @@ def test_step_principal_collects_identity_for_new_workspace(monkeypatch) -> None
         "kind": "human",
     }
     assert wizard.context["first_principal"] == result
+
+
+def test_initialize_caracal_dir_uses_vault_merkle_defaults(tmp_path) -> None:
+    workspace = tmp_path / "ws"
+
+    onboarding._initialize_caracal_dir(workspace, wipe=False)
+
+    cfg = yaml.safe_load((workspace / "config.yaml").read_text())
+    assert cfg["merkle"]["signing_backend"] == "vault"
+    assert "private_key_path" not in cfg["merkle"]
+
+
+def test_normalize_workspace_merkle_hardcut_config_migrates_software_backend(tmp_path) -> None:
+    workspace = tmp_path / "legacy-ws"
+    workspace.mkdir(parents=True)
+    cfg_path = workspace / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "merkle": {
+                    "signing_backend": "software",
+                    "signing_algorithm": "ES256",
+                    "private_key_path": str(Path("/tmp/legacy.pem")),
+                }
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    )
+
+    onboarding._normalize_workspace_merkle_hardcut_config(workspace)
+
+    cfg = yaml.safe_load(cfg_path.read_text())
+    assert cfg["merkle"]["signing_backend"] == "vault"
+    assert cfg["merkle"]["vault_key_ref"] == "${CARACAL_VAULT_MERKLE_SIGNING_KEY_REF}"
+    assert cfg["merkle"]["vault_public_key_ref"] == "${CARACAL_VAULT_MERKLE_PUBLIC_KEY_REF}"
+    assert "private_key_path" not in cfg["merkle"]
