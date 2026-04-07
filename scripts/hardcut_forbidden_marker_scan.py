@@ -128,6 +128,13 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
         owner_phase="Phase 7",
         repos=("opensource",),
     ),
+    MarkerDefinition(
+        key="vault_legacy_infisical_secret_endpoints",
+        description="Removed legacy Infisical /api/secrets transport paths and payload keys",
+        pattern=r"([\"']/api/secrets[\"']|[\"']secret_name[\"']|[\"']secret_value[\"'])",
+        owner_phase="Phase 7",
+        repos=("opensource",),
+    ),
 )
 
 TEXT_SUFFIXES = {

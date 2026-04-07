@@ -145,6 +145,7 @@ def test_marker_catalog_covers_phase_13_expansion_categories() -> None:
     assert "split_mode_markers" in marker_keys
     assert "single_lineage_residuals" in marker_keys
     assert "transitional_architecture_markers" in marker_keys
+    assert "vault_legacy_infisical_secret_endpoints" in marker_keys
 
 
 def test_gate_mode_requires_both_repositories_to_be_present(
@@ -179,6 +180,7 @@ def test_report_includes_owner_phase_for_each_marker() -> None:
     assert owner_phases["provider_legacy_contract_fields"] == "Phase 7"
     assert owner_phases["provider_legacy_secret_ref_schema_alias"] == "Phase 7"
     assert owner_phases["provider_configmanager_secret_usage"] == "Phase 7"
+    assert owner_phases["vault_legacy_infisical_secret_endpoints"] == "Phase 7"
 
 
 def test_provider_phase7_marker_counts_are_zero() -> None:
@@ -190,6 +192,7 @@ def test_provider_phase7_marker_counts_are_zero() -> None:
         "provider_legacy_contract_fields",
         "provider_legacy_secret_ref_schema_alias",
         "provider_configmanager_secret_usage",
+        "vault_legacy_infisical_secret_endpoints",
     ):
         marker = markers[marker_key]
         for repo_entry in marker["repos"].values():
