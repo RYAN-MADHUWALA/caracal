@@ -1259,6 +1259,15 @@ def _step_principal(wizard: Wizard) -> Any:
     """Step 3: Register first principal."""
     console = wizard.console
     prompt = FlowPrompt(console)
+
+    # Principal registration is only required during fresh onboarding for
+    # newly created workspaces. Selecting an existing workspace should never
+    # force identity creation in this flow.
+    if wizard.context.get("workspace_existing"):
+        console.print(
+            f"  [{Colors.INFO}]{Icons.INFO} Existing workspace selected — skipping principal registration.[/]"
+        )
+        return None
     
     # ── Existing workspace that was previously onboarded: skip ──
     if wizard.context.get("previously_onboarded") and "principal" in wizard.context.get("completed_steps", []):
@@ -1593,7 +1602,7 @@ def run_onboarding(
         WizardStep(
             key="principal",
             title="Register First Principal",
-            description="Create your first principal identity",
+            description="Create your first principal identity (new workspaces)",
             action=_step_principal,
             skippable=True,
             skip_message="You can register principals later from the main menu",
