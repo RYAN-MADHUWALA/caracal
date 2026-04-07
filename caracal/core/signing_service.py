@@ -9,7 +9,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
 from caracal.core.principal_keys import parse_vault_key_reference
-from caracal.core.vault import gateway_context, get_vault
+from caracal.core.vault import get_vault, vault_access_context
 
 
 class SigningServiceError(RuntimeError):
@@ -92,7 +92,7 @@ class SigningService:
     ) -> str:
         try:
             org_id, env_id, secret_name = self._resolve_signing_key_reference(principal_id)
-            with gateway_context():
+            with vault_access_context():
                 return get_vault().sign_jwt(
                     org_id=org_id,
                     env_id=env_id,
@@ -128,7 +128,7 @@ class SigningService:
 
         try:
             org_id, env_id, secret_name = self._resolve_signing_key_reference(principal_id)
-            with gateway_context():
+            with vault_access_context():
                 return get_vault().sign_canonical_payload(
                     org_id=org_id,
                     env_id=env_id,
@@ -194,7 +194,7 @@ class VaultReferenceJwtSigner:
         algorithm: str,
     ) -> str:
         try:
-            with gateway_context():
+            with vault_access_context():
                 return get_vault().sign_jwt(
                     org_id=self._org_id,
                     env_id=self._env_id,

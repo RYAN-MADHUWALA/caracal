@@ -106,10 +106,10 @@ class SecretsFlow:
         table.add_row("Tier", self._tier.title())
 
         try:
-            from caracal.core.vault import get_vault, gateway_context
+            from caracal.core.vault import get_vault, vault_access_context
 
             vault = get_vault()
-            with gateway_context():
+            with vault_access_context():
                 names = vault.list_secrets(self._org_id, self._env_id)
             table.add_row("Backend", "CaracalVault")
             table.add_row("Storage", "Vault-managed secret refs")
@@ -125,9 +125,9 @@ class SecretsFlow:
     def _show_secret_list(self) -> None:
         self.console.print("\n[bold cyan]Secret Refs[/bold cyan]\n")
         try:
-            from caracal.core.vault import get_vault, gateway_context
+            from caracal.core.vault import get_vault, vault_access_context
 
-            with gateway_context():
+            with vault_access_context():
                 names = get_vault().list_secrets(self._org_id, self._env_id)
             refs = [f"vault://{self._org_id or 'default'}/{self._env_id}/{name}" for name in names]
             backend_name = "caracal_vault"
@@ -160,9 +160,9 @@ class SecretsFlow:
             return
 
         try:
-            from caracal.core.vault import get_vault, gateway_context
+            from caracal.core.vault import get_vault, vault_access_context
             vault = get_vault()
-            with gateway_context():
+            with vault_access_context():
                 result = vault.rotate_master_key(self._org_id, self._env_id, actor="tui")
             self.console.print(
                 f"\n[green]Rotation complete.[/green]\n"
