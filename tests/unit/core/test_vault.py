@@ -273,16 +273,31 @@ def test_put_routes_nested_secret_name_to_secret_path(vault):
 @pytest.mark.unit
 def test_upsert_secret_uses_batch_fallback_when_v4_patch_returns_not_found(vault):
     responses = [
+        FakeResponse(status_code=200, payload={"folder": {"id": "folder-1"}}),
         FakeResponse(status_code=404, payload={"message": "missing"}),
         FakeResponse(status_code=200, payload={"secrets": [{"id": "batch-id"}]}),
     ]
 
     with patch.object(vault, "_request", side_effect=responses) as request:
-        entry_id = vault._upsert_secret("org-1", "env-1", "/", "api-key", "value")
+        entry_id = vault._upsert_secret("org-1", "env-1", "/keys", "api-key", "value")
 
     assert entry_id == "batch-id"
-    assert request.call_args_list[0].args[:2] == ("PATCH", "/api/v4/secrets/api-key")
-    assert request.call_args_list[1].args[:2] == ("POST", "/api/v4/secrets/batch")
+    assert request.call_args_list[0].args[:2] == ("POST", "/api/v2/folders")
+    assert request.call_args_list[1].args[:2] == ("PATCH", "/api/v4/secrets/api-key")
+    assert request.call_args_list[2].args[:2] == ("POST", "/api/v4/secrets/batch")
+
+
+@pytest.mark.unit
+def test_upsert_secret_ignores_existing_folder_error(vault):
+    responses = [
+        FakeResponse(status_code=400, payload={"message": "already exists"}, text="already exists"),
+        FakeResponse(status_code=200, payload={"secret": {"id": "entry-1"}}),
+    ]
+
+    with patch.object(vault, "_request", side_effect=responses):
+        entry_id = vault._upsert_secret("org-1", "env-1", "/keys", "api-key", "value")
+
+    assert entry_id == "entry-1"
 
 
 @pytest.mark.unit
