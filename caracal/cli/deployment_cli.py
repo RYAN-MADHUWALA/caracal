@@ -1281,6 +1281,12 @@ def provider_update(
         )
         next_credential_ref = None if (clear_credential or normalized_auth == "none") else existing.get("credential_ref")
 
+        if clear_credential and normalized_auth != "none" and not (credential or credential_ref):
+            raise click.ClickException(
+                "Authenticated providers require a configured credential. "
+                "Use --auth-scheme none if you want to remove it."
+            )
+
         if credential:
             next_credential_ref = store_workspace_provider_credential(
                 workspace=workspace,
@@ -1297,6 +1303,11 @@ def provider_update(
                     delete_workspace_provider_credential(workspace, stale_ref)
                 except SecretNotFoundError:
                     pass
+        elif not next_credential_ref:
+            raise click.ClickException(
+                "Authenticated providers require a configured credential. "
+                "Use --credential, --credential-ref, or switch auth to none."
+            )
 
         definition = None
         if not clear_definition:

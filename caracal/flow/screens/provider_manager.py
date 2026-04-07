@@ -815,7 +815,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         pattern = _prompt_provider_pattern(prompt, console, service_type)
         if pattern is None:
             template_mode = "custom"
-    if template_mode == "custom":
+    if template_mode == "custom" and pattern is None and service_type == "application":
         service_type = _prompt_service_type(prompt, console)
 
     name = _prompt_identifier(
@@ -976,23 +976,29 @@ def _update_provider(console: Console, state: FlowState) -> None:
         definition = entry.get("definition")
         if isinstance(definition, dict):
             resources = dict(definition.get("resources") or {})
+        if not resources:
+            console.print(
+                f"  [{Colors.WARNING}]{Icons.WARNING} This provider does not have a scoped catalog yet. "
+                f"Use Enrich Provider to add resources/actions before switching it to scoped mode.[/]"
+            )
+            Prompt.ask("Press Enter to continue", default="")
+            return
 
     stored_credential_ref = entry.get("credential_ref")
     if auth_scheme == "none" or credential_mode == "clear":
-        if stored_credential_ref:
-            try:
-                delete_workspace_provider_credential(workspace, stored_credential_ref)
-            except SecretNotFoundError:
-                pass
         stored_credential_ref = None
-    elif credential_mode == "store-new" and credential_value is not None:
-        stored_credential_ref = store_workspace_provider_credential(
-            workspace=workspace,
-            provider_id=selected,
-            value=credential_value,
-        )
     elif credential_mode == "existing-ref":
         stored_credential_ref = credential_ref
+    elif credential_mode == "store-new":
+        stored_credential_ref = None
+
+    if auth_scheme != "none" and credential_mode == "clear":
+        console.print(
+            f"  [{Colors.ERROR}]{Icons.ERROR} Authenticated providers need a credential. "
+            f"Switch auth to 'none' if you want to clear it.[/]"
+        )
+        Prompt.ask("Press Enter to continue", default="")
+        return
 
     metadata = dict(entry.get("metadata") or {})
     definition_payload = None
@@ -1029,6 +1035,21 @@ def _update_provider(console: Console, state: FlowState) -> None:
         console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Provider update cancelled.[/]")
         Prompt.ask("Press Enter to continue", default="")
         return
+
+    if auth_scheme == "none" or credential_mode == "clear":
+        existing_ref = entry.get("credential_ref")
+        if existing_ref:
+            try:
+                delete_workspace_provider_credential(workspace, existing_ref)
+            except SecretNotFoundError:
+                pass
+        stored_credential_ref = None
+    elif credential_mode == "store-new" and credential_value is not None:
+        stored_credential_ref = store_workspace_provider_credential(
+            workspace=workspace,
+            provider_id=selected,
+            value=credential_value,
+        )
 
     providers[selected] = build_provider_record(
         name=selected,
@@ -1201,6 +1222,8 @@ def _collect_connection_settings(
     prompt: FlowPrompt,
     provider_name: str,
     pattern: Optional[ProviderStarterPattern],
+    existing_entry: Optional[dict[str, object]],
+    allow_gateway_only: bool,
 ) -> tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
     console.print()
     console.print(
@@ -1210,12 +1233,19 @@ def _collect_connection_settings(
             border_style=Colors.PRIMARY,
         )
     )
-    _render_auth_scheme_table(console)
+    _render_auth_scheme_table(console, allow_gateway_only=allow_gateway_only)
 
-    suggested_auth = pattern.recommended_auth_scheme if pattern else "api_key"
+    visible_auth_schemes = [
+        scheme for scheme in sorted(_AUTH_SCHEME_GUIDANCE.keys())
+        if allow_gateway_only or scheme not in _GATEWAY_ONLY_AUTH
+    ]
+    existing_auth = str(existing_entry.get("auth_scheme") or "") if existing_entry else ""
+    suggested_auth = existing_auth or (pattern.recommended_auth_scheme if pattern else "api_key")
+    if suggested_auth not in visible_auth_schemes:
+        suggested_auth = visible_auth_schemes[0]
     auth_scheme = prompt.select(
         "Auth scheme",
-        sorted(_AUTH_SCHEME_GUIDANCE.keys()),
+        visible_auth_schemes,
         default=suggested_auth,
     )
 
@@ -1228,7 +1258,7 @@ def _collect_connection_settings(
         example=auth_info["example"],
     )
 
-    if auth_scheme in _GATEWAY_ONLY_AUTH:
+    if allow_gateway_only and auth_scheme in _GATEWAY_ONLY_AUTH:
         console.print(
             Panel(
                 "This auth scheme is stored correctly in open-source workspaces, but direct OSS broker execution does not translate it at runtime. Use the Enterprise gateway when you need token exchange or service-account mediation.",
@@ -1246,7 +1276,11 @@ def _collect_connection_settings(
     )
     base_url = prompt.text(
         "Base URL",
-        default="",
+        default=(
+            str(existing_entry.get("base_url") or (pattern.base_url_example if pattern else ""))
+            if existing_entry
+            else str(pattern.base_url_example if pattern else "")
+        ),
         validator=_validate_url_or_blank,
         required=False,
     )
@@ -1266,25 +1300,33 @@ def _collect_connection_settings(
         )
         auth_header_name = prompt.text(
             "Header name",
-            default="X-API-Key",
+            default=str((existing_entry.get("auth_metadata") or {}).get("header_name") or "X-API-Key") if existing_entry else "X-API-Key",
             validator=lambda value: _validate_non_empty("Header name", value),
         )
 
     if auth_scheme != "none":
         console.print(
             Panel(
-                "Credential values are stored as encrypted workspace secrets. New credential capture is multiline-safe and hidden by default. Existing secret refs are available when you already manage secrets separately.",
+                "Credential values are stored in the workspace vault. New credential capture is multiline-safe and hidden by default. Existing credential refs are available when you already manage secrets separately.",
                 title=f"[bold {Colors.INFO}]Credential Handling[/]",
                 border_style=Colors.PRIMARY,
             )
         )
+        has_existing_ref = bool(existing_entry and existing_entry.get("credential_ref"))
+        credential_choices = ["store-new", "existing-ref"]
+        default_credential_mode = "store-new"
+        if has_existing_ref:
+            credential_choices = ["keep-existing"] + credential_choices + ["clear"]
+            default_credential_mode = "keep-existing"
         credential_mode = prompt.select(
             "Credential source",
-            ["store-new", "existing-ref"],
-            default="store-new",
+            credential_choices,
+            default=default_credential_mode,
         )
 
-        if credential_mode == "store-new":
+        if credential_mode == "keep-existing":
+            credential_ref = str(existing_entry.get("credential_ref") or "")
+        elif credential_mode == "store-new":
             _print_field_help(
                 console,
                 purpose="Secret or token content for the provider. Multiline blocks are preserved exactly as typed.",
@@ -1306,6 +1348,7 @@ def _collect_connection_settings(
             )
             credential_ref = prompt.text(
                 "Existing credential ref",
+                default=str(existing_entry.get("credential_ref") or "") if existing_entry else "",
                 validator=lambda value: _validate_non_empty("Credential ref", value),
             )
 
@@ -1320,6 +1363,7 @@ def _collect_resource_catalog(
     provider_name: str,
     service_type: str,
     pattern: Optional[ProviderStarterPattern],
+    initial_resources: Optional[dict[str, dict]] = None,
 ) -> dict[str, dict]:
     console.print()
     console.print(
@@ -1330,8 +1374,8 @@ def _collect_resource_catalog(
         )
     )
 
-    resources: dict[str, dict] = {}
-    if pattern:
+    resources: dict[str, dict] = dict(initial_resources or {})
+    if pattern and not resources:
         _render_pattern_preview(console, provider_name, pattern)
         if prompt.confirm("Start with the suggested starter catalog?", default=True):
             resources = _build_resources_from_pattern(pattern)
@@ -1370,7 +1414,12 @@ def _collect_resource_catalog(
             _remove_resource_from_catalog(prompt, resources)
 
 
-def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[str, object]:
+def _collect_advanced_settings(
+    *,
+    console: Console,
+    prompt: FlowPrompt,
+    defaults: Optional[dict[str, object]] = None,
+) -> dict[str, object]:
     advanced: dict[str, object] = {
         "healthcheck_path": "/health",
         "timeout_seconds": 30,
@@ -1378,6 +1427,8 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
         "rate_limit_rpm": None,
         "version": None,
     }
+    if defaults:
+        advanced.update(defaults)
 
     console.print()
     console.print(
@@ -1400,7 +1451,7 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
     )
     advanced["healthcheck_path"] = prompt.text(
         "Health check path",
-        default="/health",
+        default=str(advanced["healthcheck_path"]),
         validator=_validate_path_prefix,
     )
 
@@ -1411,7 +1462,9 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
         used_for="Caracal stops execution when the upstream takes too long.",
         example="30",
     )
-    advanced["timeout_seconds"] = int(prompt.number("Timeout seconds", default=30, min_value=1))
+    advanced["timeout_seconds"] = int(
+        prompt.number("Timeout seconds", default=int(advanced["timeout_seconds"]), min_value=1)
+    )
 
     _print_field_help(
         console,
@@ -1420,7 +1473,9 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
         used_for="Controls how aggressively Caracal retries transient provider failures.",
         example="3",
     )
-    advanced["max_retries"] = int(prompt.number("Max retries", default=3, min_value=0))
+    advanced["max_retries"] = int(
+        prompt.number("Max retries", default=int(advanced["max_retries"]), min_value=0)
+    )
 
     _print_field_help(
         console,
@@ -1431,7 +1486,7 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
     )
     rate_limit_raw = prompt.text(
         "Rate limit rpm",
-        default="",
+        default=str(advanced["rate_limit_rpm"] or ""),
         validator=_validate_optional_int,
         required=False,
     )
@@ -1444,13 +1499,13 @@ def _collect_advanced_settings(*, console: Console, prompt: FlowPrompt) -> dict[
         used_for="Stored with the provider config for operator clarity and future migrations.",
         example="2026-03",
     )
-    version = prompt.text("Version label", default="", required=False)
+    version = prompt.text("Version label", default=str(advanced["version"] or ""), required=False)
     advanced["version"] = version or None
 
     return advanced
 
 
-def _prompt_service_type(prompt: FlowPrompt, console: Console) -> str:
+def _prompt_service_type(prompt: FlowPrompt, console: Console, default: str = "application") -> str:
     console.print()
     console.print(
         Panel(
@@ -1470,7 +1525,7 @@ def _prompt_service_type(prompt: FlowPrompt, console: Console) -> str:
     choice = prompt.select(
         "Service type",
         list(_SERVICE_TYPE_GUIDANCE.keys()) + ["custom"],
-        default="application",
+        default=default if default in _SERVICE_TYPE_GUIDANCE else "custom",
     )
     if choice != "custom":
         return choice
@@ -1490,7 +1545,7 @@ def _prompt_provider_pattern(
     console: Console,
     service_type: str,
 ) -> Optional[ProviderStarterPattern]:
-    patterns = list(_PROVIDER_PATTERNS.get(service_type, ()))
+    patterns = list(_available_patterns(service_type))
     if not patterns:
         return None
 
@@ -1574,7 +1629,7 @@ def _print_field_help(
 def _render_provider_shell(console: Console, workspace: str, subtitle: str) -> None:
     console.print(
         Panel(
-            f"[{Colors.PRIMARY}]Add Provider[/]",
+            f"[{Colors.PRIMARY}]Provider Lifecycle[/]",
             subtitle=f"[{Colors.HINT}]Workspace: {workspace} | {subtitle}[/]",
             border_style=Colors.INFO,
         )
@@ -1582,12 +1637,14 @@ def _render_provider_shell(console: Console, workspace: str, subtitle: str) -> N
     console.print()
 
 
-def _render_auth_scheme_table(console: Console) -> None:
+def _render_auth_scheme_table(console: Console, *, allow_gateway_only: bool) -> None:
     table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
     table.add_column("Scheme", style=Colors.PRIMARY)
     table.add_column("Input Expected", style=Colors.NEUTRAL)
     table.add_column("Execution Behavior", style=Colors.DIM)
     for scheme, info in _AUTH_SCHEME_GUIDANCE.items():
+        if not allow_gateway_only and scheme in _GATEWAY_ONLY_AUTH:
+            continue
         table.add_row(scheme, info["expects"], info["caracal_use"])
     console.print(table)
 
@@ -1854,6 +1911,7 @@ def _render_summary(
     credential_value: Optional[str],
     resources: dict[str, dict],
     advanced: dict[str, object],
+    mode: str,
 ) -> None:
     console.clear()
     _render_provider_shell(console, workspace, "Review the complete provider contract before it is saved.")
@@ -1866,6 +1924,7 @@ def _render_summary(
     summary.add_row("Service type", service_type)
     summary.add_row("Starter pattern", pattern.label if pattern else "custom")
     summary.add_row("Auth scheme", auth_scheme)
+    summary.add_row("Mode", mode)
     summary.add_row("Base URL", base_url or "(not set)")
     if auth_header_name:
         summary.add_row("Header name", auth_header_name)
@@ -1873,6 +1932,10 @@ def _render_summary(
         if credential_mode == "store-new":
             summary.add_row("Credential", _masked_secret_summary(credential_value or ""))
             summary.add_row("Secret ref", credential_ref or "(generated)")
+        elif credential_mode == "keep-existing":
+            summary.add_row("Credential", f"Keep existing ref: {credential_ref}")
+        elif credential_mode == "clear":
+            summary.add_row("Credential", "Remove configured credential")
         else:
             summary.add_row("Credential", f"Existing secret ref: {credential_ref}")
     summary.add_row("Health path", str(advanced["healthcheck_path"]))
@@ -1886,17 +1949,26 @@ def _render_summary(
     _render_catalog(console, provider_name, service_type, resources, pattern)
     console.print()
 
-    first_resource = next(iter(sorted(resources.keys())))
-    first_action = next(iter(sorted(resources[first_resource]["actions"].keys())))
-    console.print(
-        Panel(
-            f"Policy / mandate resource scope example:\n[bold]{build_resource_scope(provider_name, first_resource)}[/]\n\n"
-            f"Policy / mandate action scope example:\n[bold]{build_action_scope(provider_name, first_action)}[/]\n\n"
-            "These exact scopes control what principals can request, delegate, and execute. The method/path definitions above constrain how runtime requests are matched to those scopes.",
-            title=f"[bold {Colors.INFO}]Authority Preview[/]",
-            border_style=Colors.PRIMARY,
+    if resources:
+        first_resource = next(iter(sorted(resources.keys())))
+        first_action = next(iter(sorted(resources[first_resource]["actions"].keys())))
+        console.print(
+            Panel(
+                f"Policy / mandate resource scope example:\n[bold]{build_resource_scope(provider_name, first_resource)}[/]\n\n"
+                f"Policy / mandate action scope example:\n[bold]{build_action_scope(provider_name, first_action)}[/]\n\n"
+                "These exact scopes control what principals can request, delegate, and execute. The method/path definitions above constrain how runtime requests are matched to those scopes.",
+                title=f"[bold {Colors.INFO}]Authority Preview[/]",
+                border_style=Colors.PRIMARY,
+            )
         )
-    )
+    else:
+        console.print(
+            Panel(
+                "This provider will be saved in passthrough mode. It can be used for direct broker connectivity now, and you can add a scoped resource/action catalog later from Enrich Provider.",
+                title=f"[bold {Colors.INFO}]Passthrough Mode[/]",
+                border_style=Colors.PRIMARY,
+            )
+        )
 
 
 def _catalog_is_complete(resources: dict[str, dict]) -> bool:
@@ -1933,7 +2005,7 @@ def _resource_payload_from_starter(resource: ResourceStarter) -> dict:
 def _resource_examples(service_type: str, pattern: Optional[ProviderStarterPattern]) -> list[str]:
     if pattern:
         return [resource.resource_id for resource in pattern.resources]
-    for starter_pattern in _PROVIDER_PATTERNS.get(service_type, ()):
+    for starter_pattern in _available_patterns(service_type):
         return [resource.resource_id for resource in starter_pattern.resources]
     return ["records"]
 
@@ -1947,7 +2019,7 @@ def _action_examples(
         starter_resource = _find_pattern_resource(pattern, resource_id)
         if starter_resource:
             return [action.action_id for action in starter_resource.actions]
-    for starter_pattern in _PROVIDER_PATTERNS.get(service_type, ()):
+    for starter_pattern in _available_patterns(service_type):
         starter_resource = _find_pattern_resource(starter_pattern, resource_id)
         if starter_resource:
             return [action.action_id for action in starter_resource.actions]
