@@ -800,8 +800,23 @@ def _add_provider(console: Console, state: FlowState) -> None:
     _render_provider_shell(
         console,
         workspace,
-        "Guided setup with inline help, starter patterns, and secure credential capture.",
+        "Fast passthrough setup with starter templates, clean auth capture, and no required catalog editing.",
     )
+
+    template_mode = prompt.select(
+        "Setup source",
+        ["template", "custom"],
+        default="template",
+    )
+    pattern = None
+    service_type = "application"
+    if template_mode == "template":
+        service_type = _prompt_service_type(prompt, console)
+        pattern = _prompt_provider_pattern(prompt, console, service_type)
+        if pattern is None:
+            template_mode = "custom"
+    if template_mode == "custom":
+        service_type = _prompt_service_type(prompt, console)
 
     name = _prompt_identifier(
         prompt=prompt,
@@ -812,33 +827,27 @@ def _add_provider(console: Console, state: FlowState) -> None:
         example="openai-main",
         existing=providers.keys(),
     )
-    definition_choice = _prompt_identifier(
-        prompt=prompt,
-        console=console,
-        label="Definition ID",
-        purpose="Catalog ID describing the provider's API bindings.",
-        used_for="Identifies the correct integration structure for Caracal.",
-        example="openai.chat.api",
-        default=name,
+    definition_choice = resolve_provider_definition_id(
+        service_type=service_type,
+        requested_definition=pattern.key if pattern else name,
     )
-    service_type = _prompt_service_type(prompt, console)
-    pattern = _prompt_provider_pattern(prompt, console, service_type)
 
     auth_scheme, base_url, credential_mode, credential_value, credential_ref, auth_header_name = _collect_connection_settings(
         console=console,
         prompt=prompt,
         provider_name=name,
         pattern=pattern,
+        existing_entry=None,
+        allow_gateway_only=False,
     )
-    resources = _collect_resource_catalog(
-        console=console,
-        prompt=prompt,
-        workspace=workspace,
-        provider_name=name,
-        service_type=service_type,
-        pattern=pattern,
-    )
-    advanced = _collect_advanced_settings(console=console, prompt=prompt)
+    resources: dict[str, dict] = {}
+    advanced = {
+        "healthcheck_path": "/health",
+        "timeout_seconds": 30,
+        "max_retries": 3,
+        "rate_limit_rpm": None,
+        "version": None,
+    }
 
     stored_credential_ref = None
     if auth_scheme != "none":
@@ -859,6 +868,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         credential_value=credential_value,
         resources=resources,
         advanced=advanced,
+        mode="passthrough",
     )
 
     if not Confirm.ask(f"[{Colors.INFO}]Save provider '{name}'?[/]", default=True):
@@ -887,10 +897,12 @@ def _add_provider(console: Console, state: FlowState) -> None:
         version=advanced["version"],
         tags=[],
         metadata={"starter_pattern": pattern.key} if pattern else {},
+        template_id=pattern.key if pattern else None,
         auth_header_name=auth_header_name,
         credential_ref=stored_credential_ref,
         existing=providers.get(name),
         created_at=datetime.utcnow().isoformat(),
+        enforce_scoped_requests=False,
     )
     save_workspace_provider_registry(config_manager, workspace, providers)
 
@@ -899,6 +911,286 @@ def _add_provider(console: Console, state: FlowState) -> None:
     if state:
         state.add_recent_action(
             RecentAction.create("provider_add", f"Added provider {name}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
+
+
+def _update_provider(console: Console, state: FlowState) -> None:
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
+    console.clear()
+    _render_provider_shell(
+        console,
+        workspace,
+        "Update connection details, auth, runtime knobs, and passthrough/scoped mode.",
+    )
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    prompt = FlowPrompt(console)
+    names = sorted(providers.keys())
+    selected = prompt.select("Provider", names, default=names[0])
+    entry = dict(providers[selected] or {})
+    current_pattern = _resolve_pattern_by_key(_provider_template_label(entry))
+
+    mode = prompt.select(
+        "Execution mode",
+        ["passthrough", "scoped"],
+        default=_provider_mode(entry),
+    )
+    service_type = _prompt_service_type(
+        prompt,
+        console,
+        default=str(entry.get("service_type") or "application"),
+    )
+    definition_choice = resolve_provider_definition_id(
+        service_type=service_type,
+        requested_definition=str(entry.get("provider_definition") or selected),
+    )
+    auth_scheme, base_url, credential_mode, credential_value, credential_ref, auth_header_name = _collect_connection_settings(
+        console=console,
+        prompt=prompt,
+        provider_name=selected,
+        pattern=current_pattern,
+        existing_entry=entry,
+        allow_gateway_only=False,
+    )
+    advanced = _collect_advanced_settings(
+        console=console,
+        prompt=prompt,
+        defaults={
+            "healthcheck_path": str(entry.get("healthcheck_path") or "/health"),
+            "timeout_seconds": int(entry.get("timeout_seconds") or 30),
+            "max_retries": int(entry.get("max_retries") or 3),
+            "rate_limit_rpm": entry.get("rate_limit_rpm"),
+            "version": entry.get("version"),
+        },
+    )
+    resources = {}
+    if mode == "scoped":
+        definition = entry.get("definition")
+        if isinstance(definition, dict):
+            resources = dict(definition.get("resources") or {})
+
+    stored_credential_ref = entry.get("credential_ref")
+    if auth_scheme == "none" or credential_mode == "clear":
+        if stored_credential_ref:
+            try:
+                delete_workspace_provider_credential(workspace, stored_credential_ref)
+            except SecretNotFoundError:
+                pass
+        stored_credential_ref = None
+    elif credential_mode == "store-new" and credential_value is not None:
+        stored_credential_ref = store_workspace_provider_credential(
+            workspace=workspace,
+            provider_id=selected,
+            value=credential_value,
+        )
+    elif credential_mode == "existing-ref":
+        stored_credential_ref = credential_ref
+
+    metadata = dict(entry.get("metadata") or {})
+    definition_payload = None
+    if mode == "scoped":
+        definition_payload = _definition_payload_for_existing_resources(
+            entry,
+            provider_name=selected,
+            service_type=service_type,
+            definition_id=definition_choice,
+            auth_scheme=auth_scheme,
+            base_url=base_url or None,
+            metadata=metadata,
+        )
+
+    _render_summary(
+        console=console,
+        workspace=workspace,
+        provider_name=selected,
+        definition_id=definition_choice,
+        service_type=service_type,
+        pattern=current_pattern,
+        auth_scheme=auth_scheme,
+        base_url=base_url,
+        auth_header_name=auth_header_name,
+        credential_mode=credential_mode,
+        credential_ref=stored_credential_ref,
+        credential_value=credential_value,
+        resources=resources,
+        advanced=advanced,
+        mode=mode,
+    )
+
+    if not Confirm.ask(f"[{Colors.INFO}]Update provider '{selected}'?[/]", default=True):
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Provider update cancelled.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    providers[selected] = build_provider_record(
+        name=selected,
+        service_type=service_type,
+        definition_id=definition_choice,
+        auth_scheme=auth_scheme,
+        base_url=base_url or None,
+        definition=definition_payload,
+        healthcheck_path=str(advanced["healthcheck_path"]),
+        timeout_seconds=int(advanced["timeout_seconds"]),
+        max_retries=int(advanced["max_retries"]),
+        rate_limit_rpm=advanced["rate_limit_rpm"],
+        version=advanced["version"],
+        tags=list(entry.get("tags") or []),
+        metadata=metadata,
+        template_id=entry.get("template_id"),
+        auth_header_name=auth_header_name,
+        credential_ref=stored_credential_ref,
+        existing=entry,
+        created_at=str(entry.get("created_at") or datetime.utcnow().isoformat()),
+        enforce_scoped_requests=mode == "scoped",
+    )
+    save_workspace_provider_registry(config_manager, workspace, providers)
+
+    console.print()
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' updated.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_update", f"Updated provider {selected}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
+
+
+def _enrich_provider(console: Console, state: FlowState) -> None:
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
+    console.clear()
+    _render_provider_shell(
+        console,
+        workspace,
+        "Add or edit the scoped resource/action catalog for an existing provider.",
+    )
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    prompt = FlowPrompt(console)
+    names = sorted(providers.keys())
+    selected = prompt.select("Provider", names, default=names[0])
+    entry = dict(providers[selected] or {})
+    service_type = _prompt_service_type(
+        prompt,
+        console,
+        default=str(entry.get("service_type") or "application"),
+    )
+    pattern = None
+    starter_mode = prompt.select(
+        "Catalog starting point",
+        ["current", "template", "blank"],
+        default="current" if _provider_mode(entry) == "scoped" else "template",
+    )
+    if starter_mode == "template":
+        pattern = _prompt_provider_pattern(prompt, console, service_type)
+
+    initial_resources: dict[str, dict] = {}
+    if starter_mode == "current":
+        definition = entry.get("definition")
+        if isinstance(definition, dict):
+            initial_resources = dict(definition.get("resources") or {})
+    elif starter_mode == "template" and pattern:
+        initial_resources = _build_resources_from_pattern(pattern)
+
+    resources = _collect_resource_catalog(
+        console=console,
+        prompt=prompt,
+        workspace=workspace,
+        provider_name=selected,
+        service_type=service_type,
+        pattern=pattern,
+        initial_resources=initial_resources,
+    )
+    definition_choice = resolve_provider_definition_id(
+        service_type=service_type,
+        requested_definition=pattern.key if pattern else str(entry.get("provider_definition") or selected),
+    )
+    metadata = dict(entry.get("metadata") or {})
+    template_id = entry.get("template_id")
+    if pattern:
+        metadata["starter_pattern"] = pattern.key
+        template_id = pattern.key
+
+    advanced = {
+        "healthcheck_path": str(entry.get("healthcheck_path") or "/health"),
+        "timeout_seconds": int(entry.get("timeout_seconds") or 30),
+        "max_retries": int(entry.get("max_retries") or 3),
+        "rate_limit_rpm": entry.get("rate_limit_rpm"),
+        "version": entry.get("version"),
+    }
+    _render_summary(
+        console=console,
+        workspace=workspace,
+        provider_name=selected,
+        definition_id=definition_choice,
+        service_type=service_type,
+        pattern=pattern,
+        auth_scheme=str(entry.get("auth_scheme") or "api_key"),
+        base_url=str(entry.get("base_url") or ""),
+        auth_header_name=(entry.get("auth_metadata") or {}).get("header_name"),
+        credential_mode="keep-existing",
+        credential_ref=entry.get("credential_ref"),
+        credential_value=None,
+        resources=resources,
+        advanced=advanced,
+        mode="scoped",
+    )
+
+    if not Confirm.ask(f"[{Colors.INFO}]Save scoped catalog for '{selected}'?[/]", default=True):
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} Scoped enrichment cancelled.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    definition_payload = {
+        "definition_id": definition_choice,
+        "service_type": service_type,
+        "display_name": selected,
+        "auth_scheme": str(entry.get("auth_scheme") or "api_key"),
+        "default_base_url": entry.get("base_url"),
+        "resources": resources,
+        "metadata": metadata,
+    }
+    providers[selected] = build_provider_record(
+        name=selected,
+        service_type=service_type,
+        definition_id=definition_choice,
+        auth_scheme=str(entry.get("auth_scheme") or "api_key"),
+        base_url=entry.get("base_url"),
+        definition=definition_payload,
+        healthcheck_path=str(entry.get("healthcheck_path") or "/health"),
+        timeout_seconds=int(entry.get("timeout_seconds") or 30),
+        max_retries=int(entry.get("max_retries") or 3),
+        rate_limit_rpm=entry.get("rate_limit_rpm"),
+        version=entry.get("version"),
+        tags=list(entry.get("tags") or []),
+        metadata=metadata,
+        template_id=template_id,
+        auth_header_name=(entry.get("auth_metadata") or {}).get("header_name"),
+        credential_ref=entry.get("credential_ref"),
+        existing=entry,
+        created_at=str(entry.get("created_at") or datetime.utcnow().isoformat()),
+        enforce_scoped_requests=True,
+    )
+    save_workspace_provider_registry(config_manager, workspace, providers)
+
+    console.print()
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' enriched.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_enrich", f"Enriched provider {selected}", success=True)
         )
     Prompt.ask("Press Enter to continue", default="")
 

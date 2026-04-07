@@ -144,29 +144,29 @@ class _LocalCaracalVaultBackend:
 
     def get(self, ref: str) -> str:
         env_id, name = self._parse_ref(ref)
-        from caracal.core.vault import get_vault, gateway_context
+        from caracal.core.vault import get_vault, vault_access_context
 
-        with gateway_context():
+        with vault_access_context():
             return get_vault().get(self._org_id, env_id, name)
 
     def put(self, ref: str, value: str) -> None:
         env_id, name = self._parse_ref(ref)
-        from caracal.core.vault import get_vault, gateway_context
+        from caracal.core.vault import get_vault, vault_access_context
 
-        with gateway_context():
+        with vault_access_context():
             get_vault().put(self._org_id, env_id, name, value)
 
     def delete(self, ref: str) -> None:
         env_id, name = self._parse_ref(ref)
-        from caracal.core.vault import get_vault, gateway_context
+        from caracal.core.vault import get_vault, vault_access_context
 
-        with gateway_context():
+        with vault_access_context():
             get_vault().delete(self._org_id, env_id, name)
 
     def list_refs(self, org_id: str, env_id: str) -> list[str]:
-        from caracal.core.vault import get_vault, gateway_context
+        from caracal.core.vault import get_vault, vault_access_context
 
-        with gateway_context():
+        with vault_access_context():
             names = get_vault().list_secrets(org_id, env_id)
         return [f"caracal:{env_id}/{name}" for name in names]
 
