@@ -653,7 +653,10 @@ def provider(ctx):
     \b
     Examples:
     caracal provider list
-    caracal provider add endframe --resource "provider:endframe:resource:deployments" --action "provider:endframe:action:invoke" --credential endframe-api-key
+    caracal provider add endframe --service-type application --mode scoped --base-url https://api.endframe.dev --auth-scheme bearer --resource deployments=Deployments --action deployments:invoke:POST:/v1/deployments --credential endframe-api-key
+    caracal provider update endframe --mode passthrough
+    caracal provider download endframe ./endframe-provider.json
+    caracal provider import ./endframe-provider.json --replace
     caracal provider test endframe
     caracal provider remove endframe
     """
@@ -662,10 +665,19 @@ def provider(ctx):
 
 try:
     from caracal.cli.deployment_cli import (
-        provider_list, provider_add, provider_test, provider_remove
+        provider_add,
+        provider_download,
+        provider_import,
+        provider_list,
+        provider_remove,
+        provider_test,
+        provider_update,
     )
     provider.add_command(provider_list, name='list')
     provider.add_command(provider_add, name='add')
+    provider.add_command(provider_update, name='update')
+    provider.add_command(provider_download, name='download')
+    provider.add_command(provider_import, name='import')
     provider.add_command(provider_test, name='test')
     provider.add_command(provider_remove, name='remove')
 except ImportError:
