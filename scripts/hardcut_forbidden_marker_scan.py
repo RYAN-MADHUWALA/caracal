@@ -108,6 +108,26 @@ MARKER_DEFINITIONS: tuple[MarkerDefinition, ...] = (
         description="Transition sentinel and compatibility cleanup markers on active paths",
         pattern=r"(\bbackward-compat(?:ible)?\b|\bcompatibility layer\b|\btransition window\b|\btemporary blocker\b|\bguard file\b)",
     ),
+    MarkerDefinition(
+        key="provider_legacy_contract_fields",
+        description="Removed provider contract field names on active code paths",
+        pattern=r"(\bprovider_definition_data\b|\bapi_key_ref\b)",
+        owner_phase="Phase 7",
+    ),
+    MarkerDefinition(
+        key="provider_legacy_secret_ref_schema_alias",
+        description="Removed provider secret_ref schema/runtime aliases on active enterprise paths",
+        pattern=r"([\"']secret_ref[\"'])",
+        owner_phase="Phase 7",
+        repos=("enterprise",),
+    ),
+    MarkerDefinition(
+        key="provider_configmanager_secret_usage",
+        description="Provider lifecycle code routing secrets through ConfigManager secret helpers",
+        pattern=r"(ConfigManager\.store_secret\(|ConfigManager\.get_secret\()",
+        owner_phase="Phase 7",
+        repos=("opensource",),
+    ),
 )
 
 TEXT_SUFFIXES = {
@@ -207,6 +227,14 @@ MARKER_PATH_EXCLUDES: dict[str, set[str]] = {
     },
     "fallback_gateway_env_aliases": {
         "caracal/runtime/hardcut_preflight.py",
+    },
+    "provider_legacy_contract_fields": {
+        "services/enterprise-api/alembic/versions/023_add_gateway_provider_registry.py",
+        "services/enterprise-api/alembic/versions/032_gateway_provider_contract_field_names.py",
+    },
+    "provider_legacy_secret_ref_schema_alias": {
+        "services/enterprise-api/alembic/versions/023_add_gateway_provider_registry.py",
+        "services/enterprise-api/alembic/versions/032_gateway_provider_contract_field_names.py",
     },
 }
 

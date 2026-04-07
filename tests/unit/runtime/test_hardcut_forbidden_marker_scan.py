@@ -173,4 +173,24 @@ def test_report_includes_owner_phase_for_each_marker() -> None:
 
     assert report["schema_version"] == 2
     assert report["markers"]
-    assert all(marker["owner_phase"] == "Phase 13" for marker in report["markers"])
+    owner_phases = {marker["key"]: marker["owner_phase"] for marker in report["markers"]}
+
+    assert all(isinstance(phase, str) and phase for phase in owner_phases.values())
+    assert owner_phases["provider_legacy_contract_fields"] == "Phase 7"
+    assert owner_phases["provider_legacy_secret_ref_schema_alias"] == "Phase 7"
+    assert owner_phases["provider_configmanager_secret_usage"] == "Phase 7"
+
+
+def test_provider_phase7_marker_counts_are_zero() -> None:
+    module = _load_scanner_module()
+    report = _build_report(module)
+    markers = {marker["key"]: marker for marker in report["markers"]}
+
+    for marker_key in (
+        "provider_legacy_contract_fields",
+        "provider_legacy_secret_ref_schema_alias",
+        "provider_configmanager_secret_usage",
+    ):
+        marker = markers[marker_key]
+        for repo_entry in marker["repos"].values():
+            assert repo_entry["count"] == 0
