@@ -301,6 +301,51 @@ def test_upsert_secret_ignores_existing_folder_error(vault):
 
 
 @pytest.mark.unit
+def test_upsert_secret_raises_v4_only_error_when_v4_paths_fail(vault):
+    responses = [
+        FakeResponse(status_code=200, payload={"folder": {"id": "folder-1"}}),
+        FakeResponse(status_code=404, payload={"message": "missing"}),
+        FakeResponse(status_code=404, payload={"message": "missing"}),
+    ]
+
+    with patch.object(vault, "_request", side_effect=responses) as request:
+        with pytest.raises(VaultError, match="Legacy /api/secrets fallback has been removed"):
+            vault._upsert_secret("org-1", "env-1", "/keys", "api-key", "value")
+
+    assert all(call.args[1] != "/api/secrets" for call in request.call_args_list)
+
+
+@pytest.mark.unit
+def test_upsert_secret_retries_patch_after_batch_conflict(vault):
+    responses = [
+        FakeResponse(status_code=200, payload={"folder": {"id": "folder-1"}}),
+        FakeResponse(status_code=404, payload={"message": "missing"}),
+        FakeResponse(status_code=409, payload={"message": "conflict"}),
+        FakeResponse(status_code=200, payload={"secret": {"id": "retry-id"}}),
+    ]
+
+    with patch.object(vault, "_request", side_effect=responses) as request:
+        entry_id = vault._upsert_secret("org-1", "env-1", "/keys", "api-key", "value")
+
+    assert entry_id == "retry-id"
+    assert request.call_args_list[3].args[:2] == ("PATCH", "/api/v4/secrets/api-key")
+
+
+@pytest.mark.unit
+def test_upsert_secret_raises_v4_only_error_after_batch_conflict_retry_failure(vault):
+    responses = [
+        FakeResponse(status_code=200, payload={"folder": {"id": "folder-1"}}),
+        FakeResponse(status_code=404, payload={"message": "missing"}),
+        FakeResponse(status_code=409, payload={"message": "conflict"}),
+        FakeResponse(status_code=405, payload={"message": "method not allowed"}),
+    ]
+
+    with patch.object(vault, "_request", side_effect=responses):
+        with pytest.raises(VaultError, match="retry PATCH returned 405"):
+            vault._upsert_secret("org-1", "env-1", "/keys", "api-key", "value")
+
+
+@pytest.mark.unit
 def test_get_success(vault):
     with patch.object(vault, "_get_secret_value", return_value="secret-value"):
         with vault_access_context():
@@ -334,11 +379,33 @@ def test_delete_success(vault):
 
 
 @pytest.mark.unit
+def test_delete_secret_raises_not_found_when_v4_delete_returns_404(vault):
+    with patch.object(vault, "_request", return_value=FakeResponse(status_code=404, payload={"message": "missing"})):
+        with pytest.raises(SecretNotFound):
+            vault._delete_secret("org-1", "env-1", "/", "api-key")
+
+
+@pytest.mark.unit
+def test_delete_secret_raises_v4_only_error_when_v4_delete_unsupported(vault):
+    with patch.object(vault, "_request", return_value=FakeResponse(status_code=405, payload={"message": "unsupported"})):
+        with pytest.raises(VaultError, match="Legacy /api/secrets fallback has been removed"):
+            vault._delete_secret("org-1", "env-1", "/", "api-key")
+
+
+@pytest.mark.unit
 def test_list_secrets_success(vault):
     with patch.object(vault, "_list_secret_names", return_value=["one", "two"]):
         with vault_access_context():
             names = vault.list_secrets("org-1", "env-1")
     assert names == ["one", "two"]
+
+
+@pytest.mark.unit
+def test_list_secret_names_returns_empty_when_v4_list_returns_404(vault):
+    with patch.object(vault, "_request", return_value=FakeResponse(status_code=404, payload={"message": "missing"})):
+        names = vault._list_secret_names("org-1", "env-1", "/")
+
+    assert names == []
 
 
 @pytest.mark.unit

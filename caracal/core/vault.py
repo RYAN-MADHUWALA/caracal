@@ -1004,31 +1004,23 @@ class CaracalVault:
                 payload = self._json(retry_response)
                 return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
 
-        legacy_body = {
-            "secret_name": name,
-            "secret_value": value,
-            "project_id": project_id,
-            "environment": environment,
-            "path": secret_path,
-        }
-        response = self._request(
-            "PUT",
-            "/api/secrets",
-            payload=legacy_body,
-            allowed_statuses={200, 201, 404, 405},
-        )
-        if response.status_code in {200, 201}:
-            payload = self._json(response)
-            return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
+        patch_status = response.status_code
+        batch_status = batch_response.status_code
+        retry_status = None
+        if batch_response.status_code == 409:
+            retry_status = retry_response.status_code
 
-        response = self._request(
-            "POST",
-            "/api/secrets",
-            payload=legacy_body,
-            allowed_statuses={200, 201},
+        raise VaultError(
+            "Vault v4 secret upsert failed. "
+            f"PATCH /api/v4/secrets/{name} returned {patch_status}; "
+            f"POST /api/v4/secrets/batch returned {batch_status}"
+            + (
+                f"; retry PATCH returned {retry_status}. "
+                if retry_status is not None
+                else ". "
+            )
+            + "Legacy /api/secrets fallback has been removed."
         )
-        payload = self._json(response)
-        return str((payload.get("secret") or {}).get("id") or payload.get("id") or name)
 
     def _get_secret_value(self, project_id: str, environment: str, secret_path: str, name: str) -> str:
         response = self._request(
@@ -1068,22 +1060,16 @@ class CaracalVault:
         )
         if response.status_code in {200, 204}:
             return
-
-        response = self._request(
-            "DELETE",
-            "/api/secrets",
-            params={
-                "secret_name": name,
-                "project_id": project_id,
-                "environment": environment,
-                "path": secret_path,
-            },
-            allowed_statuses={200, 204, 404},
-        )
         if response.status_code == 404:
             raise SecretNotFound(
                 f"Secret '{name}' not found in env '{environment}' for project '{project_id}'."
             )
+
+        raise VaultError(
+            "Vault v4 secret delete failed. "
+            f"DELETE /api/v4/secrets/{name} returned {response.status_code}. "
+            "Legacy /api/secrets fallback has been removed."
+        )
 
     def _list_secret_names(self, project_id: str, environment: str, secret_path: str) -> list[str]:
         response = self._request(
@@ -1097,18 +1083,7 @@ class CaracalVault:
             allowed_statuses={200, 404},
         )
         if response.status_code == 404:
-            response = self._request(
-                "GET",
-                "/api/secrets",
-                params={
-                    "project_id": project_id,
-                    "environment": environment,
-                    "path": secret_path,
-                },
-                allowed_statuses={200, 404},
-            )
-            if response.status_code == 404:
-                return []
+            return []
 
         payload = self._json(response)
         return self._extract_secret_names(payload)
