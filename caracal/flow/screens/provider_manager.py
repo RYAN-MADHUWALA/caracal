@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
+from pathlib import Path
 import re
 from typing import Optional
 from urllib.parse import urlparse
@@ -646,16 +648,6 @@ def _provider_mode(entry: dict[str, object]) -> str:
     return "passthrough"
 
 
-def _provider_template_label(entry: dict[str, object]) -> str:
-    template_id = entry.get("template_id")
-    if template_id:
-        return str(template_id)
-    metadata = entry.get("metadata")
-    if isinstance(metadata, dict) and metadata.get("starter_pattern"):
-        return str(metadata["starter_pattern"])
-    return "custom"
-
-
 def _provider_credential_status(entry: dict[str, object]) -> str:
     auth_scheme = str(entry.get("auth_scheme") or "none")
     if auth_scheme == "none":
@@ -707,9 +699,10 @@ def show_provider_manager(console: Console, state: FlowState) -> None:
             "Provider Operations",
             items=[
                 MenuItem("list", "List Providers", "View configured providers", Icons.LIST),
-                MenuItem("add", "Add Provider", "Fast passthrough provider setup", Icons.ADD),
-                MenuItem("update", "Update Provider", "Edit connection details and runtime settings", Icons.SETTINGS),
-                MenuItem("enrich", "Enrich Provider", "Add or edit scoped resources/actions", Icons.PROVIDER),
+                MenuItem("add", "Add Provider", "Create provider in passthrough or scoped mode", Icons.ADD),
+                MenuItem("update", "Update Provider", "Edit connection details and scoped catalog", Icons.SETTINGS),
+                MenuItem("download", "Download Provider JSON", "Export a provider as JSON", Icons.EXPORT),
+                MenuItem("import", "Import Provider JSON", "Validate and import provider JSON", Icons.IMPORT),
                 MenuItem("remove", "Remove Provider", "Delete provider configuration", Icons.DELETE),
                 MenuItem("back", "Back to Menu", "", Icons.ARROW_LEFT),
             ],
@@ -723,8 +716,10 @@ def show_provider_manager(console: Console, state: FlowState) -> None:
             _add_provider(console, state)
         elif result.key == "update":
             _update_provider(console, state)
-        elif result.key == "enrich":
-            _enrich_provider(console, state)
+        elif result.key == "download":
+            _download_provider(console, state)
+        elif result.key == "import":
+            _import_provider(console, state)
         elif result.key == "remove":
             _remove_provider(console, state)
 
@@ -759,7 +754,7 @@ def _list_providers(console: Console) -> None:
 
     table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
     table.add_column("Name", style=Colors.PRIMARY)
-    table.add_column("Template", style=Colors.NEUTRAL)
+    table.add_column("Definition", style=Colors.NEUTRAL)
     table.add_column("Auth", style=Colors.NEUTRAL)
     table.add_column("Endpoint", style=Colors.DIM)
     table.add_column("Credential", style=Colors.DIM)
@@ -769,7 +764,7 @@ def _list_providers(console: Console) -> None:
         entry = providers[name]
         table.add_row(
             name,
-            _provider_template_label(entry),
+            str(entry.get("provider_definition") or "custom"),
             str(entry.get("auth_scheme") or "api_key"),
             str(entry.get("base_url") or "configured"),
             _provider_credential_status(entry),
@@ -800,23 +795,14 @@ def _add_provider(console: Console, state: FlowState) -> None:
     _render_provider_shell(
         console,
         workspace,
-        "Fast passthrough setup with starter templates, clean auth capture, and no required catalog editing.",
+        "Create provider in passthrough or scoped mode with explicit user-entered fields.",
     )
 
-    template_mode = prompt.select(
-        "Setup source",
-        ["template", "custom"],
-        default="template",
-    )
-    pattern = None
-    service_type = "application"
-    if template_mode == "template":
-        service_type = _prompt_service_type(prompt, console)
-        pattern = _prompt_provider_pattern(prompt, console, service_type)
-        if pattern is None:
-            template_mode = "custom"
-    if template_mode == "custom" and pattern is None and service_type == "application":
-        service_type = _prompt_service_type(prompt, console)
+    mode = prompt.select("Execution mode", ["passthrough", "scoped"], default="passthrough")
+    service_type = prompt.text(
+        "Service type",
+        validator=lambda value: _validate_non_empty("Service type", value),
+    ).strip().lower()
 
     name = _prompt_identifier(
         prompt=prompt,
@@ -829,18 +815,29 @@ def _add_provider(console: Console, state: FlowState) -> None:
     )
     definition_choice = resolve_provider_definition_id(
         service_type=service_type,
-        requested_definition=pattern.key if pattern else name,
+        requested_definition=name,
     )
 
     auth_scheme, base_url, credential_mode, credential_value, credential_ref, auth_header_name = _collect_connection_settings(
         console=console,
         prompt=prompt,
         provider_name=name,
-        pattern=pattern,
         existing_entry=None,
         allow_gateway_only=False,
     )
+
     resources: dict[str, dict] = {}
+    if mode == "scoped":
+        resources = _collect_resource_catalog(
+            console=console,
+            prompt=prompt,
+            workspace=workspace,
+            provider_name=name,
+            service_type=service_type,
+            pattern=None,
+            initial_resources={},
+        )
+
     advanced = {
         "healthcheck_path": "/health",
         "timeout_seconds": 30,
@@ -859,7 +856,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         provider_name=name,
         definition_id=definition_choice,
         service_type=service_type,
-        pattern=pattern,
+        pattern=None,
         auth_scheme=auth_scheme,
         base_url=base_url,
         auth_header_name=auth_header_name,
@@ -868,7 +865,7 @@ def _add_provider(console: Console, state: FlowState) -> None:
         credential_value=credential_value,
         resources=resources,
         advanced=advanced,
-        mode="passthrough",
+        mode=mode,
     )
 
     if not Confirm.ask(f"[{Colors.INFO}]Save provider '{name}'?[/]", default=True):
@@ -896,13 +893,12 @@ def _add_provider(console: Console, state: FlowState) -> None:
         rate_limit_rpm=advanced["rate_limit_rpm"],
         version=advanced["version"],
         tags=[],
-        metadata={"starter_pattern": pattern.key} if pattern else {},
-        template_id=pattern.key if pattern else None,
+        metadata={},
         auth_header_name=auth_header_name,
         credential_ref=stored_credential_ref,
         existing=providers.get(name),
         created_at=datetime.utcnow().isoformat(),
-        enforce_scoped_requests=False,
+        enforce_scoped_requests=mode == "scoped",
     )
     save_workspace_provider_registry(config_manager, workspace, providers)
 
@@ -936,18 +932,17 @@ def _update_provider(console: Console, state: FlowState) -> None:
     names = sorted(providers.keys())
     selected = prompt.select("Provider", names, default=names[0])
     entry = dict(providers[selected] or {})
-    current_pattern = _resolve_pattern_by_key(_provider_template_label(entry))
 
     mode = prompt.select(
         "Execution mode",
         ["passthrough", "scoped"],
         default=_provider_mode(entry),
     )
-    service_type = _prompt_service_type(
-        prompt,
-        console,
+    service_type = prompt.text(
+        "Service type",
         default=str(entry.get("service_type") or "application"),
-    )
+        validator=lambda value: _validate_non_empty("Service type", value),
+    ).strip().lower()
     definition_choice = resolve_provider_definition_id(
         service_type=service_type,
         requested_definition=str(entry.get("provider_definition") or selected),
@@ -956,7 +951,6 @@ def _update_provider(console: Console, state: FlowState) -> None:
         console=console,
         prompt=prompt,
         provider_name=selected,
-        pattern=current_pattern,
         existing_entry=entry,
         allow_gateway_only=False,
     )
@@ -973,16 +967,19 @@ def _update_provider(console: Console, state: FlowState) -> None:
     )
     resources = {}
     if mode == "scoped":
+        existing_resources: dict[str, dict] = {}
         definition = entry.get("definition")
         if isinstance(definition, dict):
-            resources = dict(definition.get("resources") or {})
-        if not resources:
-            console.print(
-                f"  [{Colors.WARNING}]{Icons.WARNING} This provider does not have a scoped catalog yet. "
-                f"Use Enrich Provider to add resources/actions before switching it to scoped mode.[/]"
-            )
-            Prompt.ask("Press Enter to continue", default="")
-            return
+            existing_resources = dict(definition.get("resources") or {})
+        resources = _collect_resource_catalog(
+            console=console,
+            prompt=prompt,
+            workspace=workspace,
+            provider_name=selected,
+            service_type=service_type,
+            pattern=None,
+            initial_resources=existing_resources,
+        )
 
     stored_credential_ref = entry.get("credential_ref")
     if auth_scheme == "none" or credential_mode == "clear":
@@ -1001,17 +998,18 @@ def _update_provider(console: Console, state: FlowState) -> None:
         return
 
     metadata = dict(entry.get("metadata") or {})
+    metadata.pop("starter_pattern", None)
     definition_payload = None
     if mode == "scoped":
-        definition_payload = _definition_payload_for_existing_resources(
-            entry,
-            provider_name=selected,
-            service_type=service_type,
-            definition_id=definition_choice,
-            auth_scheme=auth_scheme,
-            base_url=base_url or None,
-            metadata=metadata,
-        )
+        definition_payload = {
+            "definition_id": definition_choice,
+            "service_type": service_type,
+            "display_name": selected,
+            "auth_scheme": auth_scheme,
+            "default_base_url": base_url or None,
+            "resources": resources,
+            "metadata": metadata,
+        }
 
     _render_summary(
         console=console,
@@ -1019,7 +1017,7 @@ def _update_provider(console: Console, state: FlowState) -> None:
         provider_name=selected,
         definition_id=definition_choice,
         service_type=service_type,
-        pattern=current_pattern,
+        pattern=None,
         auth_scheme=auth_scheme,
         base_url=base_url,
         auth_header_name=auth_header_name,
@@ -1065,7 +1063,6 @@ def _update_provider(console: Console, state: FlowState) -> None:
         version=advanced["version"],
         tags=list(entry.get("tags") or []),
         metadata=metadata,
-        template_id=entry.get("template_id"),
         auth_header_name=auth_header_name,
         credential_ref=stored_credential_ref,
         existing=entry,
@@ -1221,7 +1218,6 @@ def _collect_connection_settings(
     console: Console,
     prompt: FlowPrompt,
     provider_name: str,
-    pattern: Optional[ProviderStarterPattern],
     existing_entry: Optional[dict[str, object]],
     allow_gateway_only: bool,
 ) -> tuple[str, str, Optional[str], Optional[str], Optional[str], Optional[str]]:
@@ -1240,7 +1236,7 @@ def _collect_connection_settings(
         if allow_gateway_only or scheme not in _GATEWAY_ONLY_AUTH
     ]
     existing_auth = str(existing_entry.get("auth_scheme") or "") if existing_entry else ""
-    suggested_auth = existing_auth or (pattern.recommended_auth_scheme if pattern else "api_key")
+    suggested_auth = existing_auth or "api_key"
     if suggested_auth not in visible_auth_schemes:
         suggested_auth = visible_auth_schemes[0]
     auth_scheme = prompt.select(
@@ -1253,9 +1249,8 @@ def _collect_connection_settings(
     _print_field_help(
         console,
         purpose=auth_info["expects"],
-        expected_format=f"Choose one of: {', '.join(sorted(_AUTH_SCHEME_GUIDANCE.keys()))}",
+        expected_format=f"Choose one of: {', '.join(visible_auth_schemes)}",
         used_for=auth_info["caracal_use"],
-        example=auth_info["example"],
     )
 
     if allow_gateway_only and auth_scheme in _GATEWAY_ONLY_AUTH:
@@ -1270,19 +1265,14 @@ def _collect_connection_settings(
     _print_field_help(
         console,
         purpose="Base URL for the provider API or service root.",
-        expected_format="Blank or a full http/https URL.",
+        expected_format="Full http/https URL.",
         used_for="Caracal combines this with each action path prefix during execution.",
-        example=pattern.base_url_example if pattern else "https://api.example.com",
+        example="https://api.example.com",
     )
     base_url = prompt.text(
         "Base URL",
-        default=(
-            str(existing_entry.get("base_url") or (pattern.base_url_example if pattern else ""))
-            if existing_entry
-            else str(pattern.base_url_example if pattern else "")
-        ),
-        validator=_validate_url_or_blank,
-        required=False,
+        default=str(existing_entry.get("base_url") or "") if existing_entry else "",
+        validator=_validate_required_url,
     )
 
     auth_header_name = None
@@ -1300,7 +1290,7 @@ def _collect_connection_settings(
         )
         auth_header_name = prompt.text(
             "Header name",
-            default=str((existing_entry.get("auth_metadata") or {}).get("header_name") or "X-API-Key") if existing_entry else "X-API-Key",
+            default=str((existing_entry.get("auth_metadata") or {}).get("header_name") or "") if existing_entry else "",
             validator=lambda value: _validate_non_empty("Header name", value),
         )
 
@@ -1922,7 +1912,6 @@ def _render_summary(
     summary.add_row("Provider name", provider_name)
     summary.add_row("Definition ID", definition_id)
     summary.add_row("Service type", service_type)
-    summary.add_row("Starter pattern", pattern.label if pattern else "custom")
     summary.add_row("Auth scheme", auth_scheme)
     summary.add_row("Mode", mode)
     summary.add_row("Base URL", base_url or "(not set)")
@@ -1964,7 +1953,7 @@ def _render_summary(
     else:
         console.print(
             Panel(
-                "This provider will be saved in passthrough mode. It can be used for direct broker connectivity now, and you can add a scoped resource/action catalog later from Enrich Provider.",
+                "This provider will be saved in passthrough mode. You can update it later and switch to scoped mode when you want resource/action enforcement.",
                 title=f"[bold {Colors.INFO}]Passthrough Mode[/]",
                 border_style=Colors.PRIMARY,
             )
@@ -2147,6 +2136,16 @@ def _validate_url_or_blank(value: str) -> tuple[bool, str]:
     return False, "Enter a full http/https URL or leave blank"
 
 
+def _validate_required_url(value: str) -> tuple[bool, str]:
+    candidate = value.strip()
+    if not candidate:
+        return False, "Base URL is required"
+    parsed = urlparse(candidate)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return True, ""
+    return False, "Enter a full http/https URL"
+
+
 def _validate_path_prefix(value: str) -> tuple[bool, str]:
     if not value.strip():
         return False, "Path prefix is required"
@@ -2175,6 +2174,219 @@ def _suggest_identifier(raw: str) -> str:
     cleaned = re.sub(r"-{2,}", "-", cleaned)
     cleaned = cleaned.strip("-._")
     return cleaned.lower()
+
+
+def _download_provider(console: Console, state: FlowState) -> None:
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
+    console.clear()
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Download Provider JSON[/]",
+            subtitle=f"[{Colors.HINT}]Workspace: {workspace}[/]",
+            border_style=Colors.INFO,
+        )
+    )
+    console.print()
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    names = sorted(providers.keys())
+    selected = Prompt.ask(f"[{Colors.INFO}]Provider[/]", choices=names, default=names[0])
+    output_path = Prompt.ask(
+        f"[{Colors.INFO}]Output path[/]",
+        default=f"{selected}.provider.json",
+    ).strip()
+    if not output_path:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Output path is required.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    payload = {
+        "provider": providers[selected],
+        "workspace": workspace,
+        "exported_at": datetime.utcnow().isoformat(),
+    }
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' exported to {output}.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_download", f"Downloaded provider {selected}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
+
+
+def _import_provider(console: Console, state: FlowState) -> None:
+    edition_adapter = get_deployment_edition_adapter()
+    if not edition_adapter.allows_local_provider_management():
+        console.print(
+            f"  [{Colors.WARNING}]{Icons.WARNING} Enterprise mode detected.[/] "
+            f"[{Colors.DIM}]Register providers in the gateway vault/registry.[/]"
+        )
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
+    console.clear()
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Import Provider JSON[/]",
+            subtitle=f"[{Colors.HINT}]Workspace: {workspace}[/]",
+            border_style=Colors.INFO,
+        )
+    )
+    console.print()
+
+    input_path = Prompt.ask(f"[{Colors.INFO}]Input JSON path[/]", default="").strip()
+    if not input_path:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Input path is required.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    try:
+        raw_payload = json.loads(Path(input_path).expanduser().read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Failed to read JSON: {exc}[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    payload = raw_payload.get("provider") if isinstance(raw_payload, dict) and isinstance(raw_payload.get("provider"), dict) else raw_payload
+    if not isinstance(payload, dict):
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} JSON must be an object or include a 'provider' object.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    provider_name = str(payload.get("provider_id") or payload.get("name") or "").strip()
+    if not provider_name:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Provider name is required in JSON.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    if provider_name in providers and not Confirm.ask(
+        f"[{Colors.WARNING}]Provider '{provider_name}' exists. Replace it?[/]",
+        default=False,
+    ):
+        console.print("  Import cancelled.")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    service_type = str(payload.get("service_type") or "").strip().lower()
+    if not service_type:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} service_type is required in JSON.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    auth_scheme = str(payload.get("auth_scheme") or "").strip()
+    if auth_scheme not in _AUTH_SCHEME_GUIDANCE:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Unknown auth_scheme '{auth_scheme}'.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+    if auth_scheme in _GATEWAY_ONLY_AUTH:
+        console.print(
+            f"  [{Colors.ERROR}]{Icons.ERROR} Auth scheme '{auth_scheme}' requires enterprise gateway execution.[/]"
+        )
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    base_url = str(payload.get("base_url") or "").strip()
+    valid_url, message = _validate_required_url(base_url)
+    if not valid_url:
+        console.print(f"  [{Colors.ERROR}]{Icons.ERROR} {message}[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    definition_id = resolve_provider_definition_id(
+        service_type=service_type,
+        requested_definition=str(payload.get("provider_definition") or provider_name),
+    )
+
+    metadata = dict(payload.get("metadata") or {})
+    metadata.pop("starter_pattern", None)
+
+    scoped_mode = bool(payload.get("enforce_scoped_requests"))
+    definition_payload = payload.get("definition")
+    resources: dict[str, dict] = {}
+    if isinstance(definition_payload, dict):
+        resources = dict(definition_payload.get("resources") or {})
+    if not scoped_mode and resources:
+        scoped_mode = True
+
+    definition = None
+    if scoped_mode:
+        if not resources:
+            console.print(
+                f"  [{Colors.ERROR}]{Icons.ERROR} Scoped providers require definition.resources in JSON.[/]"
+            )
+            Prompt.ask("Press Enter to continue", default="")
+            return
+        definition = {
+            "definition_id": definition_id,
+            "service_type": service_type,
+            "display_name": provider_name,
+            "auth_scheme": auth_scheme,
+            "default_base_url": base_url,
+            "resources": resources,
+            "metadata": metadata,
+        }
+
+    credential_ref = payload.get("credential_ref")
+    if auth_scheme == "none":
+        credential_ref = None
+    elif not credential_ref:
+        if not Confirm.ask(
+            f"[{Colors.WARNING}]No credential_ref found. Capture credential now?[/]",
+            default=True,
+        ):
+            console.print(f"  [{Colors.ERROR}]{Icons.ERROR} Authenticated providers need a credential.[/]")
+            Prompt.ask("Press Enter to continue", default="")
+            return
+        credential_value = _prompt_secret_block(console, label=f"Credential for {provider_name}")
+        credential_ref = store_workspace_provider_credential(
+            workspace=workspace,
+            provider_id=provider_name,
+            value=credential_value,
+        )
+
+    existing = providers.get(provider_name)
+    providers[provider_name] = build_provider_record(
+        name=provider_name,
+        service_type=service_type,
+        definition_id=definition_id,
+        auth_scheme=auth_scheme,
+        base_url=base_url,
+        definition=definition,
+        healthcheck_path=str(payload.get("healthcheck_path") or "/health"),
+        timeout_seconds=int(payload.get("timeout_seconds") or 30),
+        max_retries=int(payload.get("max_retries") or 3),
+        rate_limit_rpm=payload.get("rate_limit_rpm"),
+        version=payload.get("version"),
+        tags=list(payload.get("tags") or []),
+        metadata=metadata,
+        auth_header_name=(payload.get("auth_metadata") or {}).get("header_name"),
+        credential_ref=credential_ref,
+        existing=existing,
+        created_at=str((existing or {}).get("created_at") or payload.get("created_at") or datetime.utcnow().isoformat()),
+        enforce_scoped_requests=scoped_mode,
+    )
+    save_workspace_provider_registry(config_manager, workspace, providers)
+
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{provider_name}' imported.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("provider_import", f"Imported provider {provider_name}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
 
 
 def _remove_provider(console: Console, state: FlowState) -> None:
