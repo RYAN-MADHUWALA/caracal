@@ -63,6 +63,7 @@ class TestAuthorityIssueCommand:
         assert result.exit_code == 0
         assert 'Mandate issued successfully' in result.output
         mock_manager.issue_mandate.assert_called_once()
+        mock_manager.db_session.commit.assert_called_once()
     
     def test_issue_mandate_invalid_uuid(self):
         """Test issuing mandate with invalid UUID."""
@@ -181,6 +182,7 @@ class TestAuthorityValidateCommand:
         # Assert
         assert result.exit_code == 0
         assert 'ALLOWED' in result.output
+        mock_evaluator.db_session.commit.assert_called_once()
     
     def test_validate_mandate_invalid_uuid(self):
         """Test validating mandate with invalid UUID."""
@@ -224,6 +226,7 @@ class TestAuthorityRevokeCommand:
         assert result.exit_code == 0
         assert 'revoked successfully' in result.output
         mock_manager.revoke_mandate.assert_called_once()
+        mock_manager.db_session.commit.assert_called_once()
     
     @patch('caracal.cli.authority.get_mandate_manager')
     def test_revoke_mandate_with_cascade(self, mock_get_manager):
@@ -359,6 +362,7 @@ class TestAuthorityDelegateCommand:
         assert result.exit_code == 0
         assert 'delegated successfully' in result.output
         mock_manager.delegate_mandate.assert_called_once()
+        mock_manager.db_session.commit.assert_called_once()
 
 
 @pytest.mark.unit
