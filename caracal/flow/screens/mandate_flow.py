@@ -20,6 +20,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from caracal.cli.provider_scopes import validate_provider_scopes
+from caracal.deployment.config_manager import ConfigManager
 from caracal.flow.components.menu import show_menu
 from caracal.flow.components.prompt import FlowPrompt
 from caracal.flow.screens._provider_scope_helpers import load_provider_scope_catalog
@@ -37,6 +39,19 @@ class MandateFlow:
         self.console = console or Console()
         self.state = state
         self.prompt = FlowPrompt(self.console)
+
+    @staticmethod
+    def _resolve_active_workspace_name() -> str:
+        """Resolve active workspace name for shared provider-scope validation."""
+        config_manager = ConfigManager()
+        workspace_name = config_manager.get_default_workspace_name()
+        if workspace_name:
+            return str(workspace_name)
+
+        workspaces = config_manager.list_workspaces()
+        if not workspaces:
+            raise RuntimeError("No active workspace found for provider scope validation")
+        return str(workspaces[0])
     
     def run(self) -> None:
         """Run the mandate management flow."""
@@ -248,6 +263,15 @@ class MandateFlow:
                 if not action_scope:
                     self.console.print(f"  [{Colors.ERROR}]{Icons.ERROR} At least one action is required.[/]")
                     return
+
+                workspace_name = self._resolve_active_workspace_name()
+                providers_for_validation = [provider_choice] if provider_choice != "all" else None
+                validate_provider_scopes(
+                    workspace=workspace_name,
+                    resource_scopes=resource_scope,
+                    action_scopes=action_scope,
+                    providers=providers_for_validation,
+                )
                 
                 # Validity period
                 validity_seconds = self.prompt.number(
@@ -455,6 +479,20 @@ class MandateFlow:
                 
                 evaluator = AuthorityEvaluator(db_session)
                 
+                provider_hint = None
+                if requested_resource.startswith("provider:"):
+                    parts = requested_resource.split(":")
+                    if len(parts) >= 2:
+                        provider_hint = parts[1]
+
+                workspace_name = self._resolve_active_workspace_name()
+                validate_provider_scopes(
+                    workspace=workspace_name,
+                    resource_scopes=[requested_resource],
+                    action_scopes=[requested_action],
+                    providers=[provider_hint] if provider_hint else None,
+                )
+
                 decision = evaluator.validate_mandate(
                     mandate=mandate,
                     requested_action=requested_action,

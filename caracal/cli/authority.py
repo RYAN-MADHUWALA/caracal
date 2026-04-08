@@ -1128,7 +1128,7 @@ def attach_source(
                 target_mandate_id=target_uuid,
                 context_tags=context_tags_list,
             )
-            db_manager.get_session().commit()
+            mandate_manager.db_session.commit()
 
             payload = {
                 'mandate_id': str(target_mandate.mandate_id),
@@ -1284,7 +1284,7 @@ def peer_delegate_cmd(
                 context_tags=context_tags_list,
             )
             
-            db_manager.get_session().commit()
+            mandate_manager.db_session.commit()
             
             if format.lower() == 'json':
                 output = {
