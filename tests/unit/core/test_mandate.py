@@ -394,6 +394,43 @@ class TestMandateManager:
         assert mandate.revoked is True
         assert mandate.revocation_reason == "Test revocation"
         assert mandate.revoked_at is not None
+
+    def test_revoke_mandate_invalidates_cache_after_flush(self):
+        """Revocation path should flush durable state before cache invalidation."""
+        mandate_id = uuid4()
+        issuer_id = uuid4()
+
+        mandate = ExecutionMandate(
+            mandate_id=mandate_id,
+            issuer_id=issuer_id,
+            subject_id=uuid4(),
+            valid_from=datetime.utcnow() - timedelta(hours=1),
+            valid_until=datetime.utcnow() + timedelta(hours=1),
+            resource_scope=["secret/*"],
+            action_scope=["read:secrets"],
+            signature="test_signature",
+            revoked=False,
+        )
+
+        mock_query = Mock()
+        mock_query.filter.return_value.first.return_value = mandate
+        self.mock_db_session.query.return_value = mock_query
+
+        order: list[str] = []
+        self.mock_db_session.flush.side_effect = lambda: order.append("flush")
+
+        cache = Mock()
+        cache.invalidate_mandate.side_effect = lambda _mandate_id: order.append("cache_invalidate")
+        self.manager.mandate_cache = cache
+
+        self.manager.revoke_mandate(
+            mandate_id=mandate_id,
+            revoker_id=issuer_id,
+            reason="Cache order test",
+        )
+
+        assert order == ["flush", "cache_invalidate"]
+        cache.invalidate_mandate.assert_called_once_with(mandate_id)
     
     def test_revoke_mandate_not_found(self):
         """Test mandate revocation fails when mandate not found."""

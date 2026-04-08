@@ -329,6 +329,22 @@ class TestAuthorityEvaluator:
         assert self.evaluator._match_pattern("read:secrets", "*") is True
         assert self.evaluator._match_pattern("write:secrets", "read:*") is False
 
+    def test_match_pattern_provider_scope_requires_exact_match(self):
+        """Canonical provider scopes must not be widened with wildcard patterns."""
+        resource_scope = "provider:endframe:resource:deployments"
+        wildcard_pattern = "provider:endframe:resource:*"
+
+        assert self.evaluator._match_pattern(resource_scope, resource_scope) is True
+        assert self.evaluator._match_pattern(resource_scope, wildcard_pattern) is False
+
+    def test_match_pattern_provider_action_scope_requires_exact_match(self):
+        """Canonical provider action scopes must use strict equality."""
+        action_scope = "provider:endframe:action:deployments_invoke"
+        wildcard_pattern = "provider:endframe:action:*"
+
+        assert self.evaluator._match_pattern(action_scope, action_scope) is True
+        assert self.evaluator._match_pattern(action_scope, wildcard_pattern) is False
+
     def test_validate_mandate_records_caller_subject_metadata_on_deny(self):
         """Denied validations should record caller and mandate subject metadata."""
         ledger_writer = Mock()
