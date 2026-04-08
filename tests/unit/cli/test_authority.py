@@ -9,7 +9,16 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from caracal.cli.authority import issue, validate, revoke, list_mandates, delegate, graph
+from caracal.cli.authority import (
+    issue,
+    validate,
+    revoke,
+    list_mandates,
+    delegate,
+    graph,
+    attach_source,
+    peer_delegate_cmd,
+)
 
 
 @pytest.mark.unit
@@ -429,3 +438,83 @@ class TestAuthorityGraphCommand:
         assert 'Delegation Graph (1 nodes, 0 edges)' in result.output
         assert 'Stats:' in result.output
         assert 'human: 1 nodes' in result.output
+
+
+@pytest.mark.unit
+class TestAuthorityAdvancedDelegationCommands:
+    """Test suite for additional authority delegation command paths."""
+
+    def setup_method(self):
+        self.runner = CliRunner()
+        self.source_mandate_id = str(uuid4())
+        self.target_mandate_id = str(uuid4())
+        self.target_subject_id = str(uuid4())
+
+    @patch('caracal.cli.authority.get_mandate_manager')
+    def test_attach_source_commits_manager_session(self, mock_get_manager):
+        """Attach-source should commit via the same manager session."""
+        mock_manager = Mock()
+        mock_target = Mock()
+        mock_target.mandate_id = uuid4()
+        mock_target.resource_scope = ['provider:test:resource:api']
+        mock_target.action_scope = ['provider:test:action:invoke']
+        mock_target.valid_until = datetime.utcnow() + timedelta(hours=1)
+        mock_target.context_tags = []
+        mock_manager.attach_delegation_source.return_value = mock_target
+
+        mock_db_manager = Mock()
+        mock_get_manager.return_value = (mock_manager, mock_db_manager)
+
+        result = self.runner.invoke(
+            attach_source,
+            [
+                '--source-mandate-id', self.source_mandate_id,
+                '--target-mandate-id', self.target_mandate_id,
+            ],
+            obj={'config': Mock()},
+        )
+
+        assert result.exit_code == 0
+        assert 'attached successfully' in result.output
+        mock_manager.db_session.commit.assert_called_once()
+
+    @patch('caracal.cli.authority.get_mandate_manager')
+    @patch('caracal.cli.authority.validate_provider_scopes')
+    @patch('caracal.cli.authority.get_workspace_from_ctx')
+    def test_peer_delegate_commits_manager_session(
+        self,
+        mock_workspace,
+        mock_validate_scopes,
+        mock_get_manager,
+    ):
+        """Peer delegate should commit via the same manager session."""
+        mock_workspace.return_value = 'test-workspace'
+        mock_validate_scopes.return_value = None
+
+        mock_manager = Mock()
+        mock_peer_mandate = Mock()
+        mock_peer_mandate.mandate_id = uuid4()
+        mock_peer_mandate.subject_id = self.target_subject_id
+        mock_peer_mandate.delegation_type = 'peer'
+        mock_peer_mandate.context_tags = []
+        mock_peer_mandate.created_at = datetime.utcnow()
+        mock_manager.peer_delegate.return_value = mock_peer_mandate
+
+        mock_db_manager = Mock()
+        mock_get_manager.return_value = (mock_manager, mock_db_manager)
+
+        result = self.runner.invoke(
+            peer_delegate_cmd,
+            [
+                '--source-mandate-id', self.source_mandate_id,
+                '--target-subject-id', self.target_subject_id,
+                '--resource-scope', 'provider:test:resource:api',
+                '--action-scope', 'provider:test:action:invoke',
+                '--validity-seconds', '1800',
+            ],
+            obj={'config': Mock()},
+        )
+
+        assert result.exit_code == 0
+        assert 'Peer delegation created successfully' in result.output
+        mock_manager.db_session.commit.assert_called_once()
