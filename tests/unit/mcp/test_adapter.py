@@ -599,6 +599,59 @@ class TestMCPAdapter:
 
         assert result == "executed"
         self.mock_metering_collector.collect_event.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forward_and_decorator_paths_share_authorization_inputs(self):
+        """Forward and local decorator execution should authorize with the same caller/action/resource inputs."""
+        mandate_id = uuid4()
+        tool_id = "provider:test:resource:deployments"
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action="execute",
+            requested_resource=tool_id,
+        )
+
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        with patch.object(self.adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
+            mock_forward.return_value = {"mode": "forward"}
+            forward_result = await self.adapter.intercept_tool_call(
+                tool_name=tool_id,
+                tool_args={"payload": "ok"},
+                mcp_context=context,
+            )
+
+        @self.adapter.as_decorator(tool_id=tool_id)
+        async def _local_tool(principal_id: str, mandate_id: str, payload: str):
+            del principal_id, mandate_id
+            return {"mode": "local", "payload": payload}
+
+        local_result = await _local_tool(
+            principal_id="agent-123",
+            mandate_id=str(mandate_id),
+            payload="ok",
+        )
+
+        assert forward_result.success is True
+        assert forward_result.result == {"mode": "forward"}
+        assert local_result == {"mode": "local", "payload": "ok"}
+
+        assert self.mock_authority_evaluator.validate_mandate.call_count == 2
+        forward_kwargs = self.mock_authority_evaluator.validate_mandate.call_args_list[0].kwargs
+        local_kwargs = self.mock_authority_evaluator.validate_mandate.call_args_list[1].kwargs
+
+        assert forward_kwargs["requested_action"] == local_kwargs["requested_action"] == "execute"
+        assert forward_kwargs["requested_resource"] == local_kwargs["requested_resource"] == tool_id
+        assert forward_kwargs["caller_principal_id"] == local_kwargs["caller_principal_id"] == "agent-123"
     
     def test_extract_principal_id_success(self):
         """Test successful principal ID extraction."""

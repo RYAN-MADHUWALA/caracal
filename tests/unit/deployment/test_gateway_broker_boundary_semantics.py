@@ -6,7 +6,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from caracal.deployment.broker import Broker, ProviderConfig, ProviderRequest as BrokerRequest
+from caracal.deployment.broker import (
+    Broker,
+    ProviderConfig,
+    ProviderRequest as BrokerRequest,
+    ProviderResponse,
+)
 from caracal.deployment.exceptions import (
     GatewayAuthorizationError,
     ProviderConfigurationError,
@@ -223,3 +228,86 @@ async def test_broker_health_check_reports_structured_runtime_details(monkeypatc
     assert health.status_code == 200
     assert health.auth_injected is True
     assert health.error is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_broker_scoped_mode_rejects_unscoped_request() -> None:
+    broker = Broker(config_manager=Mock(), workspace="test")
+    broker.configure_provider(
+        "openai",
+        ProviderConfig(
+            name="openai",
+            provider_type="ai",
+            auth_scheme="none",
+            enforce_scoped_requests=True,
+            definition={
+                "resources": {
+                    "models": {
+                        "actions": {
+                            "list": {
+                                "method": "GET",
+                                "path_prefix": "/v1/models",
+                            }
+                        }
+                    }
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="requires provider-scoped resource/action headers"):
+        await broker.call_provider(
+            "openai",
+            BrokerRequest(
+                provider="openai",
+                method="GET",
+                endpoint="/v1/models",
+            ),
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_broker_scoped_mode_allows_scoped_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    broker = Broker(config_manager=Mock(), workspace="test")
+    broker.configure_provider(
+        "openai",
+        ProviderConfig(
+            name="openai",
+            provider_type="ai",
+            auth_scheme="none",
+            enforce_scoped_requests=True,
+            definition={
+                "resources": {
+                    "models": {
+                        "actions": {
+                            "list": {
+                                "method": "GET",
+                                "path_prefix": "/v1/models",
+                            }
+                        }
+                    }
+                }
+            },
+        ),
+    )
+
+    async def _fake_call_provider_with_retry(*_args, **_kwargs):
+        return ProviderResponse(status_code=200, data={"ok": True})
+
+    monkeypatch.setattr(broker, "_call_provider_with_retry", _fake_call_provider_with_retry)
+
+    response = await broker.call_provider(
+        "openai",
+        BrokerRequest(
+            provider="openai",
+            method="GET",
+            endpoint="/v1/models",
+            resource="provider:openai:resource:models",
+            action="provider:openai:action:list",
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"ok": True}
