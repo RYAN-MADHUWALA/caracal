@@ -315,6 +315,16 @@ class MCPAdapterService:
         normalized = str(value or "").strip()
         return normalized or None
 
+    @staticmethod
+    def _normalize_principal_id(raw_principal_id: Any) -> str:
+        normalized = str(raw_principal_id or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(UUID(normalized))
+        except Exception:
+            return normalized
+
     def _normalize_provider_selector_metadata(
         self,
         *,
@@ -325,38 +335,42 @@ class MCPAdapterService:
         """Normalize provider selector fields from request body + headers and reject conflicts."""
         normalized_metadata = dict(metadata or {})
 
-        body_provider_name = self._normalize_selector_value(normalized_metadata.get("provider_name"))
-        header_provider_name = self._normalize_selector_value(
-            raw_request.headers.get("X-Caracal-Provider-Name")
+        selector_specs = (
+            ("provider_name", "X-Caracal-Provider-Name", "Provider"),
+            (
+                "provider_definition_id",
+                "X-Caracal-Provider-Definition-ID",
+                "Provider definition",
+            ),
+            ("resource_scope", "X-Caracal-Resource-Scope", "Resource scope"),
+            ("action_scope", "X-Caracal-Action-Scope", "Action scope"),
         )
-        if body_provider_name and header_provider_name and body_provider_name != header_provider_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Provider selector mismatch between metadata.provider_name and "
-                    "X-Caracal-Provider-Name header"
-                ),
-            )
-        provider_name = body_provider_name or header_provider_name
+        selected_values: Dict[str, Optional[str]] = {}
 
-        body_definition_id = self._normalize_selector_value(normalized_metadata.get("provider_definition_id"))
-        header_definition_id = self._normalize_selector_value(
-            raw_request.headers.get("X-Caracal-Provider-Definition-ID")
-        )
-        if body_definition_id and header_definition_id and body_definition_id != header_definition_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Provider selector mismatch between metadata.provider_definition_id and "
-                    "X-Caracal-Provider-Definition-ID header"
-                ),
-            )
-        provider_definition_id = body_definition_id or header_definition_id
+        for metadata_key, header_name, label in selector_specs:
+            body_value = self._normalize_selector_value(normalized_metadata.get(metadata_key))
+            header_value = self._normalize_selector_value(raw_request.headers.get(header_name))
+            if body_value and header_value and body_value != header_value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{label} selector mismatch between metadata.{metadata_key} "
+                        f"and {header_name} header"
+                    ),
+                )
+            selected_values[metadata_key] = body_value or header_value
+
+        provider_name = selected_values["provider_name"]
+        provider_definition_id = selected_values["provider_definition_id"]
+        resource_scope = selected_values["resource_scope"]
+        action_scope = selected_values["action_scope"]
 
         mapped_provider_name = self._normalize_selector_value(getattr(tool_row, "provider_name", None))
         mapped_definition_id = self._normalize_selector_value(
             getattr(tool_row, "provider_definition_id", None)
         )
+        mapped_resource_scope = self._normalize_selector_value(getattr(tool_row, "resource_scope", None))
+        mapped_action_scope = self._normalize_selector_value(getattr(tool_row, "action_scope", None))
         if provider_name and mapped_provider_name and provider_name != mapped_provider_name:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -377,11 +391,33 @@ class MCPAdapterService:
                     f"provider definition '{mapped_definition_id}' for requested tool"
                 ),
             )
+        if resource_scope and mapped_resource_scope and resource_scope != mapped_resource_scope:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Resource scope selector '{resource_scope}' does not match mapped "
+                    f"resource scope '{mapped_resource_scope}' for requested tool"
+                ),
+            )
+        if action_scope and mapped_action_scope and action_scope != mapped_action_scope:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Action scope selector '{action_scope}' does not match mapped "
+                    f"action scope '{mapped_action_scope}' for requested tool"
+                ),
+            )
 
-        if provider_name:
-            normalized_metadata["provider_name"] = provider_name
-        if provider_definition_id:
-            normalized_metadata["provider_definition_id"] = provider_definition_id
+        normalized_metadata["provider_name"] = mapped_provider_name or provider_name
+        normalized_metadata["provider_definition_id"] = mapped_definition_id or provider_definition_id
+        normalized_metadata["resource_scope"] = mapped_resource_scope or resource_scope
+        normalized_metadata["action_scope"] = mapped_action_scope or action_scope
+
+        normalized_metadata = {
+            key: value
+            for key, value in normalized_metadata.items()
+            if value is not None
+        }
 
         return normalized_metadata
 
@@ -437,6 +473,15 @@ class MCPAdapterService:
                 detail="Mandate is expired",
             )
         return mandate
+
+    def _require_mandate_subject(self, *, principal_id: str, mandate: Any) -> None:
+        caller = self._normalize_principal_id(principal_id)
+        subject = self._normalize_principal_id(getattr(mandate, "subject_id", None))
+        if caller and subject and caller != subject:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated principal does not match mandate subject",
+            )
     
     def _register_routes(self):
         """Register FastAPI routes."""
@@ -699,7 +744,11 @@ class MCPAdapterService:
                 request_metadata = self._validate_mandate_id_metadata(request_metadata)
                 try:
                     tool_row = self._require_active_tool(request.tool_id)
-                    self._require_active_mandate(request_metadata["mandate_id"])
+                    mandate = self._require_active_mandate(request_metadata["mandate_id"])
+                    self._require_mandate_subject(
+                        principal_id=principal_id,
+                        mandate=mandate,
+                    )
                 except (MCPUnknownToolError, MCPUnknownMandateError) as exc:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,

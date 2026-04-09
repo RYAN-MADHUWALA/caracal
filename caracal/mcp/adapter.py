@@ -317,7 +317,11 @@ class MCPAdapter:
             execution_mode=execution_mode,
             mcp_server_name=mcp_server_name,
         )
-        normalized_workspace_name = self._normalize_workspace_name(workspace_name)
+        normalized_workspace_name = (
+            self._normalize_workspace_name(workspace_name)
+            or self._normalize_workspace_name(self._resolve_workspace_name(None))
+            or "default"
+        )
         normalized_tool_type = self._normalize_tool_type(tool_type)
         normalized_handler_ref = self._normalize_handler_ref(handler_ref)
         normalized_mapping_version = str(mapping_version or "").strip() or None
@@ -664,10 +668,13 @@ class MCPAdapter:
                 )
 
             try:
+                require_credential = self._requires_local_credential_for_execution(
+                    tool_id=tool_name,
+                )
                 tool_mapping = self._resolve_active_tool_mapping(
                     tool_id=tool_name,
                     mcp_context=mcp_context,
-                    require_credential=True,
+                    require_credential=require_credential,
                 )
             except CaracalError as exc:
                 logger.warning(
@@ -752,7 +759,13 @@ class MCPAdapter:
                 quantity=Decimal("1"),  # One tool invocation
                 timestamp=datetime.utcnow(),
                 metadata={
+                    "tool_id": tool_mapping.get("tool_id"),
                     "tool_name": tool_name,
+                    "tool_type": tool_mapping.get("tool_type"),
+                    "provider_name": tool_mapping.get("provider_name"),
+                    "resource_scope": tool_mapping.get("resource_scope"),
+                    "action_scope": tool_mapping.get("action_scope"),
+                    "mcp_server_name": tool_mapping.get("mcp_server_name"),
                     "tool_args": tool_args,
                     "execution_mode": execution_mode,
                     "mcp_context": mcp_context.metadata,
@@ -1200,6 +1213,45 @@ class MCPAdapter:
             **execution_target,
         }
 
+    def _requires_local_credential_for_execution(self, *, tool_id: str) -> bool:
+        """Only local execution requires local credential resolution."""
+        try:
+            row = self.get_registered_tool(tool_id=tool_id, require_active=True)
+        except CaracalError:
+            return False
+        if row is None:
+            return False
+
+        execution_target = self._normalize_execution_target(
+            execution_mode=getattr(row, "execution_mode", None),
+            mcp_server_name=getattr(row, "mcp_server_name", None),
+        )
+        return execution_target["execution_mode"] == "local"
+
+    @staticmethod
+    def _extract_forward_selector_value(response_payload: Any, selector_key: str) -> Optional[str]:
+        if not isinstance(response_payload, dict):
+            return None
+
+        values: list[str] = []
+        direct = str(response_payload.get(selector_key) or "").strip()
+        if direct:
+            values.append(direct)
+
+        metadata = response_payload.get("metadata")
+        if isinstance(metadata, dict):
+            meta_value = str(metadata.get(selector_key) or "").strip()
+            if meta_value:
+                values.append(meta_value)
+
+        unique_values = list(dict.fromkeys(values))
+        if len(unique_values) > 1:
+            raise CaracalError(
+                f"Upstream forward response has conflicting '{selector_key}' selector values"
+            )
+
+        return unique_values[0] if unique_values else None
+
     @staticmethod
     def _resolve_caveat_mode(raw_mode: str) -> str:
         mode = str(raw_mode or "jwt").strip().lower()
@@ -1415,6 +1467,30 @@ class MCPAdapter:
                 raise CaracalError(
                     f"Invalid JSON from upstream MCP server: {parse_err}"
                 )
+
+            expected_selectors = {
+                "provider_name": str(mapped_provider_name or "").strip() or None,
+                "resource_scope": str(mapped_resource_scope or "").strip() or None,
+                "action_scope": str(mapped_action_scope or "").strip() or None,
+            }
+            for selector_key, expected_value in expected_selectors.items():
+                if not expected_value:
+                    continue
+                actual_value = self._extract_forward_selector_value(result, selector_key)
+                if actual_value and actual_value != expected_value:
+                    raise CaracalError(
+                        f"Upstream forward response mismatch for {selector_key}: "
+                        f"expected '{expected_value}', got '{actual_value}'"
+                    )
+
+            if isinstance(result, dict):
+                metadata = result.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    result["metadata"] = metadata
+                for selector_key, expected_value in expected_selectors.items():
+                    if expected_value:
+                        metadata[selector_key] = expected_value
 
             logger.debug(
                 f"Upstream MCP tool call succeeded: tool={tool_name}"
