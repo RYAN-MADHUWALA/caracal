@@ -113,6 +113,8 @@ class _FakeSessionManager:
     def __init__(self) -> None:
         self.issue_calls: list[dict[str, object]] = []
         self.refresh_calls: list[str] = []
+        self.validate_calls: list[str] = []
+        self.validation_claims: dict[str, object] = {"sub": "principal-1"}
 
     def issue_session(self, **kwargs):
         self.issue_calls.append(kwargs)
@@ -139,6 +141,12 @@ class _FakeSessionManager:
             refresh_expires_at=now + timedelta(minutes=30),
             refresh_jti="rjti-2",
         )
+
+    async def validate_access_token(self, access_token: str):
+        self.validate_calls.append(access_token)
+        if access_token == "invalid-token":
+            raise RuntimeError("invalid access token")
+        return dict(self.validation_claims)
 
 
 class _FakeDbManager:
@@ -583,13 +591,15 @@ def test_build_ais_handlers_issues_and_refreshes_tokens(monkeypatch: pytest.Monk
             tenant_id="tenant-1",
             session_kind="automation",
             include_refresh=True,
-        )
+        ),
+        "Bearer caller-token",
     )
 
     assert token_response["access_token"] == "access-1"
     assert token_response["refresh_token"] == "refresh-1"
     assert token_response["expires_at"] == token_response["access_expires_at"]
     assert session_manager.issue_calls
+    assert session_manager.validate_calls == ["caller-token"]
     assert str(session_manager.issue_calls[0]["session_kind"]) == "SessionKind.AUTOMATION"
 
     refresh_response = handlers.refresh_session(RefreshRequest(refresh_token="refresh-1"))
@@ -612,7 +622,8 @@ def test_build_ais_handlers_rejects_unknown_session_kind() -> None:
                 organization_id="org-1",
                 tenant_id="tenant-1",
                 session_kind="not-a-kind",
-            )
+            ),
+            "Bearer caller-token",
         )
 
     assert exc_info.value.status_code == 400
@@ -637,7 +648,8 @@ def test_build_ais_handlers_rejects_token_issue_for_unknown_principal(
                 organization_id="org-1",
                 tenant_id="tenant-1",
                 session_kind="automation",
-            )
+            ),
+            "Bearer caller-token",
         )
 
     assert exc_info.value.status_code == 404
@@ -665,7 +677,8 @@ def test_build_ais_handlers_rejects_token_issue_for_inactive_principal(
                 organization_id="org-1",
                 tenant_id="tenant-1",
                 session_kind="automation",
-            )
+            ),
+            "Bearer caller-token",
         )
 
     assert exc_info.value.status_code == 400
@@ -697,6 +710,7 @@ def test_build_ais_handlers_token_endpoint_returns_bundle_over_http(
             session_kind="automation",
             include_refresh=True,
         ).model_dump(),
+        headers={"Authorization": "Bearer caller-token"},
     )
 
     assert response.status_code == 200
@@ -704,6 +718,123 @@ def test_build_ais_handlers_token_endpoint_returns_bundle_over_http(
     assert payload["access_token"] == "access-1"
     assert payload["refresh_token"] == "refresh-1"
     assert payload["session_id"] == "sid-1"
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_rejects_token_issue_without_caller_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=_FakeSessionManager(),
+        redis_client=object(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        handlers.issue_token(
+            TokenIssueRequest(
+                principal_id="principal-1",
+                organization_id="org-1",
+                tenant_id="tenant-1",
+                session_kind="automation",
+            )
+        )
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_accepts_attestation_nonce_bootstrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+
+    consumed: list[tuple[str, str | None]] = []
+
+    class _FakeAttestationNonceManager:
+        def __init__(self, _redis_client: object) -> None:
+            return None
+
+        def consume_nonce(self, nonce: str, *, expected_principal_id: str | None = None) -> str:
+            consumed.append((nonce, expected_principal_id))
+            return "principal-1"
+
+    monkeypatch.setattr("caracal.identity.attestation_nonce.AttestationNonceManager", _FakeAttestationNonceManager)
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=_FakeSessionManager(),
+        redis_client=object(),
+    )
+
+    response = handlers.issue_token(
+        TokenIssueRequest(
+            principal_id="principal-1",
+            organization_id="org-1",
+            tenant_id="tenant-1",
+            session_kind="automation",
+            attestation_nonce="nonce-1",
+        )
+    )
+
+    assert response["access_token"] == "access-1"
+    assert consumed == [("nonce-1", "principal-1")]
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_allows_local_bootstrap_principal_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+    monkeypatch.setenv("CARACAL_AIS_PRINCIPAL_ID", "principal-1")
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=_FakeSessionManager(),
+        redis_client=object(),
+    )
+
+    response = handlers.issue_token(
+        TokenIssueRequest(
+            principal_id="principal-1",
+            organization_id="org-1",
+            tenant_id="tenant-1",
+            session_kind="automation",
+        )
+    )
+
+    assert response["access_token"] == "access-1"
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_rejects_authenticated_caller_without_delegation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+
+    session_manager = _FakeSessionManager()
+    session_manager.validation_claims = {"sub": "caller-principal"}
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=session_manager,
+        redis_client=object(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        handlers.issue_token(
+            TokenIssueRequest(
+                principal_id="principal-1",
+                organization_id="org-1",
+                tenant_id="tenant-1",
+                session_kind="automation",
+            ),
+            "Bearer caller-token",
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.unit

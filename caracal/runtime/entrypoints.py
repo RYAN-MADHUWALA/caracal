@@ -1824,16 +1824,21 @@ def _build_ais_handlers(
     redis_client: object | None = None,
 ):
     from datetime import timedelta
+    from uuid import UUID
 
     from fastapi import HTTPException
     from caracal.core.identity import PrincipalRegistry
     from caracal.core.session_manager import SessionKind, SessionValidationError
     from caracal.core.signing_service import SigningService
     from caracal.core.spawn import SpawnManager
-    from caracal.db.models import PrincipalLifecycleStatus
+    from caracal.db.models import ExecutionMandate, PrincipalLifecycleStatus
     from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
     from caracal.identity import AISHandlers
-    from caracal.identity.attestation_nonce import AttestationNonceManager
+    from caracal.identity.attestation_nonce import (
+        AttestationNonceConsumedError,
+        AttestationNonceManager,
+        AttestationNonceValidationError,
+    )
     from caracal.identity.principal_ttl import PrincipalTTLManager
     from caracal.identity.service import IdentityService
 
@@ -1850,9 +1855,20 @@ def _build_ais_handlers(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if isinstance(exc, SessionValidationError):
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if isinstance(exc, (AttestationNonceValidationError, AttestationNonceConsumedError)):
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
         if isinstance(exc, ValueError):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise HTTPException(status_code=500, detail=f"AIS runtime operation failed: {exc}") from exc
+
+    def _normalize_principal_id(raw_principal_id: object) -> str:
+        normalized = str(raw_principal_id or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(UUID(normalized))
+        except Exception:
+            return normalized
 
     def _get_identity(principal_id: str) -> dict[str, Any] | None:
         try:
@@ -1886,10 +1902,132 @@ def _build_ais_handlers(
 
         return normalized_principal_id
 
-    def _issue_token(request: object) -> dict[str, Any]:
+    def _extract_bearer_token(authorization_header: str | None) -> str:
+        raw = str(authorization_header or "").strip()
+        if not raw:
+            return ""
+        parts = raw.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+            raise SessionValidationError(
+                "Invalid Authorization header format; expected Bearer token"
+            )
+        return parts[1].strip()
+
+    def _resolve_authenticated_caller_principal_id(authorization_header: str | None) -> str:
+        token = _extract_bearer_token(authorization_header)
+        if not token:
+            return ""
+
+        claims = _run_sync(resolved_session_manager.validate_access_token(token))
+        caller_principal_id = _normalize_principal_id(
+            claims.get("sub") or claims.get("principal_id") or ""
+        )
+        if not caller_principal_id:
+            raise SessionValidationError(
+                "Validated caller token is missing subject principal identity"
+            )
+        return caller_principal_id
+
+    def _caller_has_active_delegation_mandate(
+        caller_principal_id: str,
+        target_principal_id: str,
+    ) -> bool:
+        try:
+            caller_uuid = UUID(str(caller_principal_id))
+            target_uuid = UUID(str(target_principal_id))
+        except Exception:
+            return False
+
+        with resolved_db_manager.session_scope() as session:
+            query = getattr(session, "query", None)
+            if not callable(query):
+                return False
+
+            mandate_query = query(ExecutionMandate)
+            if mandate_query is None or not hasattr(mandate_query, "filter"):
+                return False
+
+            now = datetime.utcnow()
+            mandate = (
+                mandate_query
+                .filter(ExecutionMandate.issuer_id == caller_uuid)
+                .filter(ExecutionMandate.subject_id == target_uuid)
+                .filter(ExecutionMandate.revoked.is_(False))
+                .filter(ExecutionMandate.valid_from <= now)
+                .filter(ExecutionMandate.valid_until >= now)
+                .order_by(ExecutionMandate.created_at.desc())
+                .first()
+            )
+            return mandate is not None
+
+    def _resolve_local_bootstrap_principal_id() -> str:
+        for env_key in (
+            "CARACAL_AIS_PRINCIPAL_ID",
+            "CARACAL_PRINCIPAL_ID",
+            AIS_STARTUP_PRINCIPAL_ENV,
+        ):
+            candidate = _normalize_principal_id(os.environ.get(env_key))
+            if candidate:
+                return candidate
+        return ""
+
+    def _authorize_issue_token_request(
+        *,
+        target_principal_id: str,
+        authorization_header: str | None,
+        attestation_nonce: str | None,
+    ) -> None:
+        normalized_target = _normalize_principal_id(target_principal_id)
+        if not normalized_target:
+            raise HTTPException(status_code=400, detail="principal_id is required")
+
+        caller_principal_id = _resolve_authenticated_caller_principal_id(authorization_header)
+        if caller_principal_id:
+            if caller_principal_id == normalized_target:
+                return
+            if _caller_has_active_delegation_mandate(caller_principal_id, normalized_target):
+                return
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Authenticated principal '{caller_principal_id}' is not authorized "
+                    f"to issue tokens for '{normalized_target}'"
+                ),
+            )
+
+        normalized_nonce = str(attestation_nonce or "").strip()
+        if normalized_nonce:
+            consumed_principal = AttestationNonceManager(resolved_redis_client).consume_nonce(
+                normalized_nonce,
+                expected_principal_id=normalized_target,
+            )
+            if _normalize_principal_id(consumed_principal) != normalized_target:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Attestation nonce principal binding mismatch",
+                )
+            return
+
+        if normalized_target == _resolve_local_bootstrap_principal_id():
+            return
+
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "AIS token issuance requires caller Authorization or a valid attestation_nonce "
+                "for the requested principal"
+            ),
+        )
+
+    def _issue_token(request: object, authorization_header: str | None = None) -> dict[str, Any]:
         try:
             session_kind = SessionKind(str(getattr(request, "session_kind", "automation")).strip().lower())
             principal_id = _require_active_principal(getattr(request, "principal_id"))
+            _authorize_issue_token_request(
+                target_principal_id=principal_id,
+                authorization_header=authorization_header,
+                attestation_nonce=getattr(request, "attestation_nonce", None),
+            )
             issued = resolved_session_manager.issue_session(
                 subject_id=principal_id,
                 organization_id=str(getattr(request, "organization_id")),
