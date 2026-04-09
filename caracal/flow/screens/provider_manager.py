@@ -7,6 +7,7 @@ provider-definition-driven across all flows.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -52,6 +53,7 @@ from caracal.provider.workspace import (
     load_workspace_provider_registry,
     save_workspace_provider_registry,
 )
+from caracal.mcp.tool_registry_contract import list_tool_bindings_by_provider
 
 
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -704,6 +706,7 @@ def show_provider_manager(console: Console, state: FlowState) -> None:
                 MenuItem("download", "Download Provider JSON", "Export a provider as JSON", Icons.EXPORT),
                 MenuItem("import", "Import Provider JSON", "Validate and import provider JSON", Icons.IMPORT),
                 MenuItem("remove", "Remove Provider", "Delete provider configuration", Icons.DELETE),
+                MenuItem("tools", "Tool Registry", "Manage persisted tool mappings", Icons.SETTINGS),
                 MenuItem("back", "Back to Menu", "", Icons.ARROW_LEFT),
             ],
         )
@@ -722,6 +725,8 @@ def show_provider_manager(console: Console, state: FlowState) -> None:
             _import_provider(console, state)
         elif result.key == "remove":
             _remove_provider(console, state)
+        elif result.key == "tools":
+            _manage_tool_registry(console, state)
 
 
 def _active_workspace(config_manager: ConfigManager) -> str:
@@ -735,6 +740,21 @@ def _list_providers(console: Console) -> None:
     config_manager = ConfigManager()
     workspace = _active_workspace(config_manager)
     providers = load_workspace_provider_registry(config_manager, workspace)
+
+    def _read_tool_bindings() -> dict[str, list[str]]:
+        try:
+            from caracal.db.connection import get_db_manager
+
+            db_manager = get_db_manager()
+            try:
+                with db_manager.session_scope() as db_session:
+                    return list_tool_bindings_by_provider(db_session=db_session)
+            finally:
+                db_manager.close()
+        except Exception:
+            return {}
+
+    tool_bindings = _read_tool_bindings()
 
     console.clear()
     console.print(
@@ -759,9 +779,18 @@ def _list_providers(console: Console) -> None:
     table.add_column("Endpoint", style=Colors.DIM)
     table.add_column("Credential", style=Colors.DIM)
     table.add_column("Mode", style=Colors.DIM)
+    table.add_column("Tools", style=Colors.DIM)
 
     for name in sorted(providers.keys()):
         entry = providers[name]
+        provider_tools = list(tool_bindings.get(name, []))
+        if not provider_tools:
+            tools_text = "-"
+        elif len(provider_tools) <= 2:
+            tools_text = ", ".join(provider_tools)
+        else:
+            tools_text = f"{len(provider_tools)} tools ({', '.join(provider_tools[:2])}...)"
+
         table.add_row(
             name,
             str(entry.get("provider_definition") or "custom"),
@@ -769,10 +798,237 @@ def _list_providers(console: Console) -> None:
             str(entry.get("base_url") or "configured"),
             _provider_credential_status(entry),
             _provider_mode(entry),
+            tools_text,
         )
 
     console.print(table)
     console.print()
+    Prompt.ask("Press Enter to continue", default="")
+
+
+class _NoopMeteringCollector:
+    def collect_event(self, _event) -> None:
+        return None
+
+
+@contextmanager
+def _tool_registry_adapter():
+    from caracal.core.authority import AuthorityEvaluator
+    from caracal.db.connection import get_db_manager
+    from caracal.mcp.adapter import MCPAdapter
+
+    db_manager = get_db_manager()
+    try:
+        with db_manager.session_scope() as db_session:
+            yield MCPAdapter(
+                authority_evaluator=AuthorityEvaluator(db_session),
+                metering_collector=_NoopMeteringCollector(),
+            )
+    finally:
+        db_manager.close()
+
+
+def _manage_tool_registry(console: Console, state: FlowState) -> None:
+    while True:
+        console.clear()
+        console.print(
+            Panel(
+                f"[{Colors.PRIMARY}]Tool Registry[/]",
+                subtitle=f"[{Colors.HINT}]Persisted MCP tool mappings and execution modes[/]",
+                border_style=Colors.INFO,
+            )
+        )
+        console.print()
+
+        menu = Menu(
+            "Tool Registry Operations",
+            items=[
+                MenuItem("list", "List Tools", "View registered tool mappings", Icons.LIST),
+                MenuItem("register", "Register Tool", "Create or update tool registration", Icons.ADD),
+                MenuItem("deactivate", "Deactivate Tool", "Disable registered tool", Icons.DELETE),
+                MenuItem("reactivate", "Reactivate Tool", "Enable registered tool", Icons.SUCCESS),
+                MenuItem("back", "Back", "", Icons.ARROW_LEFT),
+            ],
+        )
+        result = menu.run()
+        if not result or result.key == "back":
+            return
+
+        if result.key == "list":
+            _tool_registry_list(console)
+        elif result.key == "register":
+            _tool_registry_register(console, state)
+        elif result.key == "deactivate":
+            _tool_registry_set_active(console, state, active=False)
+        elif result.key == "reactivate":
+            _tool_registry_set_active(console, state, active=True)
+
+
+def _tool_registry_list(console: Console) -> None:
+    with _tool_registry_adapter() as adapter:
+        rows = adapter.list_registered_tools(include_inactive=True)
+
+    console.clear()
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Registered Tools[/]",
+            border_style=Colors.INFO,
+        )
+    )
+    console.print()
+
+    if not rows:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No tool registrations found.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    table = Table(show_header=True, header_style=f"bold {Colors.INFO}")
+    table.add_column("Tool ID", style=Colors.PRIMARY)
+    table.add_column("Provider", style=Colors.NEUTRAL)
+    table.add_column("Resource", style=Colors.DIM)
+    table.add_column("Action", style=Colors.DIM)
+    table.add_column("Mode", style=Colors.NEUTRAL)
+    table.add_column("Target", style=Colors.DIM)
+    table.add_column("Status", style=Colors.NEUTRAL)
+
+    for row in rows:
+        active = bool(getattr(row, "active", False))
+        status_text = "active" if active else "inactive"
+        status_style = Colors.SUCCESS if active else Colors.WARNING
+        table.add_row(
+            str(getattr(row, "tool_id", "")),
+            str(getattr(row, "provider_name", "") or "-"),
+            str(getattr(row, "resource_scope", "") or "-"),
+            str(getattr(row, "action_scope", "") or "-"),
+            str(getattr(row, "execution_mode", "") or "mcp_forward"),
+            str(getattr(row, "mcp_server_name", "") or "-"),
+            f"[{status_style}]{status_text}[/]",
+        )
+
+    console.print(table)
+    console.print()
+    Prompt.ask("Press Enter to continue", default="")
+
+
+def _tool_registry_register(console: Console, state: FlowState) -> None:
+    config_manager = ConfigManager()
+    workspace = _active_workspace(config_manager)
+    providers = load_workspace_provider_registry(config_manager, workspace)
+
+    if not providers:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No providers configured. Add a provider first.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    prompt = FlowPrompt(console)
+    provider_names = sorted(providers.keys())
+
+    console.clear()
+    console.print(
+        Panel(
+            f"[{Colors.PRIMARY}]Register Tool[/]",
+            subtitle=f"[{Colors.HINT}]Tool registrations are the canonical execution contract[/]",
+            border_style=Colors.INFO,
+        )
+    )
+    console.print()
+
+    tool_id = prompt.text(
+        "Tool ID",
+        validator=lambda value: _validate_non_empty("Tool ID", value),
+    ).strip()
+    provider_name = prompt.select("Provider", provider_names, default=provider_names[0])
+    resource_scope = prompt.text(
+        "Resource scope",
+        validator=lambda value: _validate_non_empty("Resource scope", value),
+    ).strip()
+    action_scope = prompt.text(
+        "Action scope",
+        validator=lambda value: _validate_non_empty("Action scope", value),
+    ).strip()
+    execution_mode = prompt.select("Execution mode", ["local", "mcp_forward"], default="mcp_forward")
+    mcp_server_name = None
+    if execution_mode == "mcp_forward":
+        mcp_server_name = prompt.text("MCP server name (optional)", default="").strip() or None
+
+    actor_principal_id = prompt.text(
+        "Actor principal ID (UUID)",
+        validator=lambda value: _validate_non_empty("Actor principal ID", value),
+    ).strip()
+
+    provider_entry = dict(providers.get(provider_name) or {})
+    provider_definition_id = str(provider_entry.get("provider_definition") or provider_name).strip()
+
+    with _tool_registry_adapter() as adapter:
+        row = adapter.register_tool(
+            tool_id=tool_id,
+            active=True,
+            actor_principal_id=actor_principal_id,
+            provider_name=provider_name,
+            resource_scope=resource_scope,
+            action_scope=action_scope,
+            provider_definition_id=provider_definition_id,
+            action_method=None,
+            action_path_prefix=None,
+            execution_mode=execution_mode,
+            mcp_server_name=mcp_server_name,
+        )
+
+    console.print()
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Tool '{row.tool_id}' saved.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create("tool_register", f"Registered tool {row.tool_id}", success=True)
+        )
+    Prompt.ask("Press Enter to continue", default="")
+
+
+def _tool_registry_set_active(console: Console, state: FlowState, *, active: bool) -> None:
+    action_name = "Reactivate" if active else "Deactivate"
+
+    with _tool_registry_adapter() as adapter:
+        rows = adapter.list_registered_tools(include_inactive=True)
+
+    candidates = [
+        row for row in rows
+        if bool(getattr(row, "active", False)) is (not active)
+    ]
+    if not candidates:
+        console.print(f"  [{Colors.WARNING}]{Icons.WARNING} No tools available for {action_name.lower()}.[/]")
+        Prompt.ask("Press Enter to continue", default="")
+        return
+
+    prompt = FlowPrompt(console)
+    tool_choices = [str(row.tool_id) for row in candidates]
+    selected_tool = prompt.select(f"{action_name} tool", tool_choices, default=tool_choices[0])
+    actor_principal_id = prompt.text(
+        "Actor principal ID (UUID)",
+        validator=lambda value: _validate_non_empty("Actor principal ID", value),
+    ).strip()
+
+    with _tool_registry_adapter() as adapter:
+        if active:
+            row = adapter.reactivate_tool(
+                tool_id=selected_tool,
+                actor_principal_id=actor_principal_id,
+            )
+        else:
+            row = adapter.deactivate_tool(
+                tool_id=selected_tool,
+                actor_principal_id=actor_principal_id,
+            )
+
+    status_text = "active" if bool(getattr(row, "active", False)) else "inactive"
+    console.print()
+    console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Tool '{row.tool_id}' is now {status_text}.[/]")
+    if state:
+        state.add_recent_action(
+            RecentAction.create(
+                "tool_reactivate" if active else "tool_deactivate",
+                f"{action_name}d tool {row.tool_id}",
+                success=True,
+            )
+        )
     Prompt.ask("Press Enter to continue", default="")
 
 
