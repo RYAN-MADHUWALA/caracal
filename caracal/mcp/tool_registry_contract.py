@@ -123,6 +123,71 @@ def validate_active_tool_mappings(
             )
             continue
 
+        execution_mode = str(getattr(row, "execution_mode", "mcp_forward") or "mcp_forward").strip().lower()
+        if execution_mode not in {"local", "mcp_forward"}:
+            issues.append(
+                {
+                    "tool_id": tool_id,
+                    "check": "execution_mode",
+                    "message": (
+                        f"Tool '{tool_id}' has invalid execution_mode '{execution_mode}' "
+                        "(expected 'local' or 'mcp_forward')"
+                    ),
+                }
+            )
+            continue
+
+        tool_type = str(getattr(row, "tool_type", "direct_api") or "direct_api").strip().lower()
+        if tool_type not in {"direct_api", "logic"}:
+            issues.append(
+                {
+                    "tool_id": tool_id,
+                    "check": "tool_type",
+                    "message": (
+                        f"Tool '{tool_id}' has invalid tool_type '{tool_type}' "
+                        "(expected 'direct_api' or 'logic')"
+                    ),
+                }
+            )
+            continue
+
+        handler_ref = str(getattr(row, "handler_ref", "") or "").strip() or None
+        if tool_type == "direct_api":
+            if handler_ref:
+                issues.append(
+                    {
+                        "tool_id": tool_id,
+                        "check": "handler_ref",
+                        "message": (
+                            f"Tool '{tool_id}' is direct_api and cannot set handler_ref"
+                        ),
+                    }
+                )
+                continue
+            if execution_mode != "mcp_forward":
+                issues.append(
+                    {
+                        "tool_id": tool_id,
+                        "check": "contract",
+                        "message": (
+                            f"Tool '{tool_id}' is direct_api and must use mcp_forward execution_mode"
+                        ),
+                    }
+                )
+                continue
+
+        if tool_type == "logic" and execution_mode == "local" and not handler_ref:
+            issues.append(
+                {
+                    "tool_id": tool_id,
+                    "check": "handler_ref",
+                    "message": (
+                        f"Tool '{tool_id}' local logic execution requires handler_ref"
+                    ),
+                }
+            )
+            continue
+
         try:
             mapping = adapter._resolve_active_tool_mapping(
                 tool_id=tool_id,
@@ -139,7 +204,6 @@ def validate_active_tool_mappings(
             )
             continue
 
-        execution_mode = str(mapping.get("execution_mode") or "mcp_forward").strip().lower()
         if execution_mode != "mcp_forward":
             continue
 

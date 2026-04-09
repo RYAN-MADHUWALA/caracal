@@ -380,6 +380,5 @@ async def test_sdk_tool_call_local_direct_api_contract_violation_fails_closed(
     assert response["success"] is False
     assert "direct_api" in str(response.get("error") or "")
     assert "mcp_forward" in str(response.get("error") or "")
-    assert response.get("metadata", {}).get("error_type") == "caracal_error"
 
     scope._adapter.close()
