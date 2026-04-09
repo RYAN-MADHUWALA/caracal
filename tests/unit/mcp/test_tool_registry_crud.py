@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from caracal.db.models import AuthorityLedgerEvent, GatewayProvider, RegisteredTool
-from caracal.exceptions import CaracalError
+from caracal.exceptions import CaracalError, MCPToolBindingError, MCPToolTypeMismatchError
 from caracal.mcp.adapter import MCPAdapter
 
 
@@ -295,4 +295,75 @@ def test_register_tool_rejects_action_contract_mismatch() -> None:
             provider_definition_id=_PROVIDER_NAME,
             action_method=_ACTION_METHOD,
             action_path_prefix="/v2/deployments",
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_logic_tool_without_handler_ref() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(MCPToolBindingError, match="requires handler_ref"):
+        adapter.register_tool(
+            tool_id="tool.logic-missing-handler",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+            execution_mode="local",
+            tool_type="logic",
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_direct_api_with_handler_ref() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(MCPToolTypeMismatchError, match="direct_api"):
+        adapter.register_tool(
+            tool_id="tool.direct-invalid-handler",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+            tool_type="direct_api",
+            handler_ref="custom.tools:execute",
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_unknown_mcp_server_name_for_forward_mode() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+        mcp_server_url="http://localhost:3001",
+        mcp_server_urls={"server-0": "http://localhost:3001"},
+    )
+
+    with pytest.raises(CaracalError, match="Unknown mcp_server_name"):
+        adapter.register_tool(
+            tool_id="tool.unknown-server",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+            execution_mode="mcp_forward",
+            mcp_server_name="does-not-exist",
         )

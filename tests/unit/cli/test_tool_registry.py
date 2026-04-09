@@ -32,6 +32,11 @@ class _AdapterStub:
         action_path_prefix: str,
         execution_mode: str,
         mcp_server_name: str,
+        workspace_name: str,
+        tool_type: str,
+        handler_ref: str,
+        mapping_version: str,
+        allowed_downstream_scopes: list[str],
     ):
         self.register_calls.append(
             {
@@ -46,6 +51,11 @@ class _AdapterStub:
                 "action_path_prefix": action_path_prefix,
                 "execution_mode": execution_mode,
                 "mcp_server_name": mcp_server_name,
+                "workspace_name": workspace_name,
+                "tool_type": tool_type,
+                "handler_ref": handler_ref,
+                "mapping_version": mapping_version,
+                "allowed_downstream_scopes": allowed_downstream_scopes,
             }
         )
         return SimpleNamespace(tool_id=tool_id, active=active)
@@ -75,6 +85,32 @@ def test_register_command_calls_adapter(monkeypatch: pytest.MonkeyPatch) -> None
         yield adapter
 
     monkeypatch.setattr(tool_registry_cli, "_tool_registry_adapter", _fake_adapter)
+    monkeypatch.setattr(
+        tool_registry_cli,
+        "ConfigManager",
+        lambda: SimpleNamespace(get_default_workspace_name=lambda: "alpha"),
+    )
+    monkeypatch.setattr(
+        tool_registry_cli,
+        "load_workspace_provider_registry",
+        lambda _cm, _ws: {
+            "endframe": {
+                "provider_definition": "endframe",
+                "definition": {
+                    "resources": {
+                        "deployments": {
+                            "actions": {
+                                "invoke": {
+                                    "method": "POST",
+                                    "path_prefix": "/v1/deployments",
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        },
+    )
 
     result = CliRunner().invoke(
         tool_registry_cli.register,
@@ -83,16 +119,12 @@ def test_register_command_calls_adapter(monkeypatch: pytest.MonkeyPatch) -> None
             "tool.echo",
             "--provider-name",
             "endframe",
-            "--resource-scope",
-            "provider:endframe:resource:deployments",
-            "--action-scope",
-            "provider:endframe:action:invoke",
+            "--resource-id",
+            "deployments",
+            "--action-id",
+            "invoke",
             "--provider-definition-id",
             "endframe",
-            "--action-method",
-            "POST",
-            "--action-path-prefix",
-            "/v1/deployments",
             "--execution-mode",
             "mcp_forward",
             "--mcp-server-name",
@@ -117,6 +149,11 @@ def test_register_command_calls_adapter(monkeypatch: pytest.MonkeyPatch) -> None
             "action_path_prefix": "/v1/deployments",
             "execution_mode": "mcp_forward",
             "mcp_server_name": "server-0",
+            "workspace_name": "alpha",
+            "tool_type": "direct_api",
+            "handler_ref": None,
+            "mapping_version": None,
+            "allowed_downstream_scopes": [],
         }
     ]
 
