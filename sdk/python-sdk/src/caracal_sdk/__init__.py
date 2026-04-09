@@ -81,7 +81,15 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "AsyncAuthorityClient":
-        from caracal_sdk.async_authority_client import AsyncAuthorityClient
+        try:
+            from caracal_sdk.async_authority_client import AsyncAuthorityClient
+        except ModuleNotFoundError as exc:
+            if exc.name == "aiohttp":
+                raise ImportError(
+                    "AsyncAuthorityClient requires optional dependency 'aiohttp'. "
+                    "Install with: pip install 'caracal-sdk[async]'"
+                ) from exc
+            raise
 
         return AsyncAuthorityClient
     raise AttributeError(f"module 'caracal_sdk' has no attribute {name!r}")

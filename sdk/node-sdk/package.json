@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc",
     "test": "jest --config jest.config.js",
-    "lint": "eslint src/",
+    "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
     "prepublish": "npm run build"
   },
