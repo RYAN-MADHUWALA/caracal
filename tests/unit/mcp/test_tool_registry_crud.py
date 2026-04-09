@@ -1,0 +1,298 @@
+"""Unit tests for MCP adapter persisted tool-registry CRUD operations."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+from caracal.db.models import AuthorityLedgerEvent, GatewayProvider, RegisteredTool
+from caracal.exceptions import CaracalError
+from caracal.mcp.adapter import MCPAdapter
+
+
+_ACTOR_PRINCIPAL_ID = "11111111-1111-1111-1111-111111111111"
+_PROVIDER_NAME = "endframe"
+_RESOURCE_SCOPE = "provider:endframe:resource:deployments"
+_ACTION_SCOPE = "provider:endframe:action:invoke"
+_ACTION_METHOD = "POST"
+_ACTION_PATH_PREFIX = "/v1/deployments"
+
+
+def _provider_definition_payload() -> dict:
+    return {
+        "definition_id": _PROVIDER_NAME,
+        "resources": {
+            "deployments": {
+                "actions": {
+                    "invoke": {
+                        "description": "Invoke deployment execution",
+                        "method": _ACTION_METHOD,
+                        "path_prefix": _ACTION_PATH_PREFIX,
+                    }
+                }
+            }
+        },
+    }
+
+
+class _QueryStub:
+    def __init__(self, rows: list[RegisteredTool]) -> None:
+        self._rows = rows
+
+    def filter_by(self, **kwargs):
+        filtered = [
+            row for row in self._rows
+            if all(getattr(row, key) == value for key, value in kwargs.items())
+        ]
+        return _QueryStub(filtered)
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
+
+class _SessionStub:
+    def __init__(self) -> None:
+        self._rows_by_model: dict[type, list] = {}
+        self.commits = 0
+        self.rollbacks = 0
+
+    def query(self, model):
+        return _QueryStub(list(self._rows_by_model.get(model, [])))
+
+    def add(self, row) -> None:
+        self._rows_by_model.setdefault(type(row), []).append(row)
+
+    def flush(self) -> None:
+        rows = list(self._rows_by_model.get(RegisteredTool, []))
+        tool_ids = [row.tool_id for row in rows]
+        if len(tool_ids) != len(set(tool_ids)):
+            raise RuntimeError("duplicate tool_id")
+
+        for row in rows:
+            if row.created_at is None:
+                row.created_at = datetime.utcnow()
+            if row.updated_at is None:
+                row.updated_at = row.created_at
+            if row.active is None:
+                row.active = True
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _add_provider_row(session: _SessionStub, *, provider_id: str = _PROVIDER_NAME) -> None:
+    session.add(
+        GatewayProvider(
+            provider_id=provider_id,
+            name=provider_id,
+            base_url="https://api.example.com",
+            auth_scheme="none",
+            definition=_provider_definition_payload(),
+            enabled=True,
+        )
+    )
+
+
+@pytest.mark.unit
+def test_register_and_list_registered_tools() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    created = adapter.register_tool(
+        tool_id="tool.echo",
+        actor_principal_id=_ACTOR_PRINCIPAL_ID,
+        provider_name=_PROVIDER_NAME,
+        resource_scope=_RESOURCE_SCOPE,
+        action_scope=_ACTION_SCOPE,
+        provider_definition_id=_PROVIDER_NAME,
+        action_method=_ACTION_METHOD,
+        action_path_prefix=_ACTION_PATH_PREFIX,
+    )
+
+    assert created.tool_id == "tool.echo"
+    assert created.active is True
+    assert created.execution_mode == "mcp_forward"
+    assert created.mcp_server_name is None
+
+    listed_all = adapter.list_registered_tools(include_inactive=True)
+    listed_active = adapter.list_registered_tools(include_inactive=False)
+
+    assert [row.tool_id for row in listed_all] == ["tool.echo"]
+    assert [row.tool_id for row in listed_active] == ["tool.echo"]
+    events = session._rows_by_model.get(AuthorityLedgerEvent, [])
+    assert [event.event_type for event in events] == ["tool_registered"]
+
+
+@pytest.mark.unit
+def test_deactivate_and_reactivate_tool() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    adapter.register_tool(
+        tool_id="tool.deploy",
+        actor_principal_id=_ACTOR_PRINCIPAL_ID,
+        provider_name=_PROVIDER_NAME,
+        resource_scope=_RESOURCE_SCOPE,
+        action_scope=_ACTION_SCOPE,
+        provider_definition_id=_PROVIDER_NAME,
+        action_method=_ACTION_METHOD,
+        action_path_prefix=_ACTION_PATH_PREFIX,
+    )
+    deactivated = adapter.deactivate_tool(
+        tool_id="tool.deploy",
+        actor_principal_id=_ACTOR_PRINCIPAL_ID,
+    )
+
+    assert deactivated.active is False
+    assert adapter.list_registered_tools(include_inactive=False) == []
+
+    reactivated = adapter.reactivate_tool(
+        tool_id="tool.deploy",
+        actor_principal_id=_ACTOR_PRINCIPAL_ID,
+    )
+
+    assert reactivated.active is True
+    assert [row.tool_id for row in adapter.list_registered_tools(include_inactive=False)] == [
+        "tool.deploy"
+    ]
+    events = session._rows_by_model.get(AuthorityLedgerEvent, [])
+    assert [event.event_type for event in events] == [
+        "tool_registered",
+        "tool_deactivated",
+        "tool_reactivated",
+    ]
+
+
+@pytest.mark.unit
+def test_deactivate_unknown_tool_raises() -> None:
+    session = _SessionStub()
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(CaracalError, match="Unknown tool_id"):
+        adapter.deactivate_tool(
+            tool_id="missing.tool",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_missing_provider() -> None:
+    session = _SessionStub()
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(CaracalError, match="is not registered in workspace provider registry"):
+        adapter.register_tool(
+            tool_id="tool.missing-provider",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name="missing",
+            resource_scope="provider:missing:resource:deployments",
+            action_scope="provider:missing:action:invoke",
+            provider_definition_id="missing",
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_invalid_resource_scope() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(CaracalError, match="Resource scope 'provider:endframe:resource:unknown'"):
+        adapter.register_tool(
+            tool_id="tool.bad-resource",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope="provider:endframe:resource:unknown",
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_invalid_action_scope() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(CaracalError, match="Action scope 'provider:endframe:action:destroy'"):
+        adapter.register_tool(
+            tool_id="tool.bad-action",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope="provider:endframe:action:destroy",
+            provider_definition_id=_PROVIDER_NAME,
+        )
+
+
+@pytest.mark.unit
+def test_register_tool_rejects_action_contract_mismatch() -> None:
+    session = _SessionStub()
+    _add_provider_row(session)
+    authority_evaluator = SimpleNamespace(db_session=session)
+    adapter = MCPAdapter(
+        authority_evaluator=authority_evaluator,
+        metering_collector=Mock(),
+    )
+
+    with pytest.raises(CaracalError, match="Action method mismatch"):
+        adapter.register_tool(
+            tool_id="tool.bad-method",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+            action_method="GET",
+            action_path_prefix=_ACTION_PATH_PREFIX,
+        )
+
+    with pytest.raises(CaracalError, match="Action path mismatch"):
+        adapter.register_tool(
+            tool_id="tool.bad-path",
+            actor_principal_id=_ACTOR_PRINCIPAL_ID,
+            provider_name=_PROVIDER_NAME,
+            resource_scope=_RESOURCE_SCOPE,
+            action_scope=_ACTION_SCOPE,
+            provider_definition_id=_PROVIDER_NAME,
+            action_method=_ACTION_METHOD,
+            action_path_prefix="/v2/deployments",
+        )
