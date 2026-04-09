@@ -266,13 +266,13 @@ async def test_sdk_tool_call_local_and_forward_modes_preserve_authorization_and_
         tool_id=local_fixture["tool_id"],
         mandate_id=local_fixture["mandate_id"],
         tool_args={"payload": "ok"},
-        metadata={"source": "integration"},
+        metadata={"trace_id": "integration"},
     )
     forward_response = await forward_scope.tools.call(
         tool_id=forward_fixture["tool_id"],
         mandate_id=forward_fixture["mandate_id"],
         tool_args={"payload": "ok"},
-        metadata={"source": "integration"},
+        metadata={"trace_id": "integration"},
     )
 
     assert local_response["success"] is True

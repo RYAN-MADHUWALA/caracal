@@ -44,7 +44,7 @@ async def test_scope_tools_call_uses_canonical_payload_and_scope_headers() -> No
         tool_id="provider:endframe:resource:deployments",
         mandate_id="11111111-1111-1111-1111-111111111111",
         tool_args={"payload": "ok"},
-        metadata={"source": "sdk"},
+        metadata={"trace_id": "trace-sdk"},
         correlation_id="corr-123",
     )
 
@@ -61,7 +61,7 @@ async def test_scope_tools_call_uses_canonical_payload_and_scope_headers() -> No
         "mandate_id": "11111111-1111-1111-1111-111111111111",
         "tool_args": {"payload": "ok"},
         "metadata": {
-            "source": "sdk",
+            "trace_id": "trace-sdk",
             "correlation_id": "corr-123",
         },
     }
@@ -73,18 +73,32 @@ async def test_scope_tools_call_forbids_principal_id_payload() -> None:
     adapter = _CaptureAdapter()
     scope = ScopeContext(adapter=adapter, hooks=HookRegistry())
 
-    with pytest.raises(SDKConfigurationError, match="principal_id"):
+    with pytest.raises(SDKConfigurationError, match="Caller identity fields"):
         await scope.tools.call(
             tool_id="provider:endframe:resource:deployments",
             mandate_id="11111111-1111-1111-1111-111111111111",
             metadata={"principal_id": "forbidden"},
         )
 
-    with pytest.raises(SDKConfigurationError, match="principal_id"):
+    with pytest.raises(SDKConfigurationError, match="Caller identity fields"):
         await scope.tools.call(
             tool_id="provider:endframe:resource:deployments",
             mandate_id="11111111-1111-1111-1111-111111111111",
             tool_args={"principal_id": "forbidden"},
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_scope_tools_call_rejects_non_correlation_metadata_keys() -> None:
+    adapter = _CaptureAdapter()
+    scope = ScopeContext(adapter=adapter, hooks=HookRegistry())
+
+    with pytest.raises(SDKConfigurationError, match="correlation keys only"):
+        await scope.tools.call(
+            tool_id="provider:endframe:resource:deployments",
+            mandate_id="11111111-1111-1111-1111-111111111111",
+            metadata={"source": "sdk"},
         )
 
 
