@@ -11,6 +11,7 @@ from caracal.core.authority import AuthorityEvaluator
 from caracal.db.connection import get_db_manager
 from caracal.exceptions import CaracalError
 from caracal.mcp.adapter import MCPAdapter
+from caracal.mcp.tool_registry_contract import validate_active_tool_mappings
 
 
 class _NoopMeteringCollector:
@@ -20,12 +21,32 @@ class _NoopMeteringCollector:
 
 @contextmanager
 def _tool_registry_adapter(config) -> Iterator[MCPAdapter]:
+    mcp_server_url = None
+    mcp_server_urls: dict[str, str] = {}
+
+    mcp_adapter_config = getattr(config, "mcp_adapter", None)
+    for idx, server_entry in enumerate(getattr(mcp_adapter_config, "mcp_server_urls", []) or []):
+        if isinstance(server_entry, dict):
+            name = str(server_entry.get("name") or f"server-{idx}").strip()
+            url = str(server_entry.get("url") or "").strip()
+            if name and url:
+                mcp_server_urls[name] = url
+        else:
+            url = str(server_entry or "").strip()
+            if url:
+                mcp_server_urls[f"server-{idx}"] = url
+
+    if mcp_server_urls:
+        mcp_server_url = next(iter(mcp_server_urls.values()))
+
     db_manager = get_db_manager(config)
     try:
         with db_manager.session_scope() as db_session:
             yield MCPAdapter(
                 authority_evaluator=AuthorityEvaluator(db_session),
                 metering_collector=_NoopMeteringCollector(),
+                mcp_server_url=mcp_server_url,
+                mcp_server_urls=mcp_server_urls,
             )
     finally:
         db_manager.close()
@@ -147,5 +168,29 @@ def reactivate(ctx, tool_id: str, actor_principal_id: str) -> None:
         click.echo("Tool reactivated")
         click.echo(f"Tool ID:  {row.tool_id}")
         click.echo("Active:   yes")
+    except CaracalError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@click.command("preflight")
+@click.pass_context
+def preflight(ctx) -> None:
+    """Run full tool mapping consistency checks and fail non-zero on drift."""
+    try:
+        with _tool_registry_adapter(ctx.obj.config) as adapter:
+            session = adapter.authority_evaluator.db_session
+            issues = validate_active_tool_mappings(
+                db_session=session,
+                named_server_urls=dict(getattr(adapter, "_mcp_server_urls", {}) or {}),
+                has_default_forward_target=bool(getattr(adapter, "mcp_server_url", None)),
+            )
+
+        if issues:
+            click.echo("Tool mapping preflight failed:")
+            for issue in issues:
+                click.echo(f"- {issue['tool_id']} [{issue['check']}]: {issue['message']}")
+            raise click.ClickException("Tool mapping preflight failed")
+
+        click.echo("Tool mapping preflight passed")
     except CaracalError as exc:
         raise click.ClickException(str(exc)) from exc

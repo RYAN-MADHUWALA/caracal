@@ -53,7 +53,10 @@ from caracal.provider.workspace import (
     load_workspace_provider_registry,
     save_workspace_provider_registry,
 )
-from caracal.mcp.tool_registry_contract import list_tool_bindings_by_provider
+from caracal.mcp.tool_registry_contract import (
+    deactivate_invalid_provider_tools,
+    list_tool_bindings_by_provider,
+)
 
 
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
@@ -828,6 +831,21 @@ def _tool_registry_adapter():
         db_manager.close()
 
 
+def _revalidate_provider_tool_mappings(provider_name: str) -> list[dict[str, str]]:
+    """Deactivate active tools impacted by provider mapping drift after provider updates."""
+    from caracal.db.connection import get_db_manager
+
+    db_manager = get_db_manager()
+    try:
+        with db_manager.session_scope() as db_session:
+            return deactivate_invalid_provider_tools(
+                db_session=db_session,
+                provider_name=provider_name,
+            )
+    finally:
+        db_manager.close()
+
+
 def _manage_tool_registry(console: Console, state: FlowState) -> None:
     while True:
         console.clear()
@@ -1327,8 +1345,16 @@ def _update_provider(console: Console, state: FlowState) -> None:
     )
     save_workspace_provider_registry(config_manager, workspace, providers)
 
+    impacted = _revalidate_provider_tool_mappings(selected)
+
     console.print()
     console.print(f"  [{Colors.SUCCESS}]{Icons.SUCCESS} Provider '{selected}' updated.[/]")
+    if impacted:
+        console.print(
+            f"  [{Colors.WARNING}]{Icons.WARNING} Deactivated {len(impacted)} mapped tool(s) due provider mapping drift.[/]"
+        )
+        for item in impacted:
+            console.print(f"    • {item['tool_id']}: {item['reason']}")
     if state:
         state.add_recent_action(
             RecentAction.create("provider_update", f"Updated provider {selected}", success=True)
