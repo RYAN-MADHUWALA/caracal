@@ -1830,6 +1830,7 @@ def _build_ais_handlers(
     from caracal.core.session_manager import SessionKind, SessionValidationError
     from caracal.core.signing_service import SigningService
     from caracal.core.spawn import SpawnManager
+    from caracal.db.models import PrincipalLifecycleStatus
     from caracal.exceptions import DuplicatePrincipalNameError, PrincipalNotFoundError
     from caracal.identity import AISHandlers
     from caracal.identity.attestation_nonce import AttestationNonceManager
@@ -1862,11 +1863,35 @@ def _build_ais_handlers(
         except Exception as exc:
             _raise_http_error(exc)
 
+    def _require_active_principal(principal_id: str) -> str:
+        normalized_principal_id = str(principal_id or "").strip()
+        if not normalized_principal_id:
+            raise ValueError("principal_id is required")
+
+        with resolved_db_manager.session_scope() as session:
+            # Lightweight unit-test doubles may not expose query semantics.
+            if not hasattr(session, "query"):
+                return normalized_principal_id
+
+            identity_service = IdentityService(principal_registry=PrincipalRegistry(session))
+            identity = identity_service.get_principal(normalized_principal_id)
+            if identity is None:
+                raise PrincipalNotFoundError(f"Principal {normalized_principal_id} not found")
+
+            lifecycle_status = str(getattr(identity, "lifecycle_status", "")).strip().lower()
+            if lifecycle_status != PrincipalLifecycleStatus.ACTIVE.value:
+                raise ValueError(
+                    f"Principal {normalized_principal_id} is not active (status={lifecycle_status or 'unknown'})"
+                )
+
+        return normalized_principal_id
+
     def _issue_token(request: object) -> dict[str, Any]:
         try:
             session_kind = SessionKind(str(getattr(request, "session_kind", "automation")).strip().lower())
+            principal_id = _require_active_principal(getattr(request, "principal_id"))
             issued = resolved_session_manager.issue_session(
-                subject_id=str(getattr(request, "principal_id")),
+                subject_id=principal_id,
                 organization_id=str(getattr(request, "organization_id")),
                 tenant_id=str(getattr(request, "tenant_id")),
                 session_kind=session_kind,

@@ -228,6 +228,22 @@ class RedisSessionDenylistBackend:
 class SessionManager:
     """Unified session manager for access and refresh token flows."""
 
+    _RESERVED_CLAIM_KEYS = {
+        "sub",
+        "principal_id",
+        "org",
+        "tenant",
+        "kind",
+        "sid",
+        "jti",
+        "typ",
+        "iat",
+        "nbf",
+        "exp",
+        "iss",
+        "aud",
+    }
+
     def __init__(
         self,
         *,
@@ -832,6 +848,11 @@ class SessionManager:
 
     async def _assert_not_revoked(self, claims: dict[str, Any]) -> None:
         token_jti = str(claims.get("jti") or "").strip()
+        subject_id = str(claims.get("sub") or "").strip()
+
+        principal_claim = str(claims.get("principal_id") or "").strip()
+        if principal_claim and subject_id and principal_claim != subject_id:
+            raise SessionValidationError("Session token identity claims are inconsistent")
 
         if token_jti and self._is_token_revoked_local(token_jti):
             raise SessionRevokedError("Session token has been revoked")
@@ -841,7 +862,7 @@ class SessionManager:
             raise SessionRevokedError("Session token has been revoked")
 
         if self._denylist is not None and hasattr(self._denylist, "is_principal_revoked"):
-            principal_id = str(claims.get("principal_id") or claims.get("sub") or "").strip()
+            principal_id = subject_id
             auth_time = claims.get("auth_time") or claims.get("iat")
             if principal_id and await self._denylist.is_principal_revoked(principal_id, auth_time):
                 self._mark_token_revoked_local(token_jti, self._claim_expiry_datetime(claims))
@@ -1117,6 +1138,7 @@ class SessionManager:
     ) -> dict[str, Any]:
         claims: dict[str, Any] = {
             "sub": str(subject_id),
+            "principal_id": str(subject_id),
             "org": str(organization_id),
             "tenant": str(tenant_id),
             "kind": session_kind.value,
@@ -1139,7 +1161,7 @@ class SessionManager:
 
         if extra_claims:
             for key, value in extra_claims.items():
-                if key in {"sub", "org", "tenant", "kind", "sid", "jti", "typ", "iat", "nbf", "exp", "iss", "aud"}:
+                if str(key) in self._RESERVED_CLAIM_KEYS:
                     continue
                 claims[key] = value
 
