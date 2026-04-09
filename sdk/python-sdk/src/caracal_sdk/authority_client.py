@@ -11,7 +11,6 @@ Implements fail-closed semantics for connection errors.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-import warnings
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -742,42 +741,14 @@ class AuthorityClient:
         tool_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Legacy tool-call wrapper routed to the canonical MCP endpoint.
+        Legacy tool-call wrapper.
 
-        This method is retained for backwards compatibility. New code should use
-        ``CaracalClient(...).tools.call(...)``.
+        Hard-cut Phase 10 disables this non-canonical pathway.
+        Use ``CaracalClient(...).tools.call(...)``.
         """
-        warnings.warn(
-            "AuthorityClient.call_tool(...) is non-canonical and retained only for compatibility; "
-            "use CaracalClient(...).tools.call(...) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        normalized_tool_id = str(tool_id or tool_name or "").strip()
-        normalized_mandate_id = str(mandate_id or "").strip()
-        if not normalized_tool_id:
-            raise SDKConfigurationError("tool_id is required")
-        if not normalized_mandate_id:
-            raise SDKConfigurationError("mandate_id is required")
-
-        payload_metadata: Dict[str, Any] = dict(metadata or {})
-        if "principal_id" in payload_metadata:
-            raise SDKConfigurationError("principal_id is not allowed in tool call metadata")
-
-        payload_args: Dict[str, Any] = dict(tool_args or {})
-        if "principal_id" in payload_args:
-            raise SDKConfigurationError("principal_id is not allowed in tool_args")
-
-        return self._make_request(
-            method="POST",
-            endpoint="/mcp/tool/call",
-            data={
-                "tool_id": normalized_tool_id,
-                "mandate_id": normalized_mandate_id,
-                "tool_args": payload_args,
-                "metadata": payload_metadata,
-            },
+        raise SDKConfigurationError(
+            "AuthorityClient.call_tool(...) is disabled in hard-cut mode; "
+            "use CaracalClient(...).tools.call(...) instead."
         )
 
     # ------------------------------------------------------------------
