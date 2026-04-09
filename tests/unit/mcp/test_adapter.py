@@ -408,6 +408,12 @@ class TestMCPAdapter:
         assert result.metadata["resource_scope"] == _MAPPED_RESOURCE_SCOPE
         assert result.metadata["action_scope"] == _MAPPED_ACTION_SCOPE
         self.mock_metering_collector.collect_event.assert_called_once()
+        metering_event = self.mock_metering_collector.collect_event.call_args.args[0]
+        assert metering_event.metadata["tool_id"] == _TOOL_ID
+        assert metering_event.metadata["provider_name"] == _MAPPED_PROVIDER_NAME
+        assert metering_event.metadata["resource_scope"] == _MAPPED_RESOURCE_SCOPE
+        assert metering_event.metadata["action_scope"] == _MAPPED_ACTION_SCOPE
+        assert metering_event.metadata["execution_mode"] == "mcp_forward"
 
     @pytest.mark.asyncio
     async def test_intercept_tool_call_metering_failure_does_not_fail_execution(self):
@@ -976,6 +982,195 @@ class TestMCPAdapter:
         assert result.success is False
         assert "authority denied" in result.error.lower()
         assert "unknown mcp_server_name" in result.error.lower()
+
+    def test_requires_local_credential_for_execution_respects_execution_mode(self):
+        self.adapter.get_registered_tool = Mock(
+            return_value=SimpleNamespace(
+                tool_id=_TOOL_ID,
+                active=True,
+                execution_mode="local",
+                mcp_server_name=None,
+            )
+        )
+
+        assert self.adapter._requires_local_credential_for_execution(tool_id=_TOOL_ID) is True
+
+        self.adapter.get_registered_tool = Mock(
+            return_value=SimpleNamespace(
+                tool_id=_TOOL_ID,
+                active=True,
+                execution_mode="mcp_forward",
+                mcp_server_name=None,
+            )
+        )
+
+        assert self.adapter._requires_local_credential_for_execution(tool_id=_TOOL_ID) is False
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_uses_execution_owner_for_credential_requirement(self):
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
+        )
+
+        self.adapter.get_registered_tool = Mock(
+            return_value=SimpleNamespace(
+                tool_id=_TOOL_ID,
+                active=True,
+                execution_mode="mcp_forward",
+                mcp_server_name=None,
+            )
+        )
+        self.adapter._resolve_active_tool_mapping = Mock(
+            return_value={
+                "tool_id": _TOOL_ID,
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+                "provider_definition_id": _MAPPED_PROVIDER_NAME,
+                "tool_type": "direct_api",
+                "execution_mode": "mcp_forward",
+                "mcp_server_name": None,
+            }
+        )
+
+        with patch.object(self.adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
+            mock_forward.return_value = {"output": "ok"}
+            forward_result = await self.adapter.intercept_tool_call(
+                tool_name=_TOOL_ID,
+                tool_args={"payload": "ok"},
+                mcp_context=context,
+            )
+
+        assert forward_result.success is True
+        assert self.adapter._resolve_active_tool_mapping.call_args.kwargs["require_credential"] is False
+
+        self.adapter.get_registered_tool = Mock(
+            return_value=SimpleNamespace(
+                tool_id=_TOOL_ID,
+                active=True,
+                execution_mode="local",
+                mcp_server_name=None,
+            )
+        )
+        self.adapter._resolve_active_tool_mapping = Mock(
+            return_value={
+                "tool_id": _TOOL_ID,
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+                "provider_definition_id": _MAPPED_PROVIDER_NAME,
+                "tool_type": "logic",
+                "execution_mode": "local",
+                "mcp_server_name": None,
+            }
+        )
+
+        async def _local_impl(*, principal_id: str, mandate_id: str, payload: str):
+            return {
+                "principal_id": principal_id,
+                "mandate_id": mandate_id,
+                "payload": payload,
+            }
+
+        self.adapter._decorator_bindings[_TOOL_ID] = _local_impl
+        local_result = await self.adapter.intercept_tool_call(
+            tool_name=_TOOL_ID,
+            tool_args={"payload": "ok"},
+            mcp_context=context,
+        )
+
+        assert local_result.success is True
+        assert self.adapter._resolve_active_tool_mapping.call_args.kwargs["require_credential"] is True
+
+        assert self.mock_metering_collector.collect_event.call_count >= 2
+        forward_metering_event = self.mock_metering_collector.collect_event.call_args_list[-2].args[0]
+        local_metering_event = self.mock_metering_collector.collect_event.call_args_list[-1].args[0]
+
+        expected_keys = {
+            "tool_id",
+            "tool_name",
+            "tool_type",
+            "provider_name",
+            "resource_scope",
+            "action_scope",
+            "mcp_server_name",
+            "tool_args",
+            "execution_mode",
+            "mcp_context",
+            "mandate_id",
+        }
+        assert expected_keys.issubset(set(forward_metering_event.metadata.keys()))
+        assert expected_keys.issubset(set(local_metering_event.metadata.keys()))
+        assert forward_metering_event.metadata["provider_name"] == local_metering_event.metadata["provider_name"] == _MAPPED_PROVIDER_NAME
+        assert forward_metering_event.metadata["resource_scope"] == local_metering_event.metadata["resource_scope"] == _MAPPED_RESOURCE_SCOPE
+        assert forward_metering_event.metadata["action_scope"] == local_metering_event.metadata["action_scope"] == _MAPPED_ACTION_SCOPE
+        assert forward_metering_event.metadata["execution_mode"] == "mcp_forward"
+        assert local_metering_event.metadata["execution_mode"] == "local"
+
+    @pytest.mark.asyncio
+    async def test_forward_to_mcp_server_preserves_mapped_selectors_in_metadata(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"output": "ok"}
+        response.text = '{"output":"ok"}'
+
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=response)
+
+        with patch.object(self.adapter, "_get_http_client", new_callable=AsyncMock) as mock_get_client:
+            mock_get_client.return_value = client
+            result = await self.adapter._forward_to_mcp_server(
+                tool_name=_TOOL_ID,
+                tool_args={"payload": "ok"},
+                server_url="http://localhost:3001",
+                mapped_provider_name=_MAPPED_PROVIDER_NAME,
+                mapped_resource_scope=_MAPPED_RESOURCE_SCOPE,
+                mapped_action_scope=_MAPPED_ACTION_SCOPE,
+            )
+
+        assert result["metadata"]["provider_name"] == _MAPPED_PROVIDER_NAME
+        assert result["metadata"]["resource_scope"] == _MAPPED_RESOURCE_SCOPE
+        assert result["metadata"]["action_scope"] == _MAPPED_ACTION_SCOPE
+
+    @pytest.mark.asyncio
+    async def test_forward_to_mcp_server_rejects_selector_mismatch_from_upstream(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "output": "ok",
+            "metadata": {
+                "provider_name": "other-provider",
+            },
+        }
+        response.text = '{"output":"ok"}'
+
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=response)
+
+        with patch.object(self.adapter, "_get_http_client", new_callable=AsyncMock) as mock_get_client:
+            mock_get_client.return_value = client
+            with pytest.raises(CaracalError, match="mismatch for provider_name"):
+                await self.adapter._forward_to_mcp_server(
+                    tool_name=_TOOL_ID,
+                    tool_args={"payload": "ok"},
+                    server_url="http://localhost:3001",
+                    mapped_provider_name=_MAPPED_PROVIDER_NAME,
+                    mapped_resource_scope=_MAPPED_RESOURCE_SCOPE,
+                    mapped_action_scope=_MAPPED_ACTION_SCOPE,
+                )
 
     def test_resolve_active_tool_mapping_rejects_removed_provider(self):
         """Mapped tool calls must be rejected when provider mapping has been removed."""
