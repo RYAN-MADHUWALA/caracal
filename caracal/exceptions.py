@@ -256,3 +256,29 @@ class DelegationError(AuthorityError):
 class RateLimitExceededError(AuthorityError):
     """Raised when rate limit is exceeded for mandate issuance."""
     pass
+
+
+# MCP Errors
+class MCPError(CaracalError):
+    """Base exception for MCP tool-call contract and mapping errors."""
+    pass
+
+
+class MCPUnknownToolError(MCPError):
+    """Raised when a referenced tool_id does not exist in the registry."""
+    pass
+
+
+class MCPUnknownMandateError(MCPError):
+    """Raised when a referenced mandate_id does not exist."""
+    pass
+
+
+class MCPToolMappingMismatchError(MCPError):
+    """Raised when persisted tool/provider/action mapping is invalid or has drifted."""
+    pass
+
+
+class MCPProviderMissingError(MCPError):
+    """Raised when a mapped provider is missing or unavailable for tool execution."""
+    pass
