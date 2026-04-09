@@ -219,17 +219,39 @@ async def test_validate_access_token_rejects_principal_revoked_session() -> None
     )
 
     issued = manager.issue_session(
-        subject_id="user-principal-1",
+        subject_id="principal-1",
         organization_id="org-principal-1",
         tenant_id="tenant-principal-1",
         session_kind=SessionKind.INTERACTIVE,
-        extra_claims={"principal_id": "principal-1"},
     )
 
     await denylist.mark_principal_revoked("principal-1", datetime.now(timezone.utc))
 
     with pytest.raises(SessionRevokedError):
         await manager.validate_access_token(issued.access_token)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_issue_session_ignores_reserved_principal_id_extra_claim() -> None:
+    denylist = _InMemoryDenylist()
+    manager = _create_manager(
+        verify_key=TEST_VERIFY_KEY,
+        denylist_backend=denylist,
+    )
+
+    issued = manager.issue_session(
+        subject_id="subject-canonical",
+        organization_id="org-canonical",
+        tenant_id="tenant-canonical",
+        session_kind=SessionKind.INTERACTIVE,
+        extra_claims={"principal_id": "spoofed-subject", "role": "operator"},
+    )
+
+    claims = await manager.validate_access_token(issued.access_token)
+    assert claims["sub"] == "subject-canonical"
+    assert claims["principal_id"] == "subject-canonical"
+    assert claims["role"] == "operator"
 
 
 @pytest.mark.unit

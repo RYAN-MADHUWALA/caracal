@@ -144,7 +144,35 @@ class _FakeSessionManager:
 class _FakeDbManager:
     @contextmanager
     def session_scope(self):
-        yield object()
+        yield SimpleNamespace(query=lambda *_args, **_kwargs: None)
+
+
+def _patch_principal_registry_for_issue_token(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    principal_id: str = "principal-1",
+    lifecycle_status: str = "active",
+    exists: bool = True,
+) -> None:
+    class _FakePrincipalRegistry:
+        def __init__(self, session: object) -> None:
+            self.session = session
+
+    class _FakeIdentityService:
+        def __init__(self, *, principal_registry: object, spawn_manager: object | None = None) -> None:
+            self.principal_registry = principal_registry
+            self.spawn_manager = spawn_manager
+
+        def get_principal(self, lookup_principal_id: str):
+            if not exists or lookup_principal_id != principal_id:
+                return None
+            return SimpleNamespace(
+                principal_id=lookup_principal_id,
+                lifecycle_status=lifecycle_status,
+            )
+
+    monkeypatch.setattr("caracal.core.identity.PrincipalRegistry", _FakePrincipalRegistry)
+    monkeypatch.setattr("caracal.identity.service.IdentityService", _FakeIdentityService)
 
 
 @pytest.mark.unit
@@ -538,7 +566,9 @@ def test_host_flow_run_command_does_not_force_user_override(monkeypatch: pytest.
 
 
 @pytest.mark.unit
-def test_build_ais_handlers_issues_and_refreshes_tokens() -> None:
+def test_build_ais_handlers_issues_and_refreshes_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+
     session_manager = _FakeSessionManager()
     handlers = entrypoints._build_ais_handlers(
         db_manager=_FakeDbManager(),
@@ -589,7 +619,64 @@ def test_build_ais_handlers_rejects_unknown_session_kind() -> None:
 
 
 @pytest.mark.unit
-def test_build_ais_handlers_token_endpoint_returns_bundle_over_http() -> None:
+def test_build_ais_handlers_rejects_token_issue_for_unknown_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch, exists=False)
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=_FakeSessionManager(),
+        redis_client=object(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        handlers.issue_token(
+            TokenIssueRequest(
+                principal_id="principal-unknown",
+                organization_id="org-1",
+                tenant_id="tenant-1",
+                session_kind="automation",
+            )
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_rejects_token_issue_for_inactive_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(
+        monkeypatch,
+        lifecycle_status="suspended",
+    )
+
+    handlers = entrypoints._build_ais_handlers(
+        db_manager=_FakeDbManager(),
+        session_manager=_FakeSessionManager(),
+        redis_client=object(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        handlers.issue_token(
+            TokenIssueRequest(
+                principal_id="principal-1",
+                organization_id="org-1",
+                tenant_id="tenant-1",
+                session_kind="automation",
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.unit
+def test_build_ais_handlers_token_endpoint_returns_bundle_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_principal_registry_for_issue_token(monkeypatch)
+
     handlers = entrypoints._build_ais_handlers(
         db_manager=_FakeDbManager(),
         session_manager=_FakeSessionManager(),
