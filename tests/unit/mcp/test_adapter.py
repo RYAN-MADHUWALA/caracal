@@ -6,6 +6,7 @@ This module tests the Model Context Protocol adapter functionality.
 import pytest
 from datetime import datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 from uuid import uuid4
 
@@ -17,8 +18,63 @@ from caracal.mcp.adapter import (
 )
 from caracal.core.authority import AuthorityEvaluator, AuthorityDecision
 from caracal.core.metering import MeteringCollector
-from caracal.db.models import ExecutionMandate
-from caracal.exceptions import CaracalError
+from caracal.db.models import ExecutionMandate, GatewayProvider, RegisteredTool
+from caracal.deployment.exceptions import SecretNotFoundError
+from caracal.exceptions import (
+    CaracalError,
+    MCPProviderMissingError,
+    MCPToolMappingMismatchError,
+    MCPUnknownToolError,
+)
+
+
+_TOOL_ID = "provider:endframe:resource:deployments"
+_MAPPED_PROVIDER_NAME = "endframe"
+_MAPPED_RESOURCE_SCOPE = "provider:endframe:resource:deployments"
+_MAPPED_ACTION_SCOPE = "provider:endframe:action:invoke"
+
+
+def _definition_payload() -> dict:
+    return {
+        "definition_id": _MAPPED_PROVIDER_NAME,
+        "resources": {
+            "deployments": {
+                "actions": {
+                    "invoke": {
+                        "method": "POST",
+                        "path_prefix": "/v1/deployments",
+                    }
+                }
+            }
+        },
+    }
+
+
+class _RuntimeQueryStub:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def filter_by(self, **kwargs):
+        rows = [
+            row for row in self._rows
+            if all(getattr(row, key, None) == value for key, value in kwargs.items())
+        ]
+        return _RuntimeQueryStub(rows)
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _RuntimeSessionStub:
+    def __init__(self, providers):
+        self._providers = list(providers)
+
+    def query(self, model):
+        if model is GatewayProvider:
+            return _RuntimeQueryStub(self._providers)
+        if model is RegisteredTool:
+            return _RuntimeQueryStub([])
+        raise AssertionError(f"Unsupported query model: {model}")
 
 
 @pytest.mark.unit
@@ -111,6 +167,27 @@ class TestMCPAdapter:
             mcp_server_url="http://localhost:3001",
             request_timeout_seconds=30
         )
+        self.adapter.get_registered_tool = Mock(
+            return_value=SimpleNamespace(
+                tool_id=_TOOL_ID,
+                active=True,
+                provider_name=_MAPPED_PROVIDER_NAME,
+                resource_scope=_MAPPED_RESOURCE_SCOPE,
+                action_scope=_MAPPED_ACTION_SCOPE,
+                provider_definition_id=_MAPPED_PROVIDER_NAME,
+            )
+        )
+        self.adapter._resolve_active_tool_mapping = Mock(
+            return_value={
+                "tool_id": _TOOL_ID,
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+                "provider_definition_id": _MAPPED_PROVIDER_NAME,
+                "execution_mode": "mcp_forward",
+                "mcp_server_name": None,
+            }
+        )
     
     def test_adapter_initialization(self):
         """Test MCP adapter initialization."""
@@ -132,6 +209,38 @@ class TestMCPAdapter:
         """Decorator registration must provide an explicit tool_id."""
         with pytest.raises(CaracalError, match="tool_id is required"):
             self.adapter.as_decorator(tool_id="")
+
+    def test_as_decorator_fails_when_tool_not_registered(self):
+        """Decorator registration must fail when persisted tool record is missing."""
+        self.adapter.get_registered_tool.return_value = None
+
+        with pytest.raises(CaracalError, match="is not registered"):
+            self.adapter.as_decorator(tool_id=_TOOL_ID)
+
+    def test_as_decorator_fails_when_tool_inactive(self):
+        """Decorator registration must fail when persisted tool record is inactive."""
+        self.adapter.get_registered_tool.return_value = SimpleNamespace(
+            tool_id=_TOOL_ID,
+            active=False,
+        )
+
+        with pytest.raises(CaracalError, match="is inactive"):
+            self.adapter.as_decorator(tool_id=_TOOL_ID)
+
+    def test_as_decorator_rejects_duplicate_local_binding(self):
+        """Only one active local function binding is allowed per tool_id per process."""
+        decorator = self.adapter.as_decorator(tool_id=_TOOL_ID)
+
+        async def first(principal_id: str, mandate_id: str):
+            return {"principal_id": principal_id, "mandate_id": mandate_id}
+
+        async def second(principal_id: str, mandate_id: str):
+            return {"principal_id": principal_id, "mandate_id": mandate_id}
+
+        decorator(first)
+
+        with pytest.raises(CaracalError, match="already bound"):
+            decorator(second)
     
     @pytest.mark.asyncio
     async def test_intercept_tool_call_missing_mandate_id(self):
@@ -186,7 +295,7 @@ class TestMCPAdapter:
         )
         
         assert result.success is False
-        assert "not found" in result.error.lower()
+        assert "unknown mandate_id" in result.error.lower()
     
     @pytest.mark.asyncio
     async def test_intercept_tool_call_authority_denied(self):
@@ -207,8 +316,8 @@ class TestMCPAdapter:
             allowed=False,
             reason="Insufficient permissions",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="test_tool"
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
         self.mock_authority_evaluator.validate_mandate.return_value = mock_decision
         
@@ -240,8 +349,8 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="test_tool"
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
         self.mock_authority_evaluator.validate_mandate.return_value = mock_decision
         
@@ -275,8 +384,8 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="test_tool",
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
         self.mock_metering_collector.collect_event.side_effect = RuntimeError("metering unavailable")
 
@@ -303,6 +412,17 @@ class TestMCPAdapter:
             caveat_mode="caveat_chain",
             caveat_hmac_key="global-chain-key",
         )
+        adapter._resolve_active_tool_mapping = Mock(
+            return_value={
+                "tool_id": _TOOL_ID,
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+                "provider_definition_id": _MAPPED_PROVIDER_NAME,
+                "execution_mode": "mcp_forward",
+                "mcp_server_name": None,
+            }
+        )
 
         mandate_id = uuid4()
         task_chain = [{"index": 0, "type": "action", "value": "execute", "hmac": "abc", "previous_hmac": ""}]
@@ -322,8 +442,8 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="test_tool",
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
 
         with patch.object(adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
@@ -349,6 +469,17 @@ class TestMCPAdapter:
             mcp_server_url="http://localhost:3001",
             caveat_mode="jwt",
         )
+        adapter._resolve_active_tool_mapping = Mock(
+            return_value={
+                "tool_id": _TOOL_ID,
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+                "provider_definition_id": _MAPPED_PROVIDER_NAME,
+                "execution_mode": "mcp_forward",
+                "mcp_server_name": None,
+            }
+        )
 
         mandate_id = uuid4()
         context = MCPContext(
@@ -367,8 +498,8 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="test_tool",
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
 
         with patch.object(adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
@@ -550,11 +681,11 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="provider:test:resource:deployments",
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
 
-        @self.adapter.as_decorator(tool_id="provider:test:resource:deployments")
+        @self.adapter.as_decorator(tool_id=_TOOL_ID)
         async def decorated_tool(principal_id: str, mandate_id: str, payload: str):
             del principal_id, mandate_id
             return {"payload": payload}
@@ -567,7 +698,8 @@ class TestMCPAdapter:
 
         assert result == {"payload": "ok"}
         call_kwargs = self.mock_authority_evaluator.validate_mandate.call_args.kwargs
-        assert call_kwargs["requested_resource"] == "provider:test:resource:deployments"
+        assert call_kwargs["requested_action"] == _MAPPED_ACTION_SCOPE
+        assert call_kwargs["requested_resource"] == _MAPPED_RESOURCE_SCOPE
         self.mock_metering_collector.collect_event.assert_called_once()
 
     @pytest.mark.asyncio
@@ -582,12 +714,12 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource="provider:test:resource:deployments",
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
         self.mock_metering_collector.collect_event.side_effect = RuntimeError("metering unavailable")
 
-        @self.adapter.as_decorator(tool_id="provider:test:resource:deployments")
+        @self.adapter.as_decorator(tool_id=_TOOL_ID)
         async def decorated_tool(principal_id: str, mandate_id: str):
             del principal_id, mandate_id
             return "executed"
@@ -604,7 +736,7 @@ class TestMCPAdapter:
     async def test_forward_and_decorator_paths_share_authorization_inputs(self):
         """Forward and local decorator execution should authorize with the same caller/action/resource inputs."""
         mandate_id = uuid4()
-        tool_id = "provider:test:resource:deployments"
+        tool_id = _TOOL_ID
 
         mock_mandate = Mock(spec=ExecutionMandate)
         mock_mandate.subject_id = "agent-123"
@@ -613,8 +745,8 @@ class TestMCPAdapter:
             allowed=True,
             reason="Authority granted",
             mandate_id=mandate_id,
-            requested_action="execute",
-            requested_resource=tool_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
         )
 
         context = MCPContext(
@@ -649,9 +781,302 @@ class TestMCPAdapter:
         forward_kwargs = self.mock_authority_evaluator.validate_mandate.call_args_list[0].kwargs
         local_kwargs = self.mock_authority_evaluator.validate_mandate.call_args_list[1].kwargs
 
-        assert forward_kwargs["requested_action"] == local_kwargs["requested_action"] == "execute"
-        assert forward_kwargs["requested_resource"] == local_kwargs["requested_resource"] == tool_id
+        assert forward_kwargs["requested_action"] == local_kwargs["requested_action"] == _MAPPED_ACTION_SCOPE
+        assert forward_kwargs["requested_resource"] == local_kwargs["requested_resource"] == _MAPPED_RESOURCE_SCOPE
         assert forward_kwargs["caller_principal_id"] == local_kwargs["caller_principal_id"] == "agent-123"
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_attaches_mapped_provider_headers_for_forwarding(self):
+        """Forwarded execution should attach provider mapping headers from persisted tool mapping."""
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
+        )
+
+        with patch.object(self.adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
+            mock_forward.return_value = {"ok": True}
+
+            result = await self.adapter.intercept_tool_call(
+                tool_name=_TOOL_ID,
+                tool_args={"payload": "ok"},
+                mcp_context=context,
+            )
+
+        assert result.success is True
+        assert mock_forward.call_count == 1
+        forward_kwargs = mock_forward.call_args.kwargs
+        assert forward_kwargs["mapped_provider_name"] == _MAPPED_PROVIDER_NAME
+        assert forward_kwargs["mapped_resource_scope"] == _MAPPED_RESOURCE_SCOPE
+        assert forward_kwargs["mapped_action_scope"] == _MAPPED_ACTION_SCOPE
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_denies_when_mapped_provider_validation_fails(self):
+        """Mapped provider/resource/action drift failures should be denied before execution."""
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.adapter._resolve_active_tool_mapping.side_effect = CaracalError("Mapped provider 'endframe' for tool is inactive")
+
+        result = await self.adapter.intercept_tool_call(
+            tool_name=_TOOL_ID,
+            tool_args={"payload": "ok"},
+            mcp_context=context,
+        )
+
+        assert result.success is False
+        assert "authority denied" in result.error.lower()
+        assert "mapped provider" in result.error.lower()
+        self.mock_authority_evaluator.validate_mandate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_routes_to_local_mode_binding(self):
+        """Local execution mode should execute the in-process binding and skip upstream forwarding."""
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
+        )
+        self.adapter._resolve_active_tool_mapping.return_value = {
+            "tool_id": _TOOL_ID,
+            "provider_name": _MAPPED_PROVIDER_NAME,
+            "resource_scope": _MAPPED_RESOURCE_SCOPE,
+            "action_scope": _MAPPED_ACTION_SCOPE,
+            "provider_definition_id": _MAPPED_PROVIDER_NAME,
+            "execution_mode": "local",
+            "mcp_server_name": None,
+        }
+
+        async def _local_impl(*, principal_id: str, mandate_id: str, payload: str):
+            return {
+                "mode": "local",
+                "principal_id": principal_id,
+                "mandate_id": mandate_id,
+                "payload": payload,
+            }
+
+        self.adapter._decorator_bindings[_TOOL_ID] = _local_impl
+
+        with patch.object(self.adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
+            result = await self.adapter.intercept_tool_call(
+                tool_name=_TOOL_ID,
+                tool_args={"payload": "ok"},
+                mcp_context=context,
+            )
+
+        assert result.success is True
+        assert result.result["mode"] == "local"
+        assert result.result["payload"] == "ok"
+        assert mock_forward.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_rejects_misconfigured_forward_target(self):
+        """Forward mode must be denied when named upstream target is missing."""
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
+        )
+        self.adapter._resolve_active_tool_mapping.return_value = {
+            "tool_id": _TOOL_ID,
+            "provider_name": _MAPPED_PROVIDER_NAME,
+            "resource_scope": _MAPPED_RESOURCE_SCOPE,
+            "action_scope": _MAPPED_ACTION_SCOPE,
+            "provider_definition_id": _MAPPED_PROVIDER_NAME,
+            "execution_mode": "mcp_forward",
+            "mcp_server_name": "missing-upstream",
+        }
+
+        result = await self.adapter.intercept_tool_call(
+            tool_name=_TOOL_ID,
+            tool_args={"payload": "ok"},
+            mcp_context=context,
+        )
+
+        assert result.success is False
+        assert "authority denied" in result.error.lower()
+        assert "unknown mcp_server_name" in result.error.lower()
+
+    def test_resolve_active_tool_mapping_rejects_removed_provider(self):
+        """Mapped tool calls must be rejected when provider mapping has been removed."""
+        tool_row = SimpleNamespace(
+            tool_id=_TOOL_ID,
+            active=True,
+            provider_name=_MAPPED_PROVIDER_NAME,
+            resource_scope=_MAPPED_RESOURCE_SCOPE,
+            action_scope=_MAPPED_ACTION_SCOPE,
+            provider_definition_id=_MAPPED_PROVIDER_NAME,
+        )
+
+        self.adapter.get_registered_tool = Mock(return_value=tool_row)
+        self.mock_authority_evaluator.db_session = _RuntimeSessionStub([])
+
+        mapping_fn = MCPAdapter._resolve_active_tool_mapping.__get__(self.adapter, MCPAdapter)
+        with pytest.raises(MCPProviderMissingError, match="was removed"):
+            mapping_fn(
+                tool_id=_TOOL_ID,
+                mcp_context=MCPContext(principal_id="agent-123", metadata={"workspace": "default"}),
+                require_credential=False,
+            )
+
+    def test_resolve_active_tool_mapping_rejects_inactive_provider(self):
+        """Mapped tool calls must be rejected when provider is inactive."""
+        tool_row = SimpleNamespace(
+            tool_id=_TOOL_ID,
+            active=True,
+            provider_name=_MAPPED_PROVIDER_NAME,
+            resource_scope=_MAPPED_RESOURCE_SCOPE,
+            action_scope=_MAPPED_ACTION_SCOPE,
+            provider_definition_id=_MAPPED_PROVIDER_NAME,
+        )
+        provider_row = GatewayProvider(
+            provider_id=_MAPPED_PROVIDER_NAME,
+            name="Endframe",
+            base_url="https://api.endframe.dev",
+            auth_scheme="none",
+            definition=_definition_payload(),
+            enabled=False,
+        )
+
+        self.adapter.get_registered_tool = Mock(return_value=tool_row)
+        self.mock_authority_evaluator.db_session = _RuntimeSessionStub([provider_row])
+
+        mapping_fn = MCPAdapter._resolve_active_tool_mapping.__get__(self.adapter, MCPAdapter)
+        with pytest.raises(MCPProviderMissingError, match="is inactive"):
+            mapping_fn(
+                tool_id=_TOOL_ID,
+                mcp_context=MCPContext(principal_id="agent-123", metadata={"workspace": "default"}),
+                require_credential=False,
+            )
+
+    def test_resolve_active_tool_mapping_rejects_provider_scope_drift(self):
+        """Mapped tool calls must be rejected when provider definition removes mapped scopes."""
+        tool_row = SimpleNamespace(
+            tool_id=_TOOL_ID,
+            active=True,
+            provider_name=_MAPPED_PROVIDER_NAME,
+            resource_scope=_MAPPED_RESOURCE_SCOPE,
+            action_scope=_MAPPED_ACTION_SCOPE,
+            provider_definition_id=_MAPPED_PROVIDER_NAME,
+        )
+        provider_row = GatewayProvider(
+            provider_id=_MAPPED_PROVIDER_NAME,
+            name="Endframe",
+            base_url="https://api.endframe.dev",
+            auth_scheme="none",
+            definition={
+                "definition_id": _MAPPED_PROVIDER_NAME,
+                "resources": {
+                    "deployments": {
+                        "actions": {
+                            "status": {
+                                "method": "GET",
+                                "path_prefix": "/v1/deployments/status",
+                            }
+                        }
+                    }
+                },
+            },
+            enabled=True,
+        )
+
+        self.adapter.get_registered_tool = Mock(return_value=tool_row)
+        self.mock_authority_evaluator.db_session = _RuntimeSessionStub([provider_row])
+
+        mapping_fn = MCPAdapter._resolve_active_tool_mapping.__get__(self.adapter, MCPAdapter)
+        with pytest.raises(MCPToolMappingMismatchError, match="Action scope 'provider:endframe:action:invoke'"):
+            mapping_fn(
+                tool_id=_TOOL_ID,
+                mcp_context=MCPContext(principal_id="agent-123", metadata={"workspace": "default"}),
+                require_credential=False,
+            )
+
+    def test_resolve_active_tool_mapping_raises_unknown_tool_error_class(self):
+        """Unknown tool IDs should raise MCPUnknownToolError deterministically."""
+        self.adapter.get_registered_tool = Mock(return_value=None)
+        self.mock_authority_evaluator.db_session = _RuntimeSessionStub([])
+
+        mapping_fn = MCPAdapter._resolve_active_tool_mapping.__get__(self.adapter, MCPAdapter)
+        with pytest.raises(MCPUnknownToolError, match="Unknown tool_id"):
+            mapping_fn(
+                tool_id=_TOOL_ID,
+                mcp_context=MCPContext(principal_id="agent-123", metadata={"workspace": "default"}),
+                require_credential=False,
+            )
+
+    def test_resolve_active_tool_mapping_rejects_unresolvable_credential_ref(self):
+        """Mapped provider credentials must resolve before execution proceeds."""
+        tool_row = SimpleNamespace(
+            tool_id=_TOOL_ID,
+            active=True,
+            provider_name=_MAPPED_PROVIDER_NAME,
+            resource_scope=_MAPPED_RESOURCE_SCOPE,
+            action_scope=_MAPPED_ACTION_SCOPE,
+            provider_definition_id=_MAPPED_PROVIDER_NAME,
+        )
+        provider_row = GatewayProvider(
+            provider_id=_MAPPED_PROVIDER_NAME,
+            name="Endframe",
+            base_url="https://api.endframe.dev",
+            auth_scheme="api_key",
+            credential_ref="caracal:default/providers/endframe/credential",
+            definition=_definition_payload(),
+            enabled=True,
+        )
+
+        self.adapter.get_registered_tool = Mock(return_value=tool_row)
+        self.mock_authority_evaluator.db_session = _RuntimeSessionStub([provider_row])
+
+        mapping_fn = MCPAdapter._resolve_active_tool_mapping.__get__(self.adapter, MCPAdapter)
+        with patch(
+            "caracal.mcp.adapter.resolve_workspace_provider_credential",
+            side_effect=SecretNotFoundError("Secret not found"),
+        ):
+            with pytest.raises(CaracalError, match="Credential not found for mapped provider"):
+                mapping_fn(
+                    tool_id=_TOOL_ID,
+                    mcp_context=MCPContext(principal_id="agent-123", metadata={"workspace": "default"}),
+                    require_credential=True,
+                )
     
     def test_extract_principal_id_success(self):
         """Test successful principal ID extraction."""
