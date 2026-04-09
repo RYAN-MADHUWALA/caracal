@@ -14,8 +14,6 @@ from caracal.core.metering import MeteringEvent
 from caracal.mcp.adapter import MCPAdapter
 from caracal.mcp.service import MCPAdapterService, MCPServerConfig, MCPServiceConfig
 
-pytest.importorskip("aiohttp")
-
 from caracal_sdk.adapters.http import HttpAdapter
 from caracal_sdk.context import ScopeContext
 from caracal_sdk.hooks import HookRegistry
@@ -139,6 +137,8 @@ def _build_service_app(*, execution_mode: str):
         resource_scope="provider:endframe:resource:deployments",
         action_scope="provider:endframe:action:invoke",
         provider_definition_id="endframe",
+        tool_type="logic" if execution_mode == "local" else "direct_api",
+        handler_ref=f"{__name__}:_local_tool" if execution_mode == "local" else None,
         execution_mode=execution_mode,
         mcp_server_name="server-0" if execution_mode == "mcp_forward" else None,
     )
@@ -293,7 +293,8 @@ async def test_sdk_tool_call_local_and_forward_modes_preserve_authorization_and_
     assert local_events[0].principal_id == forward_events[0].principal_id
     assert local_events[0].resource_type == forward_events[0].resource_type
     assert local_events[0].metadata["tool_name"] == forward_events[0].metadata["tool_name"]
-    assert local_events[0].metadata["mandate_id"] == forward_events[0].metadata["mandate_id"]
+    assert local_events[0].metadata["mandate_id"] == local_fixture["mandate_id"]
+    assert forward_events[0].metadata["mandate_id"] == forward_fixture["mandate_id"]
     assert local_events[0].metadata["mcp_context"]["token_subject"] == forward_events[0].metadata["mcp_context"]["token_subject"]
 
     local_scope._adapter.close()

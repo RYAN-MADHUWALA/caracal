@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("aiohttp")
-
 from caracal_sdk._compat import SDKConfigurationError
 from caracal_sdk.adapters.base import BaseAdapter, SDKRequest, SDKResponse
 from caracal_sdk.context import ScopeContext
