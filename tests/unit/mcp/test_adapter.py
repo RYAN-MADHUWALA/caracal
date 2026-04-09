@@ -34,6 +34,15 @@ _MAPPED_RESOURCE_SCOPE = "provider:endframe:resource:deployments"
 _MAPPED_ACTION_SCOPE = "provider:endframe:action:invoke"
 
 
+async def _local_handler_ref_impl(*, principal_id: str, mandate_id: str, payload: str):
+    return {
+        "mode": "handler_ref",
+        "principal_id": principal_id,
+        "mandate_id": mandate_id,
+        "payload": payload,
+    }
+
+
 def _definition_payload() -> dict:
     return {
         "definition_id": _MAPPED_PROVIDER_NAME,
@@ -1124,7 +1133,14 @@ class TestMCPAdapter:
     async def test_forward_to_mcp_server_preserves_mapped_selectors_in_metadata(self):
         response = Mock()
         response.status_code = 200
-        response.json.return_value = {"output": "ok"}
+        response.json.return_value = {
+            "output": "ok",
+            "metadata": {
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+                "action_scope": _MAPPED_ACTION_SCOPE,
+            },
+        }
         response.text = '{"output":"ok"}'
 
         client = AsyncMock()
@@ -1144,6 +1160,146 @@ class TestMCPAdapter:
         assert result["metadata"]["provider_name"] == _MAPPED_PROVIDER_NAME
         assert result["metadata"]["resource_scope"] == _MAPPED_RESOURCE_SCOPE
         assert result["metadata"]["action_scope"] == _MAPPED_ACTION_SCOPE
+
+    @pytest.mark.asyncio
+    async def test_forward_to_mcp_server_rejects_missing_selector_echo_from_upstream(self):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "output": "ok",
+            "metadata": {
+                "provider_name": _MAPPED_PROVIDER_NAME,
+                "resource_scope": _MAPPED_RESOURCE_SCOPE,
+            },
+        }
+        response.text = '{"output":"ok"}'
+
+        client = AsyncMock()
+        client.post = AsyncMock(return_value=response)
+
+        with patch.object(self.adapter, "_get_http_client", new_callable=AsyncMock) as mock_get_client:
+            mock_get_client.return_value = client
+            with pytest.raises(CaracalError, match="missing required 'action_scope' selector"):
+                await self.adapter._forward_to_mcp_server(
+                    tool_name=_TOOL_ID,
+                    tool_args={"payload": "ok"},
+                    server_url="http://localhost:3001",
+                    mapped_provider_name=_MAPPED_PROVIDER_NAME,
+                    mapped_resource_scope=_MAPPED_RESOURCE_SCOPE,
+                    mapped_action_scope=_MAPPED_ACTION_SCOPE,
+                )
+
+    @pytest.mark.asyncio
+    async def test_execute_local_tool_resolves_callable_from_handler_ref_without_decorator_binding(self):
+        result = await self.adapter._execute_local_tool(
+            tool_id=_TOOL_ID,
+            principal_id="agent-123",
+            mandate_id=uuid4(),
+            tool_args={"payload": "ok"},
+            handler_ref=f"{__name__}:_local_handler_ref_impl",
+            workspace_name="default",
+            provider_name=_MAPPED_PROVIDER_NAME,
+            resource_scope=_MAPPED_RESOURCE_SCOPE,
+            action_scope=_MAPPED_ACTION_SCOPE,
+            tool_type="logic",
+            allowed_downstream_scopes=[],
+        )
+
+        assert result["mode"] == "handler_ref"
+        assert result["payload"] == "ok"
+        assert result["principal_id"] == "agent-123"
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_denies_logic_downstream_scope_outside_allowed_contract(self):
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+
+        self.adapter._resolve_active_tool_mapping.return_value = {
+            "tool_id": "downstream.tool",
+            "provider_name": _MAPPED_PROVIDER_NAME,
+            "resource_scope": _MAPPED_RESOURCE_SCOPE,
+            "action_scope": _MAPPED_ACTION_SCOPE,
+            "provider_definition_id": _MAPPED_PROVIDER_NAME,
+            "tool_type": "direct_api",
+            "execution_mode": "mcp_forward",
+            "mcp_server_name": None,
+        }
+
+        token = self.adapter._active_logic_execution.set(
+            {
+                "tool_id": "parent.logic.tool",
+                "allowed_downstream_scopes": ["provider:endframe:action:status"],
+            }
+        )
+        try:
+            result = await self.adapter.intercept_tool_call(
+                tool_name="downstream.tool",
+                tool_args={"payload": "ok"},
+                mcp_context=context,
+            )
+        finally:
+            self.adapter._active_logic_execution.reset(token)
+
+        assert result.success is False
+        assert "downstream scope denied" in result.error.lower()
+        self.mock_authority_evaluator.validate_mandate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_intercept_tool_call_allows_logic_downstream_scope_in_allowed_contract(self):
+        mandate_id = uuid4()
+        context = MCPContext(
+            principal_id="agent-123",
+            metadata={"mandate_id": str(mandate_id)},
+        )
+
+        mock_mandate = Mock(spec=ExecutionMandate)
+        mock_mandate.subject_id = "agent-123"
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = mock_mandate
+        self.mock_authority_evaluator.validate_mandate.return_value = AuthorityDecision(
+            allowed=True,
+            reason="Authority granted",
+            mandate_id=mandate_id,
+            requested_action=_MAPPED_ACTION_SCOPE,
+            requested_resource=_MAPPED_RESOURCE_SCOPE,
+        )
+
+        self.adapter._resolve_active_tool_mapping.return_value = {
+            "tool_id": "downstream.tool",
+            "provider_name": _MAPPED_PROVIDER_NAME,
+            "resource_scope": _MAPPED_RESOURCE_SCOPE,
+            "action_scope": _MAPPED_ACTION_SCOPE,
+            "provider_definition_id": _MAPPED_PROVIDER_NAME,
+            "tool_type": "direct_api",
+            "execution_mode": "mcp_forward",
+            "mcp_server_name": None,
+        }
+
+        token = self.adapter._active_logic_execution.set(
+            {
+                "tool_id": "parent.logic.tool",
+                "allowed_downstream_scopes": [_MAPPED_ACTION_SCOPE],
+            }
+        )
+        try:
+            with patch.object(self.adapter, "_forward_to_mcp_server", new_callable=AsyncMock) as mock_forward:
+                mock_forward.return_value = {"ok": True}
+                result = await self.adapter.intercept_tool_call(
+                    tool_name="downstream.tool",
+                    tool_args={"payload": "ok"},
+                    mcp_context=context,
+                )
+        finally:
+            self.adapter._active_logic_execution.reset(token)
+
+        assert result.success is True
+        assert result.result == {"ok": True}
 
     @pytest.mark.asyncio
     async def test_forward_to_mcp_server_rejects_selector_mismatch_from_upstream(self):

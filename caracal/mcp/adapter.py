@@ -11,6 +11,8 @@ and resource reads, enforces authority policies, and emits metering events.
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from contextvars import ContextVar
+import importlib
 import os
 from typing import Any, Dict, Optional
 
@@ -144,6 +146,13 @@ class MCPAdapter:
             or ""
         ).strip()
         self._decorator_bindings: dict[str, Any] = {}
+        self._decorator_bindings_by_contract: dict[tuple[str, str, str, str, str], Any] = {}
+        self._tool_binding_contract_keys: dict[str, tuple[str, str, str, str, str]] = {}
+        self._handler_ref_bindings: dict[str, Any] = {}
+        self._active_logic_execution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+            "caracal_active_logic_execution",
+            default=None,
+        )
         self._http_client: Optional[httpx.AsyncClient] = None
         logger.info(
             "MCPAdapter initialized "
@@ -281,6 +290,143 @@ class MCPAdapter:
             return ""
         return f"{module_name}:{function_name}"
 
+    @staticmethod
+    def _binding_contract_key(
+        *,
+        workspace_name: Optional[str],
+        provider_name: Optional[str],
+        resource_scope: Optional[str],
+        action_scope: Optional[str],
+        tool_type: Optional[str],
+    ) -> Optional[tuple[str, str, str, str, str]]:
+        normalized_provider = str(provider_name or "").strip()
+        normalized_resource_scope = str(resource_scope or "").strip()
+        normalized_action_scope = str(action_scope or "").strip()
+        if not normalized_provider or not normalized_resource_scope or not normalized_action_scope:
+            return None
+
+        normalized_workspace = str(workspace_name or "").strip() or "default"
+        normalized_tool_type = str(tool_type or "direct_api").strip().lower() or "direct_api"
+        return (
+            normalized_workspace,
+            normalized_provider,
+            normalized_resource_scope,
+            normalized_action_scope,
+            normalized_tool_type,
+        )
+
+    def _clear_local_binding_cache(self, tool_id: str) -> None:
+        normalized_tool_id = self._normalize_tool_id(tool_id)
+        self._decorator_bindings.pop(normalized_tool_id, None)
+        contract_key = self._tool_binding_contract_keys.pop(normalized_tool_id, None)
+        if contract_key is not None:
+            self._decorator_bindings_by_contract.pop(contract_key, None)
+
+    def _resolve_callable_from_handler_ref(self, handler_ref: str) -> Any:
+        normalized_handler_ref = self._normalize_handler_ref(handler_ref)
+        if not normalized_handler_ref:
+            raise CaracalError("handler_ref is required for local logic execution")
+
+        cached = self._handler_ref_bindings.get(normalized_handler_ref)
+        if cached is not None:
+            return cached
+
+        module_name, separator, function_name = normalized_handler_ref.partition(":")
+        if not separator or not module_name.strip() or not function_name.strip():
+            raise CaracalError(
+                f"Invalid handler_ref '{normalized_handler_ref}'; expected format module:function"
+            )
+
+        try:
+            module = importlib.import_module(module_name)
+        except Exception as exc:
+            raise CaracalError(
+                f"Failed to import handler module '{module_name}' for handler_ref '{normalized_handler_ref}': {exc}"
+            ) from exc
+
+        try:
+            handler = getattr(module, function_name)
+        except AttributeError as exc:
+            raise CaracalError(
+                f"Handler function '{function_name}' not found in module '{module_name}'"
+            ) from exc
+
+        if not callable(handler):
+            raise CaracalError(
+                f"Handler '{normalized_handler_ref}' is not callable"
+            )
+
+        self._handler_ref_bindings[normalized_handler_ref] = handler
+        return handler
+
+    def _resolve_local_callable_binding(
+        self,
+        *,
+        tool_id: str,
+        handler_ref: Optional[str],
+        workspace_name: Optional[str],
+        provider_name: Optional[str],
+        resource_scope: Optional[str],
+        action_scope: Optional[str],
+        tool_type: Optional[str],
+    ) -> Any:
+        contract_key = self._binding_contract_key(
+            workspace_name=workspace_name,
+            provider_name=provider_name,
+            resource_scope=resource_scope,
+            action_scope=action_scope,
+            tool_type=tool_type,
+        )
+
+        bound_func = None
+        if contract_key is not None:
+            bound_func = self._decorator_bindings_by_contract.get(contract_key)
+        if bound_func is None:
+            bound_func = self._decorator_bindings.get(tool_id)
+
+        expected_handler_ref = self._normalize_handler_ref(handler_ref)
+        if bound_func is not None:
+            runtime_handler_ref = self._callable_handler_ref(bound_func)
+            if expected_handler_ref and runtime_handler_ref != expected_handler_ref:
+                raise CaracalError(
+                    f"Local handler mismatch for tool '{tool_id}': expected {expected_handler_ref}, got {runtime_handler_ref or '<unknown>'}"
+                )
+            return bound_func
+
+        if expected_handler_ref:
+            return self._resolve_callable_from_handler_ref(expected_handler_ref)
+
+        raise CaracalError(
+            f"No local function binding found for tool '{tool_id}'"
+        )
+
+    def _enforce_logic_downstream_scope(
+        self,
+        *,
+        parent_context: Dict[str, Any],
+        requested_mapping: Dict[str, Any],
+    ) -> None:
+        allowed_scopes = {
+            str(scope).strip()
+            for scope in (parent_context.get("allowed_downstream_scopes") or [])
+            if str(scope).strip()
+        }
+        parent_tool_id = str(parent_context.get("tool_id") or "").strip() or "<logic-tool>"
+        if not allowed_scopes:
+            raise CaracalError(
+                f"Logic tool '{parent_tool_id}' has no allowed_downstream_scopes; downstream provider/tool calls are denied"
+            )
+
+        requested_resource_scope = str(requested_mapping.get("resource_scope") or "").strip()
+        requested_action_scope = str(requested_mapping.get("action_scope") or "").strip()
+        if requested_resource_scope in allowed_scopes or requested_action_scope in allowed_scopes:
+            return
+
+        raise CaracalError(
+            f"Downstream scope denied for logic tool '{parent_tool_id}': "
+            f"resource_scope='{requested_resource_scope}', action_scope='{requested_action_scope}'"
+        )
+
     def register_tool(
         self,
         *,
@@ -344,6 +490,11 @@ class MCPAdapter:
             was_active = bool(existing.active)
             previous_handler_ref = self._normalize_handler_ref(getattr(existing, "handler_ref", None))
             previous_execution_mode = str(getattr(existing, "execution_mode", "") or "").strip().lower()
+            previous_workspace_name = self._normalize_workspace_name(getattr(existing, "workspace_name", None)) or "default"
+            previous_provider_name = str(getattr(existing, "provider_name", "") or "").strip()
+            previous_resource_scope = str(getattr(existing, "resource_scope", "") or "").strip()
+            previous_action_scope = str(getattr(existing, "action_scope", "") or "").strip()
+            previous_tool_type = str(getattr(existing, "tool_type", "direct_api") or "direct_api").strip().lower()
             existing.active = bool(active)
             existing.provider_name = mapping["provider_name"]
             existing.resource_scope = mapping["resource_scope"]
@@ -360,9 +511,14 @@ class MCPAdapter:
             if (
                 previous_handler_ref != normalized_handler_ref
                 or previous_execution_mode != execution_target["execution_mode"]
+                or previous_workspace_name != normalized_workspace_name
+                or previous_provider_name != mapping["provider_name"]
+                or previous_resource_scope != mapping["resource_scope"]
+                or previous_action_scope != mapping["action_scope"]
+                or previous_tool_type != normalized_tool_type
                 or not bool(active)
             ):
-                self._decorator_bindings.pop(normalized_tool_id, None)
+                self._clear_local_binding_cache(normalized_tool_id)
             if was_active != bool(active):
                 transition = "tool_reactivated" if bool(active) else "tool_deactivated"
                 self._record_tool_transition_event(
@@ -551,7 +707,7 @@ class MCPAdapter:
 
         row.active = False
         row.updated_at = datetime.utcnow()
-        self._decorator_bindings.pop(normalized_tool_id, None)
+        self._clear_local_binding_cache(normalized_tool_id)
         self._record_tool_transition_event(
             session=session,
             actor_principal_id=actor_principal_id,
@@ -577,7 +733,7 @@ class MCPAdapter:
 
         row.active = True
         row.updated_at = datetime.utcnow()
-        self._decorator_bindings.pop(normalized_tool_id, None)
+        self._clear_local_binding_cache(normalized_tool_id)
         self._record_tool_transition_event(
             session=session,
             actor_principal_id=actor_principal_id,
@@ -686,6 +842,27 @@ class MCPAdapter:
                     error=f"Authority denied: {exc}",
                 )
 
+            logic_execution_context = self._active_logic_execution.get()
+            if (
+                logic_execution_context
+                and str(tool_mapping.get("tool_id") or "").strip()
+                != str(logic_execution_context.get("tool_id") or "").strip()
+            ):
+                try:
+                    self._enforce_logic_downstream_scope(
+                        parent_context=logic_execution_context,
+                        requested_mapping=tool_mapping,
+                    )
+                except CaracalError as exc:
+                    logger.warning(
+                        f"Downstream scope denied for tool {tool_name}: {exc}"
+                    )
+                    return MCPResult(
+                        success=False,
+                        result=None,
+                        error=f"Authority denied: {exc}",
+                    )
+
             # 4. Validate Authority
             caveat_kwargs = self._extract_caveat_authority_kwargs(mcp_context)
             decision = self.authority_evaluator.validate_mandate(
@@ -719,6 +896,12 @@ class MCPAdapter:
                         mandate_id=mandate_id,
                         tool_args=tool_args,
                         handler_ref=tool_mapping.get("handler_ref"),
+                        workspace_name=tool_mapping.get("workspace_name"),
+                        provider_name=tool_mapping.get("provider_name"),
+                        resource_scope=tool_mapping.get("resource_scope"),
+                        action_scope=tool_mapping.get("action_scope"),
+                        tool_type=tool_mapping.get("tool_type"),
+                        allowed_downstream_scopes=tool_mapping.get("allowed_downstream_scopes"),
                     )
                 else:
                     forward_server_url = self._resolve_forward_server_url(
@@ -1368,18 +1551,22 @@ class MCPAdapter:
         mandate_id: UUID,
         tool_args: Dict[str, Any],
         handler_ref: Optional[str] = None,
+        workspace_name: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        resource_scope: Optional[str] = None,
+        action_scope: Optional[str] = None,
+        tool_type: Optional[str] = None,
+        allowed_downstream_scopes: Optional[list[str]] = None,
     ) -> Any:
-        bound_func = self._decorator_bindings.get(tool_id)
-        if bound_func is None:
-            raise CaracalError(f"No local function binding found for tool '{tool_id}'")
-
-        expected_handler_ref = self._normalize_handler_ref(handler_ref)
-        if expected_handler_ref:
-            runtime_handler_ref = self._callable_handler_ref(bound_func)
-            if runtime_handler_ref != expected_handler_ref:
-                raise CaracalError(
-                    f"Local handler mismatch for tool '{tool_id}': expected {expected_handler_ref}, got {runtime_handler_ref or '<unknown>'}"
-                )
+        bound_func = self._resolve_local_callable_binding(
+            tool_id=tool_id,
+            handler_ref=handler_ref,
+            workspace_name=workspace_name,
+            provider_name=provider_name,
+            resource_scope=resource_scope,
+            action_scope=action_scope,
+            tool_type=tool_type,
+        )
 
         call_kwargs = dict(tool_args or {})
         call_kwargs.pop("principal_id", None)
@@ -1389,9 +1576,27 @@ class MCPAdapter:
 
         import inspect
 
-        if inspect.iscoroutinefunction(bound_func):
-            return await bound_func(**call_kwargs)
-        return bound_func(**call_kwargs)
+        logic_context_token = None
+        if str(tool_type or "").strip().lower() == "logic":
+            logic_context = {
+                "tool_id": tool_id,
+                "workspace_name": workspace_name,
+                "provider_name": provider_name,
+                "resource_scope": resource_scope,
+                "action_scope": action_scope,
+                "allowed_downstream_scopes": self._normalize_allowed_downstream_scopes(
+                    allowed_downstream_scopes
+                ),
+            }
+            logic_context_token = self._active_logic_execution.set(logic_context)
+
+        try:
+            if inspect.iscoroutinefunction(bound_func):
+                return await bound_func(**call_kwargs)
+            return bound_func(**call_kwargs)
+        finally:
+            if logic_context_token is not None:
+                self._active_logic_execution.reset(logic_context_token)
 
     async def _forward_to_mcp_server(
         self,
@@ -1477,6 +1682,10 @@ class MCPAdapter:
                 if not expected_value:
                     continue
                 actual_value = self._extract_forward_selector_value(result, selector_key)
+                if not actual_value:
+                    raise CaracalError(
+                        f"Upstream forward response missing required '{selector_key}' selector"
+                    )
                 if actual_value and actual_value != expected_value:
                     raise CaracalError(
                         f"Upstream forward response mismatch for {selector_key}: "
@@ -1662,11 +1871,19 @@ class MCPAdapter:
             )
 
         # Fail import-time binding if provider/action/resource mapping drifted.
-        self._resolve_active_tool_mapping(
+        tool_mapping = self._resolve_active_tool_mapping(
             tool_id=resolved_tool_id,
             mcp_context=None,
             require_credential=False,
         )
+        contract_key = self._binding_contract_key(
+            workspace_name=tool_mapping.get("workspace_name"),
+            provider_name=tool_mapping.get("provider_name"),
+            resource_scope=tool_mapping.get("resource_scope"),
+            action_scope=tool_mapping.get("action_scope"),
+            tool_type=tool_mapping.get("tool_type"),
+        )
+        expected_handler_ref = self._normalize_handler_ref(tool_mapping.get("handler_ref"))
 
         def decorator(func):
             """
@@ -1683,7 +1900,25 @@ class MCPAdapter:
                 raise CaracalError(
                     f"tool_id '{resolved_tool_id}' is already bound to another local function"
                 )
+
+            runtime_handler_ref = self._callable_handler_ref(func)
+            if expected_handler_ref and runtime_handler_ref != expected_handler_ref:
+                raise CaracalError(
+                    f"Local handler mismatch for tool '{resolved_tool_id}': expected {expected_handler_ref}, got {runtime_handler_ref or '<unknown>'}"
+                )
+
             self._decorator_bindings[resolved_tool_id] = func
+            if contract_key is not None:
+                existing_contract_binding = self._decorator_bindings_by_contract.get(contract_key)
+                if existing_contract_binding is not None and existing_contract_binding is not func:
+                    raise CaracalError(
+                        f"Binding contract for tool '{resolved_tool_id}' is already bound to another local function"
+                    )
+                self._decorator_bindings_by_contract[contract_key] = func
+                self._tool_binding_contract_keys[resolved_tool_id] = contract_key
+
+            if runtime_handler_ref:
+                self._handler_ref_bindings[runtime_handler_ref] = func
 
             import functools
             import inspect
