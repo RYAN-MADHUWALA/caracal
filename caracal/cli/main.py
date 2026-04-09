@@ -231,14 +231,14 @@ def cli(ctx, workspace: Optional[str], log_level: str, verbose: bool):
     # Use Click context state first (works in CliRunner and nested command help),
     # then fall back to raw argv for direct terminal invocations.
     pending_args = tuple(getattr(ctx, "args", ()))
+    protected_args = tuple(getattr(ctx, "protected_args", ()))
+    observed_args = pending_args + protected_args + tuple(sys.argv[1:])
     is_help_or_version = (
         bool(ctx.resilient_parsing)
-        or any(arg in {"--help", "-h", "--version"} for arg in pending_args)
-        or any(arg in {"--help", "-h", "--version"} for arg in sys.argv[1:])
+        or any(arg in {"--help", "-h", "--version"} for arg in observed_args)
     )
     is_version = (
-        any(arg == "--version" for arg in pending_args)
-        or any(arg == "--version" for arg in sys.argv[1:])
+        any(arg == "--version" for arg in observed_args)
     )
 
     # Help/version should never require loading runtime config. In hard-cut mode,
@@ -248,6 +248,17 @@ def cli(ctx, workspace: Optional[str], log_level: str, verbose: bool):
         if ctx.invoked_subcommand is not None and not is_version:
             active_ws = ctx.obj['workspace']
             click.echo(format_workspace_status(active_ws))
+        return
+
+    # Root invocation without subcommand should be informative and must not
+    # fail due to runtime config preflight checks.
+    if ctx.invoked_subcommand is None:
+        active_ws = ctx.obj['workspace']
+        click.echo(f"Caracal v{__version__}")
+        click.echo(format_workspace_status(active_ws))
+        click.echo()
+        click.echo("Run 'caracal --help' for available commands")
+        click.echo("Run 'caracal workspace list' to see all workspaces")
         return
     
     # Load configuration
@@ -296,15 +307,6 @@ def cli(ctx, workspace: Optional[str], log_level: str, verbose: bool):
         click.echo(f"Error: Failed to set up logging: {e}", err=True)
         sys.exit(1)
     
-    # Show workspace context if no command given
-    if ctx.invoked_subcommand is None:
-        active_ws = ctx.obj['workspace']
-        click.echo(f"Caracal v{__version__}")
-        click.echo(format_workspace_status(active_ws))
-        click.echo()
-        click.echo("Run 'caracal --help' for available commands")
-        click.echo("Run 'caracal workspace list' to see all workspaces")
-
 # =============================================================================
 # WORKSPACE MANAGEMENT (Primary Context)
 # =============================================================================
