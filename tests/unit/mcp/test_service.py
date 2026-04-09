@@ -5,6 +5,7 @@ This module tests the MCPAdapterService class and HTTP API.
 """
 import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
+from types import SimpleNamespace
 from uuid import uuid4
 
 from caracal.mcp.service import (
@@ -15,11 +16,12 @@ from caracal.mcp.service import (
     ResourceReadRequest,
     MCPServiceResponse,
     HealthCheckResponse,
+    _validate_forward_tool_server_bindings,
 )
 from caracal.mcp.adapter import MCPAdapter, MCPResult, MCPResource
 from caracal.core.authority import AuthorityEvaluator
 from caracal.core.metering import MeteringCollector
-from caracal.exceptions import CaracalError
+from caracal.exceptions import CaracalError, MCPUnknownMandateError, MCPUnknownToolError
 
 
 @pytest.mark.unit
@@ -94,19 +96,22 @@ class TestToolCallRequest:
     def test_tool_call_request_creation(self):
         """Test ToolCallRequest creation."""
         request = ToolCallRequest(
-            tool_name="test_tool",
+            tool_id="test_tool",
+            mandate_id=str(uuid4()),
             tool_args={"arg": "value"},
             metadata={"key": "value"}
         )
-        
-        assert request.tool_name == "test_tool"
+
+        assert request.tool_id == "test_tool"
+        assert request.mandate_id
         assert request.tool_args["arg"] == "value"
         assert request.metadata["key"] == "value"
     
     def test_tool_call_request_defaults(self):
         """Test ToolCallRequest with default values."""
         request = ToolCallRequest(
-            tool_name="test_tool"
+            tool_id="test_tool",
+            mandate_id=str(uuid4()),
         )
         
         assert request.tool_args == {}
@@ -183,13 +188,22 @@ class TestMCPAdapterService:
     
     def setup_method(self):
         """Set up test fixtures before each test method."""
+        self.actor_principal_id = "11111111-1111-1111-1111-111111111111"
         self.mock_mcp_adapter = Mock(spec=MCPAdapter)
         self.mock_authority_evaluator = Mock(spec=AuthorityEvaluator)
         self.mock_metering_collector = Mock(spec=MeteringCollector)
         self.mock_db_connection_manager = Mock()
         self.mock_session_manager = Mock()
         self.mock_session_manager.validate_access_token = AsyncMock(
-            return_value={"sub": "agent-123"}
+            return_value={"sub": self.actor_principal_id}
+        )
+        self.mock_mcp_adapter.get_registered_tool.return_value = SimpleNamespace(
+            tool_id="test_tool",
+            active=True,
+        )
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = SimpleNamespace(
+            revoked=False,
+            valid_until=None,
         )
         
         # Create server config
@@ -228,6 +242,86 @@ class TestMCPAdapterService:
         assert self.service._allowed_count == 0
         assert self.service._denied_count == 0
         assert self.service._error_count == 0
+
+    @pytest.mark.unit
+    def test_validate_forward_tool_server_bindings_rejects_unknown_named_targets(self):
+        class _Query:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter_by(self, **kwargs):
+                rows = [
+                    row for row in self._rows
+                    if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                ]
+                return _Query(rows)
+
+            def all(self):
+                return list(self._rows)
+
+        class _Session:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def query(self, _model):
+                return _Query(self._rows)
+
+        session = _Session(
+            [
+                SimpleNamespace(
+                    tool_id="tool.forward",
+                    active=True,
+                    execution_mode="mcp_forward",
+                    mcp_server_name="missing-server",
+                )
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match="unknown MCP server names"):
+            _validate_forward_tool_server_bindings(
+                session,
+                named_server_urls={"server-0": "http://localhost:3001"},
+            )
+
+
+    @pytest.mark.unit
+    def test_validate_forward_tool_server_bindings_accepts_known_named_targets(self):
+        class _Query:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def filter_by(self, **kwargs):
+                rows = [
+                    row for row in self._rows
+                    if all(getattr(row, key, None) == value for key, value in kwargs.items())
+                ]
+                return _Query(rows)
+
+            def all(self):
+                return list(self._rows)
+
+        class _Session:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def query(self, _model):
+                return _Query(self._rows)
+
+        session = _Session(
+            [
+                SimpleNamespace(
+                    tool_id="tool.forward",
+                    active=True,
+                    execution_mode="mcp_forward",
+                    mcp_server_name="server-0",
+                )
+            ]
+        )
+
+        _validate_forward_tool_server_bindings(
+            session,
+            named_server_urls={"server-0": "http://localhost:3001"},
+        )
     
     @pytest.mark.asyncio
     async def test_health_check_all_healthy(self):
@@ -294,6 +388,112 @@ class TestMCPAdapterService:
         assert data["requests_total"] == 10
         assert data["tool_calls_total"] == 5
         assert data["resource_reads_total"] == 3
+
+    def test_tool_registry_register_endpoint_success(self):
+        """Tool registry register endpoint should return persisted record payload."""
+        from fastapi.testclient import TestClient
+
+        client = TestClient(self.service.app)
+        self.mock_mcp_adapter.register_tool.return_value = SimpleNamespace(
+            tool_id="tool.echo",
+            active=True,
+        )
+
+        response = client.post(
+            "/mcp/tools/register",
+            json={
+                "tool_id": "tool.echo",
+                "active": True,
+                "provider_name": "endframe",
+                "resource_scope": "provider:endframe:resource:deployments",
+                "action_scope": "provider:endframe:action:invoke",
+                "provider_definition_id": "endframe",
+                "action_method": "POST",
+                "action_path_prefix": "/v1/deployments",
+                "execution_mode": "mcp_forward",
+                "mcp_server_name": "server-0",
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["result"]["tool_id"] == "tool.echo"
+        assert data["result"]["active"] is True
+        self.mock_mcp_adapter.register_tool.assert_called_once_with(
+            tool_id="tool.echo",
+            active=True,
+            actor_principal_id=self.actor_principal_id,
+            provider_name="endframe",
+            resource_scope="provider:endframe:resource:deployments",
+            action_scope="provider:endframe:action:invoke",
+            provider_definition_id="endframe",
+            action_method="POST",
+            action_path_prefix="/v1/deployments",
+            execution_mode="mcp_forward",
+            mcp_server_name="server-0",
+        )
+
+    def test_tool_registry_list_endpoint_success(self):
+        """Tool registry list endpoint should include serialized rows."""
+        from fastapi.testclient import TestClient
+
+        client = TestClient(self.service.app)
+        self.mock_mcp_adapter.list_registered_tools.return_value = [
+            SimpleNamespace(tool_id="tool.one", active=True),
+            SimpleNamespace(tool_id="tool.two", active=False),
+        ]
+
+        response = client.get(
+            "/mcp/tools?include_inactive=true",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["result"]["tools"]) == 2
+        assert data["result"]["tools"][0]["tool_id"] == "tool.one"
+        self.mock_mcp_adapter.list_registered_tools.assert_called_once_with(include_inactive=True)
+
+    def test_tool_registry_deactivate_and_reactivate_endpoints(self):
+        """Deactivate/reactivate endpoints should call adapter lifecycle methods."""
+        from fastapi.testclient import TestClient
+
+        client = TestClient(self.service.app)
+        self.mock_mcp_adapter.deactivate_tool.return_value = SimpleNamespace(
+            tool_id="tool.echo",
+            active=False,
+        )
+        self.mock_mcp_adapter.reactivate_tool.return_value = SimpleNamespace(
+            tool_id="tool.echo",
+            active=True,
+        )
+
+        deactivate_response = client.post(
+            "/mcp/tools/deactivate",
+            json={"tool_id": "tool.echo"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        reactivate_response = client.post(
+            "/mcp/tools/reactivate",
+            json={"tool_id": "tool.echo"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert deactivate_response.status_code == 200
+        assert reactivate_response.status_code == 200
+        assert deactivate_response.json()["result"]["active"] is False
+        assert reactivate_response.json()["result"]["active"] is True
+        self.mock_mcp_adapter.deactivate_tool.assert_called_once_with(
+            tool_id="tool.echo",
+            actor_principal_id=self.actor_principal_id,
+        )
+        self.mock_mcp_adapter.reactivate_tool.assert_called_once_with(
+            tool_id="tool.echo",
+            actor_principal_id=self.actor_principal_id,
+        )
     
     @pytest.mark.asyncio
     async def test_tool_call_endpoint_success(self):
@@ -309,11 +509,13 @@ class TestMCPAdapterService:
             metadata={"mandate_id": "mandate-123"}
         )
         self.mock_mcp_adapter.intercept_tool_call = AsyncMock(return_value=mock_result)
+        mandate_id = str(uuid4())
         
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": mandate_id,
             "tool_args": {"arg": "value"},
-            "metadata": {"mandate_id": str(uuid4())}
+            "metadata": {},
         }
         
         response = client.post(
@@ -340,11 +542,13 @@ class TestMCPAdapterService:
             error="Authority denied: Insufficient permissions"
         )
         self.mock_mcp_adapter.intercept_tool_call = AsyncMock(return_value=mock_result)
+        mandate_id = str(uuid4())
         
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": mandate_id,
             "tool_args": {"arg": "value"},
-            "metadata": {"mandate_id": str(uuid4())}
+            "metadata": {},
         }
         
         response = client.post(
@@ -368,11 +572,13 @@ class TestMCPAdapterService:
         self.mock_mcp_adapter.intercept_tool_call = AsyncMock(
             side_effect=CaracalError("Test error")
         )
+        mandate_id = str(uuid4())
         
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": mandate_id,
             "tool_args": {"arg": "value"},
-            "metadata": {"mandate_id": str(uuid4())}
+            "metadata": {},
         }
         
         response = client.post(
@@ -464,14 +670,16 @@ class TestMCPAdapterService:
             error=None
         )
         self.mock_mcp_adapter.intercept_tool_call = AsyncMock(return_value=mock_result)
+        mandate_id = str(uuid4())
         
         initial_count = self.service._request_count
         initial_tool_count = self.service._tool_call_count
         
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": mandate_id,
             "tool_args": {},
-            "metadata": {"mandate_id": str(uuid4())}
+            "metadata": {},
         }
         
         client.post(
@@ -489,9 +697,10 @@ class TestMCPAdapterService:
         client = TestClient(self.service.app)
 
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": str(uuid4()),
             "tool_args": {},
-            "metadata": {"mandate_id": str(uuid4())}
+            "metadata": {},
         }
 
         response = client.post("/mcp/tool/call", json=request_data)
@@ -505,9 +714,10 @@ class TestMCPAdapterService:
         client = TestClient(self.service.app)
 
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
+            "mandate_id": "not-a-uuid",
             "tool_args": {},
-            "metadata": {"mandate_id": "not-a-uuid"}
+            "metadata": {},
         }
 
         response = client.post(
@@ -520,12 +730,12 @@ class TestMCPAdapterService:
         assert "mandate_id" in response.json()["detail"].lower()
 
     def test_tool_call_endpoint_missing_mandate_id(self):
-        """Test tool call endpoint rejects missing mandate ID metadata."""
+        """Test tool call endpoint rejects missing mandate ID payload."""
         from fastapi.testclient import TestClient
         client = TestClient(self.service.app)
 
         request_data = {
-            "tool_name": "test_tool",
+            "tool_id": "test_tool",
             "tool_args": {},
             "metadata": {}
         }
@@ -536,5 +746,85 @@ class TestMCPAdapterService:
             headers={"Authorization": "Bearer test-token"},
         )
 
+        assert response.status_code == 422
+        assert "mandate_id" in str(response.json()).lower()
+
+    def test_tool_call_endpoint_unknown_tool_id(self):
+        """Service layer should reject unknown tool IDs before adapter invocation."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.service.app)
+
+        self.mock_mcp_adapter.get_registered_tool.return_value = None
+
+        response = client.post(
+            "/mcp/tool/call",
+            json={
+                "tool_id": "missing.tool",
+                "mandate_id": str(uuid4()),
+                "tool_args": {},
+                "metadata": {},
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 404
+        assert "unknown tool_id" in response.json()["detail"].lower()
+
+    def test_require_active_tool_raises_unknown_tool_error_class(self):
+        """Unknown tools should raise deterministic MCPUnknownToolError."""
+        self.mock_mcp_adapter.get_registered_tool.return_value = None
+
+        with pytest.raises(MCPUnknownToolError, match="Unknown tool_id"):
+            self.service._require_active_tool("missing.tool")
+
+    def test_tool_call_endpoint_inactive_tool_id(self):
+        """Service layer should reject inactive tools before adapter invocation."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.service.app)
+
+        self.mock_mcp_adapter.get_registered_tool.return_value = SimpleNamespace(
+            tool_id="test_tool",
+            active=False,
+        )
+
+        response = client.post(
+            "/mcp/tool/call",
+            json={
+                "tool_id": "test_tool",
+                "mandate_id": str(uuid4()),
+                "tool_args": {},
+                "metadata": {},
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
         assert response.status_code == 400
-        assert "mandate_id" in response.json()["detail"].lower()
+        assert "inactive" in response.json()["detail"].lower()
+
+    def test_tool_call_endpoint_unknown_mandate_id(self):
+        """Service layer should reject unknown mandates before adapter invocation."""
+        from fastapi.testclient import TestClient
+        client = TestClient(self.service.app)
+
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = None
+
+        response = client.post(
+            "/mcp/tool/call",
+            json={
+                "tool_id": "test_tool",
+                "mandate_id": str(uuid4()),
+                "tool_args": {},
+                "metadata": {},
+            },
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        assert response.status_code == 404
+        assert "unknown mandate_id" in response.json()["detail"].lower()
+
+    def test_require_active_mandate_raises_unknown_mandate_error_class(self):
+        """Unknown mandates should raise deterministic MCPUnknownMandateError."""
+        self.mock_authority_evaluator._get_mandate_with_cache.return_value = None
+
+        with pytest.raises(MCPUnknownMandateError, match="Unknown mandate_id"):
+            self.service._require_active_mandate(str(uuid4()))
