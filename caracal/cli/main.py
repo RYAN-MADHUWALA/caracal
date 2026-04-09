@@ -842,14 +842,6 @@ backup.add_command(backup_list, name='list')
 system.add_command(backup)
 
 
-# Migration
-try:
-    from caracal.cli.migration import migrate_group
-    system.add_command(migrate_group, name='migrate')
-except ImportError:
-    pass
-
-
 # Secrets management
 from caracal.cli.secrets import secrets_group
 system.add_command(secrets_group, name='secrets')

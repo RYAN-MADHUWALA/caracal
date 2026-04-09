@@ -61,6 +61,10 @@ from caracal.mcp.tool_registry_contract import (
     deactivate_invalid_provider_tools,
     list_tool_bindings_by_provider,
 )
+from caracal.runtime.hardcut_preflight import (
+    HardCutPreflightError,
+    assert_migration_cli_allowed,
+)
 
 logger = structlog.get_logger(__name__)
 console = Console()
@@ -1810,6 +1814,11 @@ def provider_remove(name: str, workspace: Optional[str], force: bool):
 def migrate_command(from_type: str, backup: bool, force: bool):
     """Migrate from repository-based installation to package-based."""
     try:
+        try:
+            assert_migration_cli_allowed()
+        except HardCutPreflightError as exc:
+            raise click.ClickException(str(exc)) from exc
+
         if not force:
             console.print("[yellow]Warning:[/yellow] This will migrate your Caracal installation.")
             console.print("A backup will be created before migration.")
